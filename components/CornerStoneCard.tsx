@@ -9,7 +9,7 @@ interface CEFData {
   marketPrice: number;
   premiumDiscount: number;
   lastUpdated: string;
-  source: 'cefconnect' | 'manual' | 'unavailable';
+  source: 'live' | 'manual' | 'unavailable';
 }
 
 function fmt$(n: number) {
@@ -39,69 +39,87 @@ function PremiumBadge({ pct }: { pct: number }) {
   );
 }
 
-function ManualEntry({ ticker, onSave }: { ticker: string; onSave: () => void }) {
+function ManualEntry({ ticker, currentPrice, onSave }: { ticker: string; currentPrice: number; onSave: () => void }) {
   const [nav, setNav] = useState('');
-  const [price, setPrice] = useState('');
+  // Pre-fill price from Schwab if we have it
+  const [price, setPrice] = useState(currentPrice > 0 ? currentPrice.toFixed(2) : '');
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
 
   const save = async () => {
-    if (!nav || !price) return;
+    if (!nav || !price) { setError('Both NAV and Price are required'); return; }
+    setError('');
     setSaving(true);
-    await fetch('/api/cornerstone', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ticker, nav: parseFloat(nav), marketPrice: parseFloat(price) }),
-    });
-    setSaving(false);
-    onSave();
+    try {
+      await fetch('/api/cornerstone', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, nav: parseFloat(nav), marketPrice: parseFloat(price) }),
+      });
+      onSave();
+    } catch {
+      setError('Save failed — try again');
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
-    <div className="flex items-center gap-2 mt-2">
-      <input
-        type="number"
-        step="0.01"
-        placeholder="NAV"
-        value={nav}
-        onChange={(e) => setNav(e.target.value)}
-        className="w-20 bg-[#2d3248] border border-[#3d4260] rounded px-2 py-1 text-xs text-white"
-      />
-      <input
-        type="number"
-        step="0.01"
-        placeholder="Price"
-        value={price}
-        onChange={(e) => setPrice(e.target.value)}
-        className="w-20 bg-[#2d3248] border border-[#3d4260] rounded px-2 py-1 text-xs text-white"
-      />
-      <button
-        onClick={save}
-        disabled={saving}
-        className="p-1 rounded bg-blue-600 hover:bg-blue-700 text-white disabled:opacity-50"
-      >
-        <Check className="w-3 h-3" />
-      </button>
+    <div className="space-y-2 mt-2">
+      <div className="text-xs text-[#7c82a0]">Enter NAV manually (check cefconnect.com)</div>
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          step="0.01"
+          placeholder="NAV"
+          value={nav}
+          onChange={(e) => setNav(e.target.value)}
+          className="w-24 bg-[#2d3248] border border-[#3d4260] rounded px-2 py-1 text-xs text-white placeholder-[#4a5070]"
+        />
+        <input
+          type="number"
+          step="0.01"
+          placeholder="Price"
+          value={price}
+          onChange={(e) => setPrice(e.target.value)}
+          className="w-24 bg-[#2d3248] border border-[#3d4260] rounded px-2 py-1 text-xs text-white placeholder-[#4a5070]"
+        />
+        <button
+          onClick={save}
+          disabled={saving}
+          className="flex items-center gap-1 px-2 py-1 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs disabled:opacity-50"
+        >
+          <Check className="w-3 h-3" />
+          Save
+        </button>
+      </div>
+      {error && <div className="text-xs text-red-400">{error}</div>}
     </div>
   );
 }
 
 function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void }) {
-  const [editing, setEditing] = useState(false);
+  // Auto-open manual entry when NAV is unavailable so user knows what to do
+  const [editing, setEditing] = useState(fund.source === 'unavailable');
 
   const dripAdvantage = fund.nav > 0 && fund.marketPrice > 0
     ? ((fund.marketPrice - fund.nav) / fund.nav) * 100
     : 0;
 
-  const isAvailable = fund.source !== 'unavailable' && fund.nav > 0;
+  const hasNAV = fund.nav > 0;
+  const hasPrice = fund.marketPrice > 0;
 
   return (
     <div className="bg-[#22263a] rounded-xl p-4 space-y-3 border border-[#2d3248]">
       <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-wrap">
           <span className="font-bold text-white font-mono">{fund.ticker}</span>
-          {isAvailable && <PremiumBadge pct={fund.premiumDiscount} />}
+          {hasNAV && hasPrice && <PremiumBadge pct={fund.premiumDiscount} />}
           {fund.source === 'manual' && (
-            <span className="text-xs text-[#4a5070]">manual</span>
+            <span className="text-xs text-[#4a5070]">manual NAV</span>
+          )}
+          {fund.source === 'live' && (
+            <span className="text-xs text-emerald-600">● live</span>
           )}
         </div>
         <button
@@ -113,7 +131,7 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
         </button>
       </div>
 
-      {isAvailable ? (
+      {hasNAV && hasPrice ? (
         <div className="grid grid-cols-3 gap-3 text-center">
           <div>
             <div className="text-xs text-[#7c82a0]">NAV</div>
@@ -130,15 +148,24 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
             </div>
           </div>
         </div>
+      ) : hasPrice && !hasNAV ? (
+        <div className="space-y-1">
+          <div className="text-xs text-[#7c82a0]">
+            Price (Schwab): <span className="text-white font-mono">{fmt$(fund.marketPrice)}</span>
+          </div>
+          <div className="text-xs text-amber-400">
+            NAV not available from CEF Connect — enter it manually to see premium/discount
+          </div>
+        </div>
       ) : (
         <div className="text-xs text-[#4a5070]">
-          NAV data unavailable — enter manually below
+          No data — enter NAV and price manually
         </div>
       )}
 
       {/* Rule guidance */}
-      {isAvailable && (
-        <div className="text-xs text-[#7c82a0] space-y-1 pt-1 border-t border-[#2d3248]">
+      {hasNAV && hasPrice && (
+        <div className="text-xs space-y-1 pt-1 border-t border-[#2d3248]">
           {fund.premiumDiscount >= 30 && (
             <div className="flex items-center gap-1.5 text-red-400">
               <AlertTriangle className="w-3 h-3 flex-shrink-0" />
@@ -161,7 +188,11 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
       )}
 
       {editing && (
-        <ManualEntry ticker={fund.ticker} onSave={() => { setEditing(false); onRefresh(); }} />
+        <ManualEntry
+          ticker={fund.ticker}
+          currentPrice={fund.marketPrice}
+          onSave={() => { setEditing(false); onRefresh(); }}
+        />
       )}
     </div>
   );
@@ -171,16 +202,19 @@ export function CornerStoneCard() {
   const [funds, setFunds] = useState<CEFData[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<string>('');
+  const [fetchError, setFetchError] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
+    setFetchError(false);
     try {
       const res = await fetch('/api/cornerstone');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setFunds(data.funds ?? []);
       setLastUpdated(new Date().toLocaleTimeString());
     } catch {
-      // fail silently
+      setFetchError(true);
     } finally {
       setLoading(false);
     }
@@ -188,8 +222,8 @@ export function CornerStoneCard() {
 
   useEffect(() => { fetchData(); }, []);
 
-  const boxAlerts = funds.filter((f) => f.premiumDiscount >= 20).length;
-  const sellAlerts = funds.filter((f) => f.premiumDiscount >= 30).length;
+  const boxAlerts = funds.filter((f) => f.premiumDiscount >= 20 && f.nav > 0).length;
+  const sellAlerts = funds.filter((f) => f.premiumDiscount >= 30 && f.nav > 0).length;
 
   return (
     <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
@@ -209,7 +243,7 @@ export function CornerStoneCard() {
         </div>
         <div className="flex items-center gap-2 text-xs text-[#4a5070]">
           {lastUpdated && <span>{lastUpdated}</span>}
-          <button onClick={fetchData} className="hover:text-white transition-colors">
+          <button onClick={fetchData} className="hover:text-white transition-colors" title="Refresh">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
@@ -225,6 +259,10 @@ export function CornerStoneCard() {
 
       {loading ? (
         <div className="text-xs text-[#4a5070] text-center py-4">Loading NAV data…</div>
+      ) : fetchError ? (
+        <div className="text-xs text-red-400 text-center py-4">
+          Failed to load — <button onClick={fetchData} className="underline">retry</button>
+        </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {funds.map((f) => (
