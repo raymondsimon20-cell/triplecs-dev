@@ -7,9 +7,3 @@
 
 [[plugins]]
   package = "@netlify/plugin-nextjs"
-
-# All routes handled by Next.js
-[[redirects]]
-  from = "/*"
-  to = "/.netlify/functions/___netlify-handler"
-  status = 200
