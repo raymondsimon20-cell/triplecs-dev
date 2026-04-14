@@ -158,7 +158,7 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
             Price (Schwab): <span className="text-white font-mono">{fmt$(fund.marketPrice)}</span>
           </div>
           <div className="text-xs text-amber-400">
-            NAV not available from CEF Connect — enter it manually to see premium/discount
+            NAV auto-fetch unavailable — enter it manually (check cefconnect.com)
           </div>
         </div>
       ) : (
@@ -217,6 +217,12 @@ export function CornerStoneCard() {
       const data = await res.json();
       setFunds(data.funds ?? []);
       setLastUpdated(new Date().toLocaleTimeString());
+      // Log debug info to console so you can see what sources were tried
+      if (data.debug?.length) {
+        console.group('[Cornerstone NAV] fetch debug');
+        (data.debug as string[]).forEach((line: string) => console.log(line));
+        console.groupEnd();
+      }
     } catch {
       setFetchError(true);
     } finally {
