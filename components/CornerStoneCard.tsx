@@ -8,8 +8,9 @@ interface CEFData {
   nav: number;
   marketPrice: number;
   premiumDiscount: number;
+  sharesOutstanding?: number;
   lastUpdated: string;
-  source: 'live' | 'manual' | 'unavailable';
+  source: 'cornerstone' | 'yahoo' | 'manual' | 'unavailable';
 }
 
 function fmt$(n: number) {
@@ -115,11 +116,14 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-bold text-white font-mono">{fund.ticker}</span>
           {hasNAV && hasPrice && <PremiumBadge pct={fund.premiumDiscount} />}
+          {fund.source === 'cornerstone' && (
+            <span className="text-xs text-emerald-600">● cornerstone.com</span>
+          )}
+          {fund.source === 'yahoo' && (
+            <span className="text-xs text-blue-500">● yahoo finance</span>
+          )}
           {fund.source === 'manual' && (
             <span className="text-xs text-[#4a5070]">manual NAV</span>
-          )}
-          {fund.source === 'live' && (
-            <span className="text-xs text-emerald-600">● live</span>
           )}
         </div>
         <button
