@@ -226,13 +226,21 @@ async function getManual(ticker: string): Promise<NavResult | null> {
 
 // ─── GET ──────────────────────────────────────────────────────────────────────
 
-export async function GET() {
+export async function GET(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const cached = await getCached();
-  if (cached) return NextResponse.json({ funds: cached, fromCache: true, debug: ['served from 15-min cache'] });
+  const { searchParams } = new URL(req.url);
+  const forceRefresh = searchParams.get('refresh') === 'true';
+
+  if (!forceRefresh) {
+    const cached = await getCached();
+    if (cached) return NextResponse.json({ funds: cached, fromCache: true, debug: ['served from 15-min cache'] });
+  } else {
+    // Bust the cache so fresh data is fetched
+    try { await getStore('cef-nav-cache').delete('data'); } catch { /* ok */ }
+  }
 
   const debug: string[] = [];
 

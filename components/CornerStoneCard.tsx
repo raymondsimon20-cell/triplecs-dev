@@ -208,11 +208,12 @@ export function CornerStoneCard() {
   const [lastUpdated, setLastUpdated] = useState<string>('');
   const [fetchError, setFetchError] = useState(false);
 
-  const fetchData = async () => {
+  const fetchData = async (forceRefresh = false) => {
     setLoading(true);
     setFetchError(false);
     try {
-      const res = await fetch('/api/cornerstone');
+      const url = forceRefresh ? '/api/cornerstone?refresh=true' : '/api/cornerstone';
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       setFunds(data.funds ?? []);
@@ -253,7 +254,7 @@ export function CornerStoneCard() {
         </div>
         <div className="flex items-center gap-2 text-xs text-[#4a5070]">
           {lastUpdated && <span>{lastUpdated}</span>}
-          <button onClick={fetchData} className="hover:text-white transition-colors" title="Refresh">
+          <button onClick={() => fetchData(true)} className="hover:text-white transition-colors" title="Force refresh (bypass cache)">
             <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
           </button>
         </div>
