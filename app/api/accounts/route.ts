@@ -89,7 +89,8 @@ export async function GET(req: Request) {
     if (message === 'NOT_AUTHENTICATED') {
       return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
     }
-    console.error('Accounts API error:', err);
-    return NextResponse.json({ error: 'Failed to fetch accounts' }, { status: 500 });
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('Accounts API error:', message);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
