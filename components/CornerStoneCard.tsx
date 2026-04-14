@@ -272,7 +272,7 @@ export function CornerStoneCard() {
         <div className="text-xs text-[#4a5070] text-center py-4">Loading NAV data…</div>
       ) : fetchError ? (
         <div className="text-xs text-red-400 text-center py-4">
-          Failed to load — <button onClick={fetchData} className="underline">retry</button>
+          Failed to load — <button onClick={() => fetchData(true)} className="underline">retry</button>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
