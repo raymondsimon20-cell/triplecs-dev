@@ -140,4 +140,19 @@ export interface EnrichedPosition extends SchwabPosition {
   gainLoss: number;
   gainLossPercent: number;
   portfolioPercent: number;
+  todayGainLoss: number;
+}
+
+export interface SchwabTransaction {
+  activityId: number;
+  time: string;
+  type: string;
+  description: string;
+  netAmount: number;
+  transferItems: {
+    instrument: { symbol?: string; description?: string; assetType: string };
+    amount: number;
+    cost: number;
+    price?: number;
+  }[];
 }

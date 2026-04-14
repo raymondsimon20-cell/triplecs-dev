@@ -31,9 +31,9 @@ export const INCOME_SYMBOLS = new Set([
   'CONY', 'MSFO', 'NFLY', 'AMZY', 'GOOGY', 'DISO', 'SQY', 'SMCY',
   'YMAX', 'YMAG', 'ULTY',
   // Defiance
-  'QQQY', 'JEPY', 'IWMY', 'SPYY', 'DEFI',
+  'QQQY', 'JEPY', 'IWMY', 'SPYY', 'DEFI', 'WDTE', 'BDTE', 'IDTE', 'QDTU',
   // Roundhill
-  'XDTE', 'QDTE', 'RDTE', 'YBTC',
+  'XDTE', 'QDTE', 'RDTE', 'YBTC', 'WEEK', 'RDTE',
   // RexShares
   'FEPI', 'AIPI',
   // Other high-dividend income
@@ -94,6 +94,12 @@ export function enrichPositions(
       pillar = 'hedge';
     }
 
+    // Compute today's gain/loss from quote (more reliable than Schwab's field)
+    const qty = pos.longQuantity || pos.shortQuantity || 0;
+    const todayGainLoss = quote
+      ? (quote.lastPrice - quote.closePrice) * qty * (pos.shortQuantity > 0 ? -1 : 1)
+      : pos.currentDayProfitLoss ?? 0;
+
     return {
       ...pos,
       pillar,
@@ -102,6 +108,7 @@ export function enrichPositions(
       gainLoss,
       gainLossPercent,
       portfolioPercent,
+      todayGainLoss,
     };
   });
 }
@@ -177,13 +184,19 @@ export function checkMarginRules(
     alerts.push({ level: 'ok', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — within safe range.` });
   }
 
-  // Rule: no single position > 20% of portfolio
+  // Rule: no single position > 20% of portfolio (warn at 15%)
   for (const pos of positions) {
     if (pos.portfolioPercent > 20) {
       alerts.push({
+        level: 'danger',
+        rule: 'Concentration Cap',
+        detail: `${pos.instrument.symbol} is ${pos.portfolioPercent.toFixed(1)}% of portfolio — exceeds 20% hard cap. Trim required.`,
+      });
+    } else if (pos.portfolioPercent > 15) {
+      alerts.push({
         level: 'warn',
         rule: 'Concentration Cap',
-        detail: `${pos.instrument.symbol} is ${pos.portfolioPercent.toFixed(1)}% of portfolio — exceeds 20% single-fund cap.`,
+        detail: `${pos.instrument.symbol} is ${pos.portfolioPercent.toFixed(1)}% of portfolio — approaching 20% cap.`,
       });
     }
   }

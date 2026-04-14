@@ -38,7 +38,7 @@ export function PositionsTable({ positions }: Props) {
     else if (sortKey === 'value') diff = a.marketValue - b.marketValue;
     else if (sortKey === 'gainLoss') diff = a.gainLoss - b.gainLoss;
     else if (sortKey === 'portfolioPct') diff = a.portfolioPercent - b.portfolioPercent;
-    else if (sortKey === 'dayGL') diff = a.currentDayProfitLoss - b.currentDayProfitLoss;
+    else if (sortKey === 'dayGL') diff = (a.todayGainLoss ?? 0) - (b.todayGainLoss ?? 0);
     return sortAsc ? diff : -diff;
   });
 
@@ -99,7 +99,7 @@ export function PositionsTable({ positions }: Props) {
           <tbody className="divide-y divide-[#2d3248]">
             {sorted.map((pos) => {
               const gl = pos.gainLoss;
-              const dgl = pos.currentDayProfitLoss ?? 0;
+              const dgl = pos.todayGainLoss ?? 0;
               return (
                 <tr
                   key={pos.instrument.symbol}

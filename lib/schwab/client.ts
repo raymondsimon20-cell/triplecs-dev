@@ -110,6 +110,23 @@ export async function getQuotes(
   );
 }
 
+// ─── Transactions endpoint ────────────────────────────────────────────────────
+
+export async function getTransactions(
+  tokens: SchwabTokens,
+  accountHash: string,
+  startDate: string, // YYYY-MM-DD
+  endDate: string,
+  types = 'DIVIDEND_OR_INTEREST',
+): Promise<import('./types').SchwabTransaction[]> {
+  const params = new URLSearchParams({ types, startDate, endDate });
+  const result = await schwabFetch<import('./types').SchwabTransaction[]>(
+    `${TRADER_BASE}/accounts/${accountHash}/transactions?${params}`,
+    tokens,
+  );
+  return Array.isArray(result) ? result : [];
+}
+
 // ─── Token-aware client factory ───────────────────────────────────────────────
 
 /**
@@ -125,5 +142,7 @@ export async function createClient() {
     getAllAccounts: () => getAllAccounts(tokens),
     getAccount: (hash: string) => getAccount(tokens, hash),
     getQuotes: (symbols: string[]) => getQuotes(tokens, symbols),
+    getTransactions: (hash: string, start: string, end: string) =>
+      getTransactions(tokens, hash, start, end),
   };
 }

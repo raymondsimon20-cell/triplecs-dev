@@ -70,6 +70,21 @@ export async function GET(req: Request) {
           enrichedPositions,
         );
 
+        // Day gain/loss: sum quote-computed todayGainLoss across positions
+        const dayGainLoss = enrichedPositions.reduce(
+          (sum, p) => sum + (p.todayGainLoss ?? 0), 0
+        );
+
+        // Unrealized gain/loss across all positions
+        const unrealizedGainLoss = enrichedPositions.reduce(
+          (sum, p) => sum + p.gainLoss, 0
+        );
+
+        // Available for withdrawal = cash + money market (dividends land here)
+        const availableForWithdrawal =
+          (acct.currentBalances.cashBalance ?? 0) +
+          (acct.currentBalances.moneyMarketFund ?? 0);
+
         const result = {
           accountNumber: acct.accountNumber,
           type: acct.type,
@@ -77,9 +92,9 @@ export async function GET(req: Request) {
           equity: acct.currentBalances.equity,
           marginBalance: acct.currentBalances.marginBalance ?? 0,
           buyingPower: acct.currentBalances.buyingPower,
-          dayGainLoss: enrichedPositions.reduce(
-            (sum, p) => sum + (p.currentDayProfitLoss ?? 0), 0
-          ),
+          dayGainLoss,
+          unrealizedGainLoss,
+          availableForWithdrawal,
           positions: enrichedPositions,
           pillarSummary,
           marginAlerts,

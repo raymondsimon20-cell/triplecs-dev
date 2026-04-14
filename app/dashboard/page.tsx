@@ -6,6 +6,7 @@ import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginMeter } from '@/components/MarginMeter';
 import { PositionsTable } from '@/components/PositionsTable';
+import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 
@@ -17,6 +18,8 @@ interface AccountData {
   marginBalance: number;
   buyingPower: number;
   dayGainLoss: number;
+  unrealizedGainLoss: number;
+  availableForWithdrawal: number;
   positions: EnrichedPosition[];
   pillarSummary: { pillar: PillarType; label: string; totalValue: number; portfolioPercent: number; positionCount: number; dayGainLoss: number }[];
   marginAlerts: RuleAlert[];
@@ -40,6 +43,26 @@ function fmt$(n: number) {
   return n < 0 ? `-$${str}` : `$${str}`;
 }
 
+function MetricCard({
+  label,
+  value,
+  colorClass = 'text-white',
+  sub,
+}: {
+  label: string;
+  value: string;
+  colorClass?: string;
+  sub?: string;
+}) {
+  return (
+    <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4">
+      <div className="text-xs text-[#7c82a0] mb-1">{label}</div>
+      <div className={`text-xl font-bold ${colorClass}`}>{value}</div>
+      {sub && <div className="text-xs text-[#4a5070] mt-0.5">{sub}</div>}
+    </div>
+  );
+}
+
 export default function DashboardPage() {
   const [accounts, setAccounts] = useState<AccountData[]>([]);
   const [selectedIdx, setSelectedIdx] = useState(0);
@@ -47,6 +70,19 @@ export default function DashboardPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [dividendsTotal, setDividendsTotal] = useState<number>(0);
+
+  const fetchDividends = useCallback(async () => {
+    try {
+      const res = await fetch('/api/dividends');
+      if (res.ok) {
+        const data = await res.json();
+        setDividendsTotal(data.total ?? 0);
+      }
+    } catch {
+      // non-critical — fail silently
+    }
+  }, []);
 
   const fetchAccounts = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
@@ -75,10 +111,11 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchAccounts();
+    fetchDividends();
     // Auto-refresh every 60 seconds during market hours
     const interval = setInterval(() => fetchAccounts(true), 60_000);
     return () => clearInterval(interval);
-  }, [fetchAccounts]);
+  }, [fetchAccounts, fetchDividends]);
 
   const account = accounts[selectedIdx];
 
@@ -120,6 +157,10 @@ export default function DashboardPage() {
   }
 
   const dayGL = account.dayGainLoss;
+  const unrealized = account.unrealizedGainLoss ?? 0;
+  const totalReturn = unrealized + dividendsTotal;
+  const availableForWithdrawal = account.availableForWithdrawal ?? 0;
+
   const dangerAlerts = account.marginAlerts.filter((a) => a.level === 'danger');
   const warnAlerts = account.marginAlerts.filter((a) => a.level === 'warn');
 
@@ -175,32 +216,38 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {/* Portfolio summary cards */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4">
-            <div className="text-xs text-[#7c82a0] mb-1">Portfolio Value</div>
-            <div className="text-2xl font-bold text-white">
-              {fmt$(account.totalValue)}
-            </div>
-          </div>
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4">
-            <div className="text-xs text-[#7c82a0] mb-1">Equity</div>
-            <div className="text-2xl font-bold text-white">
-              {fmt$(account.equity)}
-            </div>
-          </div>
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4">
-            <div className="text-xs text-[#7c82a0] mb-1">Day Gain/Loss</div>
-            <div className={`text-2xl font-bold ${dayGL >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
-              {fmt$(dayGL)}
-            </div>
-          </div>
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4">
-            <div className="text-xs text-[#7c82a0] mb-1">Buying Power</div>
-            <div className="text-2xl font-bold text-blue-400">
-              {fmt$(account.buyingPower)}
-            </div>
-          </div>
+        {/* Portfolio summary cards — 6 metrics in 2 rows of 3 */}
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+          <MetricCard
+            label="Portfolio Value"
+            value={fmt$(account.totalValue)}
+          />
+          <MetricCard
+            label="Equity"
+            value={fmt$(account.equity)}
+          />
+          <MetricCard
+            label="Day Gain / Loss"
+            value={fmt$(dayGL)}
+            colorClass={dayGL >= 0 ? 'text-emerald-400' : 'text-red-400'}
+          />
+          <MetricCard
+            label="Total Return"
+            value={fmt$(totalReturn)}
+            colorClass={totalReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}
+            sub={`Includes $${dividendsTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} dividends`}
+          />
+          <MetricCard
+            label="Available to Withdraw"
+            value={fmt$(availableForWithdrawal)}
+            colorClass="text-blue-400"
+            sub="Cash + money market"
+          />
+          <MetricCard
+            label="Buying Power"
+            value={fmt$(account.buyingPower)}
+            colorClass="text-purple-400"
+          />
         </div>
 
         {/* Two-column: Pillar allocation + Margin meter */}
@@ -233,6 +280,9 @@ export default function DashboardPage() {
             )}
           </div>
         </div>
+
+        {/* Cornerstone NAV Tracker — Phase 2 */}
+        <CornerStoneCard />
 
         {/* Positions table */}
         <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
