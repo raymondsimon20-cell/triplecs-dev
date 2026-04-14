@@ -29,6 +29,12 @@ export async function GET(req: Request) {
       accounts = await client.getAllAccounts();
     }
 
+    // Guard: Schwab should return an array
+    if (!Array.isArray(accounts)) {
+      console.error('Unexpected Schwab accounts response:', accounts);
+      return NextResponse.json({ error: `Unexpected Schwab response: ${JSON.stringify(accounts)}` }, { status: 500 });
+    }
+
     // Enrich each account with classification, quotes, and rule checks
     const enriched = await Promise.all(
       accounts.map(async ({ securitiesAccount: acct }) => {
@@ -36,8 +42,11 @@ export async function GET(req: Request) {
         const cached = await getCachedPortfolio(acct.accountNumber);
         if (cached) return cached;
 
+        // Schwab omits `positions` when account has none — default to []
+        const positions = acct.positions ?? [];
+
         // Collect all symbols for quote fetch
-        const symbols = acct.positions
+        const symbols = positions
           .map((p) => p.instrument.symbol)
           .filter((s) => !s.includes(' ')); // skip options for now
 
@@ -45,10 +54,10 @@ export async function GET(req: Request) {
           ? await client.getQuotes(symbols)
           : {};
 
-        const totalValue = acct.currentBalances.liquidationValue;
+        const totalValue = acct.currentBalances.liquidationValue ?? 0;
 
         const enrichedPositions = enrichPositions(
-          acct.positions,
+          positions,
           quotes,
           totalValue,
         );
