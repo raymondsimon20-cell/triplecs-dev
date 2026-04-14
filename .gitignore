@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+
+# Next.js build
+.next/
+out/
+
+# Local data (tokens, cache — NEVER commit these)
+.data/
+
+# Environment variables (copy .env.example → .env.local)
+.env
+.env.local
+.env.*.local
+
+# Netlify
+.netlify/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+npm-debug.log*
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Uploads / sensitive docs (PDFs with strategy rules — optional, remove if you want them versioned)
+# *.pdf
