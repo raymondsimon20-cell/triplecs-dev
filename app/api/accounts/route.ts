@@ -85,12 +85,11 @@ export async function GET(req: Request) {
 
     return NextResponse.json({ accounts: enriched });
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    if (message === 'NOT_AUTHENTICATED') {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    if (errorMessage === 'NOT_AUTHENTICATED') {
       return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
     }
-    const message = err instanceof Error ? err.message : String(err);
-    console.error('Accounts API error:', message);
-    return NextResponse.json({ error: message }, { status: 500 });
+    console.error('Accounts API error:', errorMessage);
+    return NextResponse.json({ error: errorMessage }, { status: 500 });
   }
 }
