@@ -99,7 +99,8 @@ export async function GET() {
     const quotes = await client.getQuotes(CORNERSTONE_TICKERS);
     for (const ticker of CORNERSTONE_TICKERS) {
       const q = quotes[ticker];
-      if (q?.lastPrice) schwabPrices[ticker] = q.lastPrice;
+      const lastPrice = q?.quote?.lastPrice;
+      if (lastPrice) schwabPrices[ticker] = lastPrice;
     }
     console.log('[cornerstone] Schwab prices:', schwabPrices);
   } catch (err) {
