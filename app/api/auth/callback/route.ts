@@ -51,9 +51,10 @@ export async function GET(req: NextRequest) {
 
     return response;
   } catch (err) {
-    console.error('OAuth callback error:', err);
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('OAuth callback error:', msg);
     return NextResponse.redirect(
-      new URL('/?error=token_exchange_failed', req.url)
+      new URL(`/?error=${encodeURIComponent(msg)}`, req.url)
     );
   }
 }
