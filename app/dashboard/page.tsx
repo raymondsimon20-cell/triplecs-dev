@@ -9,6 +9,7 @@ import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { DividendIncomePanel } from '@/components/DividendIncomePanel';
+import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -281,6 +282,16 @@ export default function DashboardPage() {
         <OptionsStrategyPanel
           positions={account.positions}
           totalValue={account.totalValue}
+        />
+
+        {/* Phase 7 — AI Portfolio Analysis */}
+        <AIAnalysisPanel
+          positions={account.positions}
+          totalValue={account.totalValue}
+          equity={account.equity}
+          marginBalance={account.marginBalance}
+          pillarSummary={account.pillarSummary}
+          dividendsAnnual={dividendsTotal}
         />
 
         {/* Phase 6 — Income & Dividend Dashboard */}
