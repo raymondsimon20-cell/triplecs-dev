@@ -58,6 +58,37 @@ function regexDollar(html: string, ...patterns: RegExp[]): number {
   return 0;
 }
 
+type CSVData = Partial<Record<Ticker, { nav: number; marketPrice: number; premiumDiscount: number }>>;
+
+function parseCornerStoneCSV(text: string): CSVData | null {
+  try {
+    const lines = text.trim().split('\n').filter(Boolean);
+    if (lines.length < 2) return null;
+    const headerLine = lines.find((l) => /nav|price|premium/i.test(l));
+    if (!headerLine) return null;
+    const headers = headerLine.split(',').map((h) => h.trim().toLowerCase().replace(/['"]/g, ''));
+    const ci = (re: RegExp) => headers.findIndex((h) => re.test(h));
+    const tickerCol = ci(/ticker|fund|symbol/);
+    const navCol    = ci(/\bnav\b|net.asset/);
+    const priceCol  = ci(/market.?price|closing.?price|\bprice\b/);
+    const pdCol     = ci(/premium|discount/);
+    if (navCol < 0 || priceCol < 0) return null;
+    const result: CSVData = {};
+    for (const line of lines) {
+      if (line === headerLine) continue;
+      const cols = line.split(',').map((c) => c.trim().replace(/['"$%]/g, ''));
+      const ticker = (tickerCol >= 0 ? cols[tickerCol] : '').toUpperCase() as Ticker;
+      if (!TICKERS.includes(ticker)) continue;
+      const nav = parseDollar(cols[navCol]);
+      const mp  = parseDollar(cols[priceCol]);
+      if (!nav || !mp) continue;
+      const pd = pdCol >= 0 && cols[pdCol] ? parseDollar(cols[pdCol]) : ((mp - nav) / nav) * 100;
+      result[ticker] = { nav, marketPrice: mp, premiumDiscount: pd };
+    }
+    return Object.keys(result).length ? result : null;
+  } catch { return null; }
+}
+
 // ─── Price: NASDAQ quote API ─────────────────────────────────────────────────
 
 async function fetchNasdaqPrice(ticker: string, debug: string[]): Promise<number> {
