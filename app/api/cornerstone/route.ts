@@ -117,42 +117,64 @@ async function fetchCEFConnectNAV(ticker: string, debug: string[]): Promise<numb
 
 // ─── NAV Source 2: Cornerstone fund websites ──────────────────────────────────
 
-const FUND_URLS: Record<Ticker, string[]> = {
+// NAV sub-pages confirmed from homepage nav menu: "Net Asset Value" link
+const FUND_NAV_PAGES: Record<Ticker, string[]> = {
   CRF: [
-    'https://www.cornerstonetotalreturnfund.com',
-    'https://cornerstonetotalreturnfund.com',
+    'https://www.cornerstonetotalreturnfund.com/nav/',
+    'https://www.cornerstonetotalreturnfund.com/nav',
+    'https://www.cornerstonetotalreturnfund.com/net-asset-value/',
+    'https://www.cornerstonetotalreturnfund.com/net-asset-value',
+    'https://www.cornerstonetotalreturnfund.com/navdata/',
+    'https://www.cornerstonetotalreturnfund.com/',            // homepage fallback
   ],
   CLM: [
-    'https://www.cornerstonestrategicvaluefund.com',
-    'https://cornerstonestrategicvaluefund.com',
-    'https://www.cornerstonetotalreturnfund.com', // may host both
+    'https://www.cornerstonestrategicvaluefund.com/nav/',
+    'https://www.cornerstonestrategicvaluefund.com/nav',
+    'https://www.cornerstonestrategicvaluefund.com/net-asset-value/',
+    'https://www.cornerstonestrategicvaluefund.com/net-asset-value',
+    'https://www.cornerstonestrategicvaluefund.com/navdata/',
+    'https://www.cornerstonestrategicvaluefund.com/',         // homepage fallback
   ],
 };
 
 async function fetchFundWebsiteNAV(ticker: Ticker, debug: string[]): Promise<number> {
-  for (const baseUrl of FUND_URLS[ticker]) {
+  for (const url of FUND_NAV_PAGES[ticker]) {
     try {
-      const res = await fetchWithTimeout(baseUrl, {
+      const res = await fetchWithTimeout(url, {
         headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], Accept: 'text/html,*/*' },
       }, 12000);
-      if (!res.ok) { debug.push(`FundSite ${ticker} ${baseUrl}: HTTP ${res.status}`); continue; }
+      if (!res.ok) { debug.push(`FundSite ${ticker} ${url}: HTTP ${res.status}`); continue; }
       const html = await res.text();
+
+      // Strip tags → plain text for easier parsing
+      const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+
+      // NAV per share patterns — fund NAV pages typically show a table with labeled values
       const nav = regexDollar(html,
-        /nav\s+per\s+share[^<]{0,80}\$\s*([\d,]+\.[\d]{2})/i,
-        /net\s+asset\s+value[^<]{0,80}\$\s*([\d,]+\.[\d]{2})/i,
-        /\bnav\b[^<]{0,60}\$\s*([\d,]+\.[\d]{2})/i,
-        /\$([\d,]+\.[\d]{2})\s*(?:per share|\/share|NAV)/i,
+        /nav\s+per\s+share[^<$]{0,30}\$\s*([\d,]+\.[\d]{2})/i,
+        /net\s+asset\s+value\s+per\s+share[^<$]{0,30}\$\s*([\d,]+\.[\d]{2})/i,
+        /per\s+share[^<$]{0,30}\$\s*([\d,]+\.[\d]{2})/i,
+      ) || regexDollar(text as unknown as string,
+        /nav\s+per\s+share\s*[\$:]*\s*([\d,]+\.[\d]{2})/i,
+        /net\s+asset\s+value\s+per\s+share\s*[\$:]*\s*([\d,]+\.[\d]{2})/i,
+        /per\s+share[^$\d]{0,10}\$?([\d,]+\.[\d]{2})/i,
       );
+
       if (nav > 0) {
-        debug.push(`FundSite ${ticker} (${baseUrl}): NAV=$${nav}`);
+        debug.push(`FundSite ${ticker} (${url}): NAV=$${nav}`);
         return nav;
       }
-      // Log snippet to tune regex if needed
-      const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-      const idx = Math.max(0, text.toLowerCase().indexOf('nav'));
-      debug.push(`FundSite ${ticker}: no NAV found. Near 'nav': "${text.slice(idx, idx + 200)}"`);
+
+      // Log a useful snippet around "per share" or a dollar amount for regex tuning
+      const perShareIdx = text.toLowerCase().indexOf('per share');
+      const dollarIdx = text.indexOf('$');
+      const snippetIdx = perShareIdx >= 0 ? Math.max(0, perShareIdx - 40) : Math.max(0, dollarIdx - 40);
+      debug.push(`FundSite ${ticker} (${url}): no NAV. Snippet: "${text.slice(snippetIdx, snippetIdx + 300)}"`);
+
+      // Only try all URL variants on the first (sub-page) attempts; skip remaining if homepage loaded fine
+      if (url.endsWith('/')) break; // homepage loaded, no point trying more
     } catch (e) {
-      debug.push(`FundSite ${ticker} ${baseUrl}: ${e instanceof Error ? e.message : 'error'}`);
+      debug.push(`FundSite ${ticker} ${url}: ${e instanceof Error ? e.message : 'error'}`);
     }
   }
   return 0;
