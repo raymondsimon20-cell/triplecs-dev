@@ -1,7 +1,7 @@
 'use client';
 
 import { useState } from 'react';
-import { ChevronUp, ChevronDown } from 'lucide-react';
+import { ChevronUp, ChevronDown, Clock } from 'lucide-react';
 import { PillarBadge } from './PillarBadge';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { fmt$, gainLossColor } from '@/lib/utils';
@@ -10,6 +10,8 @@ type SortKey = 'symbol' | 'value' | 'gainLoss' | 'portfolioPct' | 'dayGL';
 
 interface Props {
   positions: EnrichedPosition[];
+  /** Map of symbol → pending order count (from usePendingOrderSymbols) */
+  pendingOrders?: Map<string, number>;
 }
 
 const PILLAR_FILTER_OPTIONS: { value: PillarType | 'all'; label: string }[] = [
@@ -21,7 +23,7 @@ const PILLAR_FILTER_OPTIONS: { value: PillarType | 'all'; label: string }[] = [
   { value: 'other', label: 'Other' },
 ];
 
-export function PositionsTable({ positions }: Props) {
+export function PositionsTable({ positions, pendingOrders }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>('value');
   const [sortAsc, setSortAsc] = useState(false);
   const [filter, setFilter] = useState<PillarType | 'all'>('all');
@@ -98,13 +100,25 @@ export function PositionsTable({ positions }: Props) {
             {sorted.map((pos) => {
               const gl = pos.gainLoss;
               const dgl = pos.todayGainLoss ?? 0;
+              const pendingCount = pendingOrders?.get(pos.instrument.symbol) ?? 0;
               return (
                 <tr
                   key={pos.instrument.symbol}
                   className="hover:bg-[#22263a]/60 transition-colors"
                 >
                   <td className="px-4 py-3">
-                    <div className="font-mono font-semibold text-white">{pos.instrument.symbol}</div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="font-mono font-semibold text-white">{pos.instrument.symbol}</span>
+                      {pendingCount > 0 && (
+                        <span
+                          className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-yellow-500/15 text-yellow-400"
+                          title={`${pendingCount} pending order${pendingCount > 1 ? 's' : ''}`}
+                        >
+                          <Clock className="w-2.5 h-2.5" />
+                          {pendingCount}
+                        </span>
+                      )}
+                    </div>
                     {pos.instrument.description && (
                       <div className="text-xs text-[#7c82a0] truncate max-w-[140px]">{pos.instrument.description}</div>
                     )}
@@ -164,6 +178,7 @@ export function PositionsTable({ positions }: Props) {
         {sorted.map((pos) => {
           const gl = pos.gainLoss;
           const dgl = pos.todayGainLoss ?? 0;
+          const pendingCount = pendingOrders?.get(pos.instrument.symbol) ?? 0;
           return (
             <div
               key={pos.instrument.symbol}
@@ -173,6 +188,11 @@ export function PositionsTable({ positions }: Props) {
               <div className="flex items-center justify-between gap-2">
                 <div className="flex items-center gap-2 min-w-0">
                   <span className="font-mono font-semibold text-white text-sm">{pos.instrument.symbol}</span>
+                  {pendingCount > 0 && (
+                    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[9px] font-bold bg-yellow-500/15 text-yellow-400">
+                      <Clock className="w-2.5 h-2.5" />{pendingCount}
+                    </span>
+                  )}
                   <PillarBadge pillar={pos.pillar} />
                 </div>
                 <span className="font-mono font-medium text-white text-sm tabular-nums">{fmt$(pos.marketValue)}</span>

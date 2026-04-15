@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Calendar, Gauge, History,
+  List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -20,6 +20,7 @@ import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
 import { DistributionCalendar } from '@/components/DistributionCalendar';
 import { MarginSimulator } from '@/components/MarginSimulator';
 import { PositionsTable } from '@/components/PositionsTable';
+import { PendingOrdersPanel, usePendingOrderSymbols } from '@/components/PendingOrdersPanel';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { SettingsPanel } from '@/components/SettingsPanel';
@@ -145,6 +146,7 @@ const NAV_ITEMS = [
   { id: 'puts',         label: 'Open Puts',     icon: History     },
   { id: 'families',     label: 'Fund Families', icon: List        },
   { id: 'simulator',    label: 'Simulator',     icon: Gauge       },
+  { id: 'orders',       label: 'Orders',        icon: ClipboardList },
   { id: 'positions',    label: 'Positions',     icon: List        },
 ];
 
@@ -219,6 +221,8 @@ export default function DashboardPage() {
       return raw ? (JSON.parse(raw).fireNumber ?? 10_000) : 10_000;
     } catch { return 10_000; }
   });
+
+  const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
 
   const fetchDividends = useCallback(async () => {
     try {
@@ -647,6 +651,19 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
+        {/* ── Pending Orders ───────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="orders"
+          title="Pending Orders"
+          icon={<ClipboardList className="w-4 h-4 text-yellow-400" />}
+          accentClass="border-yellow-500/30"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <PendingOrdersPanel accountHash={account.accountHash} />
+          </div>
+        </CollapsiblePanel>
+
         {/* ── Positions table ──────────────────────────────────────────────── */}
         <CollapsiblePanel
           id="positions"
@@ -655,7 +672,7 @@ export default function DashboardPage() {
           defaultOpen={true}
         >
           <div className="pt-4">
-            <PositionsTable positions={account.positions} />
+            <PositionsTable positions={account.positions} pendingOrders={pendingOrders} />
           </div>
         </CollapsiblePanel>
 

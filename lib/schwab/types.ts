@@ -144,6 +144,73 @@ export interface EnrichedPosition extends SchwabPosition {
   todayGainLoss: number;
 }
 
+// ─── Schwab Order Types ──────────────────────────────────────────────────────
+
+export type SchwabOrderStatus =
+  | 'AWAITING_PARENT_ORDER'
+  | 'AWAITING_CONDITION'
+  | 'AWAITING_STOP_CONDITION'
+  | 'AWAITING_MANUAL_REVIEW'
+  | 'ACCEPTED'
+  | 'AWAITING_UR_OUT'
+  | 'PENDING_ACTIVATION'
+  | 'QUEUED'
+  | 'WORKING'
+  | 'REJECTED'
+  | 'PENDING_CANCEL'
+  | 'CANCELED'
+  | 'PENDING_REPLACE'
+  | 'REPLACED'
+  | 'FILLED'
+  | 'EXPIRED';
+
+/** Statuses that represent a cancellable (still-open) order */
+export const CANCELLABLE_STATUSES: Set<SchwabOrderStatus> = new Set([
+  'AWAITING_PARENT_ORDER', 'AWAITING_CONDITION', 'AWAITING_STOP_CONDITION',
+  'AWAITING_MANUAL_REVIEW', 'ACCEPTED', 'AWAITING_UR_OUT',
+  'PENDING_ACTIVATION', 'QUEUED', 'WORKING',
+]);
+
+export interface SchwabOrderLeg {
+  orderLegType: string;
+  legId: number;
+  instrument: {
+    assetType: string;
+    cusip?: string;
+    symbol: string;
+    description?: string;
+  };
+  instruction: 'BUY' | 'SELL' | 'BUY_TO_COVER' | 'SELL_SHORT';
+  positionEffect?: string;
+  quantity: number;
+  quantityType?: string;
+}
+
+export interface SchwabOrder {
+  session: string;
+  duration: string;
+  orderType: string;
+  complexOrderStrategyType?: string;
+  quantity: number;
+  filledQuantity: number;
+  remainingQuantity: number;
+  requestedDestination?: string;
+  destinationLinkName?: string;
+  price?: number;
+  stopPrice?: number;
+  orderLegCollection: SchwabOrderLeg[];
+  orderStrategyType: string;
+  orderId: number;
+  cancelable: boolean;
+  editable: boolean;
+  status: SchwabOrderStatus;
+  enteredTime: string;
+  closeTime?: string;
+  tag?: string;
+  accountNumber?: number;
+  statusDescription?: string;
+}
+
 export interface SchwabTransaction {
   activityId: number;
   time: string;

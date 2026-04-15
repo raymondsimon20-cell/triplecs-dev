@@ -23,7 +23,7 @@ import { NextResponse } from 'next/server';
 import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
 import { getTokens } from '@/lib/storage';
-import { placeOrders } from '@/lib/schwab/orders';
+import { placeOrders, getOrders, cancelOrder } from '@/lib/schwab/orders';
 import type { OrderRequest } from '@/lib/schwab/orders';
 
 export const dynamic = 'force-dynamic';
@@ -119,6 +119,71 @@ export async function POST(req: Request) {
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Orders API error:', msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+// ─── GET /api/orders — fetch orders for an account ──────────────────────────
+
+export async function GET(req: Request) {
+  try { await requireAuth(); } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const accountHash = searchParams.get('accountHash');
+  const status = searchParams.get('status'); // optional: 'pending' to filter open orders only
+
+  if (!accountHash) {
+    return NextResponse.json({ error: 'Missing accountHash query parameter' }, { status: 400 });
+  }
+
+  const tokens = await getTokens();
+  if (!tokens) return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
+
+  try {
+    const orders = await getOrders(tokens, accountHash);
+
+    // If status=pending, filter to only cancellable/open orders
+    const { CANCELLABLE_STATUSES } = await import('@/lib/schwab/types');
+    const filtered = status === 'pending'
+      ? orders.filter((o) => CANCELLABLE_STATUSES.has(o.status))
+      : orders;
+
+    return NextResponse.json({ orders: filtered, total: filtered.length });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('GET /api/orders error:', msg);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
+}
+
+// ─── DELETE /api/orders — cancel a specific order ───────────────────────────
+
+export async function DELETE(req: Request) {
+  try { await requireAuth(); } catch {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  let body: { accountHash: string; orderId: number | string };
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+
+  const { accountHash, orderId } = body;
+
+  if (!accountHash || !orderId) {
+    return NextResponse.json({ error: 'Missing accountHash or orderId' }, { status: 400 });
+  }
+
+  const tokens = await getTokens();
+  if (!tokens) return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
+
+  try {
+    const result = await cancelOrder(tokens, accountHash, orderId);
+    return NextResponse.json(result, { status: result.success ? 200 : 400 });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('DELETE /api/orders error:', msg);
     return NextResponse.json({ error: msg }, { status: 500 });
   }
 }
