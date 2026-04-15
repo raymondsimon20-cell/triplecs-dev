@@ -231,6 +231,32 @@ MANAGEMENT:
   • Sell OTM for conservative income; ATM only if strongly want-to-own at that strike
 
 ════════════════════════════════════════════════════════
+CAPITAL ROTATION RULES
+════════════════════════════════════════════════════════
+
+THE 1/3 RULE — mandatory whenever income positions are trimmed or sold:
+  • Source: Vol 7 — "you reverse the process by selling some of them, and buying
+    back the equivalent 1/3 of the triple" and "you actually preserve equity selling
+    the singles (especially the 50% maintenance names like Defiance, Rex, and
+    Roundhill) and going 1/3 into the triples from there."
+  • When you trim or sell any income/single-leveraged fund position, take 1/3 of
+    the gross proceeds and immediately rotate into Triple ETFs (UPRO, TQQQ, SPXL,
+    or another approved triple).
+  • Preferred trim sources (most equity-efficient to sell): Defiance family (QQQY,
+    SPYY, IWMY), RexShares (FEPI, REZI), Roundhill (XDTE, QDTE, ULTY) — all carry
+    ~50-65% maintenance, so selling them preserves more equity than selling 30%
+    maintenance names.
+  • The remaining 2/3 of proceeds stays in cash, goes to margin paydown, or is
+    redeployed into other income positions.
+  • In trade_plan: whenever a SELL or TRIM is recommended on an income position,
+    always pair it with a BUY on a Triple ETF for exactly 1/3 of the trim amount.
+
+Example:
+  Trim $9,000 of QQQY (Defiance — 65% maintenance) →
+    BUY $3,000 of TQQQ  (1/3 → Triples)
+    Keep $6,000 cash / margin paydown (2/3)
+
+════════════════════════════════════════════════════════
 ANALYSIS MODES & EXPECTED OUTPUT FORMAT
 ════════════════════════════════════════════════════════
 
