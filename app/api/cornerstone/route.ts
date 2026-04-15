@@ -1,13 +1,17 @@
 /**
- * Cornerstone NAV Premium Tracker
+ * Cornerstone NAV Tracker
  *
- * Price source  : NASDAQ public quote API (confirmed working)
- * NAV sources   : (first success wins)
- *   1. CEFConnect JSON API  — /api/v3/pricingdata/{ticker}
- *   2. Cornerstone fund websites — cornerstonetotalreturnfund.com (CRF) / cornerstonestrategicvalue.com (CLM)
- *   3. Manual override in Netlify Blobs "cornerstone-nav"
+ * Primary  — Cornerstone official CSV:
+ *   https://www.cornerstonetotalreturnfund.com/assets/data/Cornerstone_WeeklySurveyInformation{YYYYMMDD}.csv
+ *   Searches up to 15 days back in parallel batches of 4.
+ *   Columns: Ticker | NAV per share ($) | Closing Market ($) | Premium/Discount (%) | Shares Outstanding
  *
- * 15-min result cache in "cef-nav-cache".  ?refresh=true bypasses it.
+ * Fallback — Yahoo Finance:
+ *   chart API for price, quoteSummary defaultKeyStatistics.navPrice.raw for NAV
+ *
+ * Cache — 15 min in Netlify Blobs "cef-nav-cache"
+ * Manual override — "cornerstone-nav" Blobs store (survives cache busts)
+ * ?refresh=true — bypasses 15-min cache
  */
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
@@ -18,262 +22,184 @@ export const dynamic = 'force-dynamic';
 const TICKERS = ['CLM', 'CRF'] as const;
 type Ticker = (typeof TICKERS)[number];
 const CACHE_TTL_MS = 15 * 60 * 1000;
+const FETCH_TIMEOUT_MS = 5000;
+const MAX_DAYS_BACK = 15;
+const BATCH_SIZE = 4;
 
 export interface NavResult {
   ticker: string;
   nav: number;
   marketPrice: number;
   premiumDiscount: number;
-  lastUpdated: string;
-  source: 'cefconnect' | 'nasdaq' | 'cornerstone' | 'manual' | 'unavailable';
+  sharesOutstanding?: number;
+  navUpdatedAt: string;
+  priceUpdatedAt: string;
+  source: 'cornerstone' | 'yahoo' | 'manual' | 'unavailable';
 }
 
-interface CachedResult { funds: NavResult[]; cachedAt: number }
+interface CachedResult {
+  funds: NavResult[];
+  cachedAt: number;
+  dataDate?: string;
+  source?: string;
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-async function fetchWithTimeout(url: string, opts: RequestInit = {}, ms = 10000): Promise<Response> {
+function fetchWithTimeout(url: string, opts: RequestInit = {}, ms = FETCH_TIMEOUT_MS): Promise<Response> {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), ms);
-  try { return await fetch(url, { ...opts, signal: ctrl.signal }); }
-  finally { clearTimeout(t); }
+  return fetch(url, { ...opts, signal: ctrl.signal }).finally(() => clearTimeout(t));
 }
 
-const BROWSER_HEADERS = {
-  'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-  Accept: 'application/json, text/plain, */*',
-};
-
-function parseDollar(s: unknown): number {
-  if (!s) return 0;
-  const n = parseFloat(String(s).replace(/[$,]/g, ''));
-  return isFinite(n) && n > 0 ? n : 0;
+function formatDate(date: Date): string {
+  const y = date.getFullYear().toString();
+  const m = (date.getMonth() + 1).toString().padStart(2, '0');
+  const d = date.getDate().toString().padStart(2, '0');
+  return y + m + d;
 }
 
-function regexDollar(html: string, ...patterns: RegExp[]): number {
-  for (const re of patterns) {
-    const m = html.match(re);
-    if (m?.[1]) { const n = parseDollar(m[1]); if (n > 0) return n; }
+function parseDollar(s: string | undefined): number {
+  const n = parseFloat((s ?? '').replace(/[$,%]/g, '').trim());
+  return isFinite(n) ? n : 0;
+}
+
+// ─── Source 1: Cornerstone official CSV ──────────────────────────────────────
+
+type CSVRow = Record<string, string>;
+
+function parseCSV(text: string): CSVRow[] {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',');
+  const rows: CSVRow[] = [];
+  for (let i = 1; i < lines.length; i++) {
+    const vals = lines[i].split(',');
+    const row: CSVRow = {};
+    headers.forEach((h, idx) => { row[h.trim()] = (vals[idx] ?? '').trim(); });
+    rows.push(row);
   }
-  return 0;
+  return rows;
 }
 
-type CSVData = Partial<Record<Ticker, { nav: number; marketPrice: number; premiumDiscount: number }>>;
-
-function parseCornerStoneCSV(text: string): CSVData | null {
-  try {
-    const lines = text.trim().split('\n').filter(Boolean);
-    if (lines.length < 2) return null;
-    const headerLine = lines.find((l) => /nav|price|premium/i.test(l));
-    if (!headerLine) return null;
-    const headers = headerLine.split(',').map((h) => h.trim().toLowerCase().replace(/['"]/g, ''));
-    const ci = (re: RegExp) => headers.findIndex((h) => re.test(h));
-    const tickerCol = ci(/ticker|fund|symbol/);
-    const navCol    = ci(/\bnav\b|net.asset/);
-    const priceCol  = ci(/market.?price|closing.?price|\bprice\b/);
-    const pdCol     = ci(/premium|discount/);
-    if (navCol < 0 || priceCol < 0) return null;
-    const result: CSVData = {};
-    for (const line of lines) {
-      if (line === headerLine) continue;
-      const cols = line.split(',').map((c) => c.trim().replace(/['"$%]/g, ''));
-      const ticker = (tickerCol >= 0 ? cols[tickerCol] : '').toUpperCase() as Ticker;
-      if (!TICKERS.includes(ticker)) continue;
-      const nav = parseDollar(cols[navCol]);
-      const mp  = parseDollar(cols[priceCol]);
-      if (!nav || !mp) continue;
-      const pd = pdCol >= 0 && cols[pdCol] ? parseDollar(cols[pdCol]) : ((mp - nav) / nav) * 100;
-      result[ticker] = { nav, marketPrice: mp, premiumDiscount: pd };
-    }
-    return Object.keys(result).length ? result : null;
-  } catch { return null; }
+function buildNavFromCSV(rows: CSVRow[], dateStr: string): NavResult[] {
+  const now = new Date().toISOString();
+  return rows
+    .filter((r) => TICKERS.includes(r['Ticker'] as Ticker))
+    .map((r) => {
+      const nav    = parseDollar(r['NAV per share ($)']);
+      const price  = parseDollar(r['Closing Market ($)']);
+      const premium = parseDollar(r['Premium/Discount (%)']);
+      const shares = parseDollar(r['Shares Outstanding']);
+      return {
+        ticker: r['Ticker'],
+        nav,
+        marketPrice: price,
+        premiumDiscount: premium,
+        sharesOutstanding: shares || undefined,
+        navUpdatedAt: now,
+        priceUpdatedAt: now,
+        source: 'cornerstone' as const,
+      };
+    })
+    .filter((r) => r.nav > 0 && r.marketPrice > 0);
 }
 
-// ─── Price: NASDAQ quote API ─────────────────────────────────────────────────
+async function fetchCornerstoneCSV(): Promise<{ funds: NavResult[]; dateStr: string } | null> {
+  const baseUrl = 'https://www.cornerstonetotalreturnfund.com/assets/data/Cornerstone_WeeklySurveyInformation';
 
-async function fetchNasdaqPrice(ticker: string, debug: string[]): Promise<number> {
-  try {
-    const res = await fetchWithTimeout(
-      `https://api.nasdaq.com/api/quote/${ticker}/info?assetClass=stocks`,
-      { headers: { ...BROWSER_HEADERS, Origin: 'https://www.nasdaq.com', Referer: 'https://www.nasdaq.com/' } },
-    );
-    if (!res.ok) { debug.push(`NASDAQ price ${ticker}: HTTP ${res.status}`); return 0; }
-    const j = await res.json();
-    const pd = j?.data?.primaryData ?? {};
-    const sd = j?.data?.secondaryData;
-    debug.push(`NASDAQ ${ticker} primaryData keys: ${Object.keys(pd).join(',')}`);
-    if (sd) debug.push(`NASDAQ ${ticker} secondaryData: ${JSON.stringify(sd).slice(0, 300)}`);
-    const price = parseDollar(pd.lastSalePrice ?? pd.regularMarketPrice);
-    if (price) debug.push(`NASDAQ price ${ticker}: $${price}`);
-    else debug.push(`NASDAQ price ${ticker}: not found`);
-    return price;
-  } catch (e) {
-    debug.push(`NASDAQ price ${ticker}: ${e instanceof Error ? e.message : 'error'}`);
-    return 0;
-  }
-}
+  for (let batchStart = 0; batchStart <= MAX_DAYS_BACK; batchStart += BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + BATCH_SIZE, MAX_DAYS_BACK + 1);
 
-// ─── NAV Source 1: CEFConnect JSON API ───────────────────────────────────────
+    const fetches = Array.from({ length: batchEnd - batchStart }, async (_, i) => {
+      const date = new Date();
+      date.setDate(date.getDate() - (batchStart + i));
+      const dateStr = formatDate(date);
+      const url = `${baseUrl}${dateStr}.csv`;
 
-async function fetchCEFConnectNAV(ticker: string, debug: string[]): Promise<number> {
-  const endpoints = [
-    `https://www.cefconnect.com/api/v3/pricingdata/${ticker}`,
-    `https://www.cefconnect.com/api/v3/fund/${ticker}`,
-  ];
-  for (const url of endpoints) {
-    try {
-      const res = await fetchWithTimeout(url, {
-        headers: {
-          ...BROWSER_HEADERS,
-          Referer: `https://www.cefconnect.com/fund/${ticker}`,
-          Origin: 'https://www.cefconnect.com',
-        },
-      }, 12000);
-      if (!res.ok) { debug.push(`CEFConnect ${ticker} ${url.split('/').pop()}: HTTP ${res.status}`); continue; }
-      const data = await res.json();
-      const record = Array.isArray(data) ? data[0] : data;
-      if (!record) continue;
-      const nav =
-        record.NavPerShare ?? record.NAVPerShare ?? record.NAV ??
-        record.nav ?? record.NetAssetValuePerShare ?? 0;
-      const n = parseDollar(nav);
-      if (n > 0) { debug.push(`CEFConnect NAV ${ticker}: $${n}`); return n; }
-      debug.push(`CEFConnect ${ticker}: no NAV in keys: ${Object.keys(record).slice(0, 15).join(',')}`);
-    } catch (e) {
-      debug.push(`CEFConnect ${ticker}: ${e instanceof Error ? e.message : 'error'}`);
-    }
-  }
-  return 0;
-}
-
-// ─── NAV Source 2: Cornerstone fund websites ──────────────────────────────────
-
-const FUND_BASES: Record<Ticker, string> = {
-  CRF: 'https://www.cornerstonetotalreturnfund.com',
-  CLM: 'https://www.cornerstonestrategicvaluefund.com',
-};
-
-/** Resolve a relative URL against a base */
-function resolveUrl(raw: string, base: string): string {
-  if (raw.startsWith('http')) return raw;
-  return `${base}${raw.startsWith('/') ? '' : '/'}${raw}`;
-}
-
-/** Extract CSV data URLs from inline scripts and HTML attributes */
-function extractInlineDataUrls(html: string, base: string): string[] {
-  const found = new Set<string>();
-  const inlineScripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]).join('\n');
-
-  for (const m of inlineScripts.matchAll(/['"`]([^'"`\s]*\.csv[^'"`\s]*)/gi))
-    found.add(resolveUrl(m[1], base));
-  for (const m of html.matchAll(/["'](\/wp-content\/uploads\/[^"'?\s]+)/gi))
-    found.add(`${base}${m[1]}`);
-  for (const m of html.matchAll(/data-(?:src|url|file)=['"]([^'"]+\.csv[^'"]*)/gi))
-    found.add(resolveUrl(m[1], base));
-
-  return [...found];
-}
-
-/** Fetch external same-domain <script src> files and scan them for CSV references */
-async function extractExternalScriptDataUrls(html: string, base: string, debug: string[]): Promise<string[]> {
-  const domain = base.replace('https://www.', '').replace('https://', '');
-  const srcs = [...html.matchAll(/<script[^>]+src=['"]([^'"]+)['"]/gi)]
-    .map((m) => m[1])
-    // Only fetch scripts hosted on the fund's own domain (skip CDN/WordPress core)
-    .filter((src) => src.includes(domain) && !/(jquery|wp-emoji|wp-polyfill|gutenberg)/i.test(src))
-    .map((src) => resolveUrl(src, base))
-    .slice(0, 6); // cap at 6 to stay within function timeout
-
-  debug.push(`FundSite: found ${srcs.length} same-domain script(s): ${srcs.join(', ')}`);
-
-  const found = new Set<string>();
-  await Promise.all(srcs.map(async (src) => {
-    try {
-      const r = await fetchWithTimeout(src, { headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'] } }, 6000);
-      if (!r.ok) return;
-      const js = await r.text();
-      for (const m of js.matchAll(/['"`]([^'"`\s]*\.csv[^'"`\s]*)/gi)) found.add(resolveUrl(m[1], base));
-      for (const m of js.matchAll(/['"`](\/wp-content\/uploads\/[^'"`\s]+)/gi)) found.add(`${base}${m[1]}`);
-      for (const m of js.matchAll(/fetch\s*\(\s*['"`]([^'"`\s]+)/gi)) {
-        const u = resolveUrl(m[1], base);
-        if (u.includes(domain)) found.add(u);
+      try {
+        const resp = await fetchWithTimeout(url, { headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (!resp.ok) return null;
+        const text = await resp.text();
+        const rows = parseCSV(text);
+        if (!rows.length) return null;
+        const funds = buildNavFromCSV(rows, dateStr);
+        if (funds.length > 0) {
+          console.log(`[cornerstone] CSV found: ${url}`);
+          return { funds, dateStr };
+        }
+        return null;
+      } catch {
+        return null;
       }
-    } catch { /* skip */ }
+    });
+
+    const results = await Promise.all(fetches);
+    const found = results.find((r) => r !== null);
+    if (found) return found;
+  }
+
+  return null;
+}
+
+// ─── Source 2: Yahoo Finance fallback ────────────────────────────────────────
+
+async function fetchYahooFallback(): Promise<Partial<Record<Ticker, { nav: number; marketPrice: number }>>> {
+  const out: Partial<Record<Ticker, { nav: number; marketPrice: number }>> = {};
+
+  await Promise.all(TICKERS.map(async (symbol) => {
+    try {
+      // Price from chart API
+      const chartResp = await fetchWithTimeout(
+        `https://query1.finance.yahoo.com/v8/finance/chart/${symbol}?range=1d&interval=1d&includePrePost=false`,
+        { headers: { 'User-Agent': 'Mozilla/5.0' } }
+      );
+      if (chartResp.ok) {
+        const data = await chartResp.json();
+        const meta = data?.chart?.result?.[0]?.meta ?? {};
+        const price = meta.regularMarketPrice ?? meta.previousClose ?? 0;
+        if (price > 0) out[symbol] = { nav: 0, marketPrice: price };
+      }
+
+      // NAV from quoteSummary — field is navPrice.raw (NOT navPerShare)
+      const summaryResp = await fetchWithTimeout(
+        `https://query2.finance.yahoo.com/v10/finance/quoteSummary/${symbol}?modules=defaultKeyStatistics,price`,
+        { headers: { 'User-Agent': 'Mozilla/5.0' } }
+      );
+      if (summaryResp.ok) {
+        const data = await summaryResp.json();
+        const stats = data?.quoteSummary?.result?.[0]?.defaultKeyStatistics ?? {};
+        const priceData = data?.quoteSummary?.result?.[0]?.price ?? {};
+        const nav = stats?.navPrice?.raw ?? 0;
+        const price = priceData?.regularMarketPrice?.raw ?? 0;
+        if (nav > 0 || price > 0) {
+          out[symbol] = { nav, marketPrice: price || out[symbol]?.marketPrice || 0 };
+        }
+      }
+    } catch {
+      // skip
+    }
   }));
 
-  return [...found];
+  return out;
 }
 
-async function fetchFundWebsiteNAV(ticker: Ticker, debug: string[]): Promise<number> {
-  const base = FUND_BASES[ticker];
-  const navPageUrl = `${base}/net-asset-value`;
+// ─── Cache & manual store ─────────────────────────────────────────────────────
 
-  // Step 1: Fetch the NAV page HTML to find embedded data URLs
-  let pageHtml = '';
-  try {
-    const res = await fetchWithTimeout(navPageUrl, {
-      headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], Accept: 'text/html,*/*' },
-    }, 12000);
-    if (res.ok) {
-      pageHtml = await res.text();
-      debug.push(`FundSite ${ticker}: NAV page loaded (${pageHtml.length} bytes)`);
-    } else {
-      debug.push(`FundSite ${ticker} navPage: HTTP ${res.status}`);
-    }
-  } catch (e) {
-    debug.push(`FundSite ${ticker} navPage: ${e instanceof Error ? e.message : 'error'}`);
-  }
-
-  // Step 2: Extract data URLs — first inline, then external scripts
-  const inlineUrls = pageHtml ? extractInlineDataUrls(pageHtml, base) : [];
-  const externalUrls = pageHtml ? await extractExternalScriptDataUrls(pageHtml, base, debug) : [];
-  const dataUrls = [...new Set([...inlineUrls, ...externalUrls])];
-  debug.push(`FundSite ${ticker}: found ${dataUrls.length} data URL(s): ${dataUrls.slice(0, 5).join(', ')}`);
-
-  // Step 3: Try each discovered URL as a CSV
-  for (const url of dataUrls) {
-    try {
-      const res = await fetchWithTimeout(url, {
-        headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], Accept: 'text/csv,text/plain,*/*' },
-      }, 8000);
-      if (!res.ok) continue;
-      const text = await res.text();
-      const parsed = parseCornerStoneCSV(text);
-      const record = parsed?.[ticker];
-      if (record?.nav) {
-        debug.push(`FundSite ${ticker}: CSV from ${url} → NAV=$${record.nav}`);
-        return record.nav;
-      }
-      debug.push(`FundSite ${ticker}: fetched ${url} but no parseable NAV (${text.slice(0, 100)})`);
-    } catch { /* try next */ }
-  }
-
-  // Step 4: Log the raw page text near a dollar sign so we can see data shape
-  if (pageHtml) {
-    const text = pageHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
-    const dollarIdx = text.indexOf('$');
-    if (dollarIdx >= 0) {
-      debug.push(`FundSite ${ticker} near first $: "${text.slice(Math.max(0, dollarIdx - 60), dollarIdx + 120)}"`);
-    } else {
-      debug.push(`FundSite ${ticker}: no $ found in page text`);
-    }
-  }
-
-  return 0;
-}
-
-// ─── Cache ────────────────────────────────────────────────────────────────────
-
-async function getCached(): Promise<NavResult[] | null> {
+async function getCached(): Promise<CachedResult | null> {
   try {
     const c = (await getStore('cef-nav-cache').get('data', { type: 'json' })) as CachedResult | null;
     if (!c || Date.now() - c.cachedAt > CACHE_TTL_MS) return null;
-    return c.funds;
+    return c;
   } catch { return null; }
 }
-async function setCache(funds: NavResult[]) {
-  try { await getStore('cef-nav-cache').setJSON('data', { funds, cachedAt: Date.now() } satisfies CachedResult); } catch { /* ok */ }
+
+async function setCache(funds: NavResult[], dataDate?: string, source?: string) {
+  try {
+    await getStore('cef-nav-cache').setJSON('data', { funds, cachedAt: Date.now(), dataDate, source } satisfies CachedResult);
+  } catch { /* ok */ }
 }
+
 async function getManual(ticker: string): Promise<NavResult | null> {
   try { return (await getStore('cornerstone-nav').get(ticker, { type: 'json' })) as NavResult | null; } catch { return null; }
 }
@@ -288,68 +214,76 @@ export async function GET(req: Request) {
   const forceRefresh = new URL(req.url).searchParams.get('refresh') === 'true';
   if (!forceRefresh) {
     const cached = await getCached();
-    if (cached) return NextResponse.json({ funds: cached, fromCache: true, debug: ['served from 15-min cache'] });
+    if (cached) return NextResponse.json({ funds: cached.funds, fromCache: true, source: cached.source, dataDate: cached.dataDate });
   } else {
     try { await getStore('cef-nav-cache').delete('data'); } catch { /* ok */ }
   }
 
-  const debug: string[] = [];
+  // Source 1: Cornerstone official CSV
+  const csvResult = await fetchCornerstoneCSV();
+  if (csvResult) {
+    const missing = TICKERS.filter((t) => !csvResult.funds.find((f) => f.ticker === t));
 
-  // Fetch price and NAV in parallel for each ticker
+    // If CSV had both tickers, we're done
+    if (missing.length === 0) {
+      await setCache(csvResult.funds, csvResult.dateStr, 'cornerstone-official');
+      return NextResponse.json({ funds: csvResult.funds, fromCache: false, source: 'cornerstone-official', dataDate: csvResult.dateStr });
+    }
+  }
+
+  // Source 2: Yahoo Finance (covers any missing tickers)
+  const yahooData = await fetchYahooFallback();
+  const now = new Date().toISOString();
+  let source = csvResult ? 'cornerstone+yahoo' : 'yahoo-finance';
+
   const funds: NavResult[] = await Promise.all(
     TICKERS.map(async (ticker) => {
-      // Price: NASDAQ (confirmed working)
-      const marketPrice = await fetchNasdaqPrice(ticker, debug);
+      // Use CSV data if available for this ticker
+      const fromCSV = csvResult?.funds.find((f) => f.ticker === ticker);
+      if (fromCSV) return fromCSV;
 
-      // NAV source 1: CEFConnect JSON API
-      let nav = await fetchCEFConnectNAV(ticker, debug);
-      let navSource: NavResult['source'] = 'cefconnect';
-
-      // NAV source 2: Cornerstone fund websites
-      if (!nav) {
-        nav = await fetchFundWebsiteNAV(ticker, debug);
-        navSource = 'cornerstone';
+      // Use Yahoo
+      const yh = yahooData[ticker];
+      if (yh?.nav && yh?.marketPrice) {
+        const pd = ((yh.marketPrice - yh.nav) / yh.nav) * 100;
+        return { ticker, nav: yh.nav, marketPrice: yh.marketPrice, premiumDiscount: pd, navUpdatedAt: now, priceUpdatedAt: now, source: 'yahoo' as const };
       }
 
-      // NAV source 3: NASDAQ secondaryData (sometimes has nav for CEFs)
-      // (already fetched above — parsed from debug. If still 0, use manual.)
-
-      if (nav > 0 && marketPrice > 0) {
-        const pd = ((marketPrice - nav) / nav) * 100;
-        return { ticker, nav, marketPrice, premiumDiscount: pd, lastUpdated: new Date().toISOString(), source: navSource };
-      }
-
-      // Fallback: manual override
+      // Use manual override, refresh its market price from Yahoo if possible
       const manual = await getManual(ticker);
       if (manual) {
-        // Use fresh NASDAQ price if available
-        if (marketPrice > 0 && manual.nav > 0) {
-          return { ...manual, marketPrice, premiumDiscount: ((marketPrice - manual.nav) / manual.nav) * 100, source: 'manual' as const };
+        if (yh?.marketPrice && yh.marketPrice > 0 && manual.nav > 0) {
+          const pd = ((yh.marketPrice - manual.nav) / manual.nav) * 100;
+          return { ...manual, marketPrice: yh.marketPrice, premiumDiscount: pd, source: 'manual' as const };
         }
         return manual;
       }
 
-      return { ticker, nav: 0, marketPrice, premiumDiscount: 0, lastUpdated: '', source: 'unavailable' as const };
+      // Unavailable
+      source = 'partial';
+      return { ticker, nav: 0, marketPrice: yh?.marketPrice ?? 0, premiumDiscount: 0, navUpdatedAt: '', priceUpdatedAt: now, source: 'unavailable' as const };
     })
   );
 
-  await setCache(funds);
-  console.log('[cornerstone] debug:', debug);
-  return NextResponse.json({ funds, fromCache: false, debug });
+  await setCache(funds, csvResult?.dateStr, source);
+  return NextResponse.json({ funds, fromCache: false, source, dataDate: csvResult?.dateStr ?? null });
 }
 
-// ─── POST — manual override ───────────────────────────────────────────────────
+// ─── POST — manual NAV override ──────────────────────────────────────────────
 
 export async function POST(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const { ticker, nav, marketPrice } = await req.json();
-  if (!ticker || !nav || !marketPrice)
-    return NextResponse.json({ error: 'ticker, nav, marketPrice required' }, { status: 400 });
 
-  const pd = ((Number(marketPrice) - Number(nav)) / Number(nav)) * 100;
-  const entry: NavResult = { ticker, nav: Number(nav), marketPrice: Number(marketPrice), premiumDiscount: pd, lastUpdated: new Date().toISOString(), source: 'manual' };
+  const { ticker, nav } = await req.json();
+  if (!ticker || !nav) return NextResponse.json({ error: 'ticker and nav required' }, { status: 400 });
+
+  const entry: NavResult = {
+    ticker, nav: Number(nav), marketPrice: 0, premiumDiscount: 0,
+    navUpdatedAt: new Date().toISOString(), priceUpdatedAt: '',
+    source: 'manual',
+  };
 
   try { await getStore('cef-nav-cache').delete('data'); } catch { /* ok */ }
   await getStore('cornerstone-nav').setJSON(ticker, entry);
