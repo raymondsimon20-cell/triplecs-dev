@@ -6,6 +6,7 @@ import { RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle, TrendingUp 
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
+import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -266,6 +267,12 @@ export default function DashboardPage() {
           totalValue={account.totalValue}
           positions={account.positions}
           dividendsAnnual={dividendsTotal}
+        />
+
+        {/* Phase 4 — Triple ETF Tactical Engine */}
+        <TriplesTacticalPanel
+          positions={account.positions}
+          totalValue={account.totalValue}
         />
 
         {/* Positions table */}
