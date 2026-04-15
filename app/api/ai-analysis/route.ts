@@ -113,34 +113,65 @@ export async function POST(req: Request) {
   try {
     const client = new Anthropic({ apiKey });
 
+    // Prefill the assistant turn with "{" — this forces Claude to continue
+    // directly with JSON, eliminating markdown wrappers or preamble entirely.
     const message = await client.messages.create({
       model,
       max_tokens: maxTokens,
       system: TRIPLE_C_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
+      messages: [
+        { role: 'user', content: userMessage },
+        { role: 'assistant', content: '{' },   // ← prefill forces JSON output
+      ],
     });
 
-    // Extract text content
-    const rawText = message.content
-      .filter((block) => block.type === 'text')
-      .map((block) => (block as { type: 'text'; text: string }).text)
-      .join('');
+    // The prefill "{" is not included in the response content, so we prepend it.
+    const rawText =
+      '{' +
+      message.content
+        .filter((block) => block.type === 'text')
+        .map((block) => (block as { type: 'text'; text: string }).text)
+        .join('');
 
-    // Parse JSON response from AI
+    // Parse JSON — try progressively more aggressive extraction strategies
     let analysis: Record<string, unknown>;
     try {
-      // Strip any markdown code fences the model might add despite instructions
-      const cleaned = rawText.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim();
-      analysis = JSON.parse(cleaned);
+      // Strategy 1: direct parse (should always work with prefill)
+      analysis = JSON.parse(rawText);
     } catch {
-      // If parsing fails, return the raw text so the client can display it
-      return NextResponse.json({
-        mode,
-        raw: rawText,
-        parse_error: 'AI returned non-JSON response — displaying raw output',
-        model,
-        usage: message.usage,
-      });
+      try {
+        // Strategy 2: strip any stray markdown fences and retry
+        const stripped = rawText
+          .replace(/^```(?:json)?\s*/im, '')
+          .replace(/\s*```\s*$/im, '')
+          .trim();
+        analysis = JSON.parse(stripped);
+      } catch {
+        // Strategy 3: extract the first {...} block via regex
+        const match = rawText.match(/\{[\s\S]*\}/);
+        if (match) {
+          try {
+            analysis = JSON.parse(match[0]);
+          } catch {
+            // All strategies failed — return raw for debugging
+            return NextResponse.json({
+              mode,
+              raw: rawText,
+              parse_error: 'AI returned non-JSON response — displaying raw output',
+              model,
+              usage: message.usage,
+            });
+          }
+        } else {
+          return NextResponse.json({
+            mode,
+            raw: rawText,
+            parse_error: 'AI returned non-JSON response — displaying raw output',
+            model,
+            usage: message.usage,
+          });
+        }
+      }
     }
 
     return NextResponse.json({
