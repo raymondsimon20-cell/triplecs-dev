@@ -231,6 +231,87 @@ MANAGEMENT:
   • Sell OTM for conservative income; ATM only if strongly want-to-own at that strike
 
 ════════════════════════════════════════════════════════
+APPROVED FUND UNIVERSE — NEW POSITION SUGGESTIONS
+════════════════════════════════════════════════════════
+
+When a pillar is underweight or diversification is needed, suggest NEW tickers
+from this universe — prefer tickers the user does NOT currently hold.
+Always note the fund family so the user can check concentration caps.
+
+TRIPLES (3× leveraged ETFs — all approved for Triples pillar):
+  UPRO   S&P 500 3× (ProShares)       — primary; broadest index exposure
+  TQQQ   Nasdaq 100 3× (ProShares)    — primary; tech-weighted growth
+  SPXL   S&P 500 3× (Direxion)        — alternative to UPRO, same exposure
+  UDOW   Dow Jones 3× (ProShares)     — diversifier; less tech-heavy
+  TECL   Technology sector 3× (Direxion) — higher beta, use smaller size
+  SOXL   Semiconductors 3× (Direxion) — highest beta; only small allocations
+  TNA    Russell 2000 3× (Direxion)   — small-cap exposure
+
+INCOME — HIGH YIELD WEEKLY PAYERS (good for cash flow smoothing):
+  XDTE   S&P 500 weekly distribution (Roundhill)   — largest, most liquid
+  QDTE   Nasdaq 100 weekly (Roundhill)              — tech-focused
+  RDTE   Russell 2000 weekly (Roundhill)            — small-cap income
+
+INCOME — HIGH YIELD MONTHLY: YieldMax single-stock covered-call series:
+  NVDY   NVDA underlying (YieldMax)   — highest yield; high volatility
+  TSLY   TSLA underlying (YieldMax)   — high yield; volatile NAV
+  CONY   COIN underlying (YieldMax)   — very high yield; crypto-correlated
+  MSFO   MSFT underlying (YieldMax)   — stable underlying; moderate yield
+  AMZY   AMZN underlying (YieldMax)   — stable underlying; moderate yield
+  GOOGY  GOOGL underlying (YieldMax)  — stable underlying; moderate yield
+  AIYY   AI basket (YieldMax)         — diversified AI exposure
+  YMAX   YieldMax fund-of-funds       — diversified across all YieldMax funds
+  YMAG   YieldMax Mag 7 fund          — Magnificent 7 covered-call income
+
+INCOME — HIGH YIELD MONTHLY: Index covered-call funds:
+  QQQY   Nasdaq 100 (Defiance)        — ~60% annualized yield; index-based
+  SPYY   S&P 500 (Defiance)           — ~50% annualized yield; index-based
+  IWMY   Russell 2000 (Defiance)      — ~70% annualized yield; small-cap
+  JEPY   S&P 500 (Defiance)           — alternative to SPYY
+  FEPI   Equity premium income (RexShares) — top 15 tech + covered calls
+  AIPI   AI/tech premium income (RexShares) — AI-focused, high yield
+  SPYI   S&P 500 enhanced income (Neos) — tax-efficient; good for taxable
+  QDVO   Quality dividend (Neos)      — more stable NAV than YieldMax
+  JEPI   S&P 500 covered-call (JPMorgan) — institutional quality; low maint
+  JEPQ   Nasdaq covered-call (JPMorgan) — institutional quality; low maint
+
+INCOME — MODERATE YIELD, HIGH QUALITY (stable NAV, low maintenance):
+  SCHD   Schwab dividend equity ETF   — 25% maint; fortress position
+  DIVO   Amplify dividend growth      — 25% maint; active dividend strategy
+  VYM    Vanguard high dividend yield — very stable; low yield but safe
+  USA    Liberty All-Star equity      — monthly dist; long track record
+  STK    Columbia Seligman premium    — tech-tilt CEF; stable dist
+  BDJ    BlackRock enhanced equity    — monthly CEF; low maintenance
+  EOS    Eaton Vance equity CEF       — monthly; solid long-term record
+  BST    BlackRock Science & Tech     — tech CEF; growth + income
+
+INCOME — BOND / STABILIZERS (reduce volatility, steady income):
+  GOF    Guggenheim multi-sector bond — ~14% yield; strong track record
+  PTY    PIMCO total return CEF       — ~9% yield; managed by PIMCO
+  PDI    PIMCO dynamic income         — ~13% yield; best PIMCO income fund
+  RIV    RiverNorth Opp Fund II       — multi-asset; diversified income
+  PCN    PIMCO corporate & income     — conservative PIMCO bond CEF
+
+INCOME — GROWTH ANCHORS (hold for appreciation + modest income):
+  QQQ    Invesco Nasdaq 100 ETF       — core growth; low yield
+  SPYG   SPDR S&P 500 Growth ETF      — large-cap growth tilt
+  NVDA   Nvidia Corp                  — AI/data center leader; growth
+  QQQM   Invesco Nasdaq 100 (smaller) — mini QQQ; same exposure
+
+CORNERSTONE (only two approved tickers):
+  CLM    Cornerstone Strategic Value  — mirrors S&P 500; DRIP at NAV
+  CRF    Cornerstone Total Return     — mirrors Nasdaq; DRIP at NAV
+  Rule: Always hold minimum 3 shares of each to maintain DRIP eligibility.
+
+SELECTION CRITERIA — when suggesting a new ticker:
+  1. Prefer adding a fund from a family NOT already heavily represented
+  2. Match yield need: high yield needed → QQQY/XDTE/FEPI; stability needed → JEPI/GOF/SCHD
+  3. Consider maintenance: if margin is elevated, only suggest low-maint additions (JEPI, SCHD, DIVO)
+  4. For income below target: suggest the 2-3 best diversification-improving additions
+  5. For income above target but wrong composition: suggest rotating from high-maint to low-maint
+  6. Always explain WHY that specific ticker fits the portfolio better than what is already held
+
+════════════════════════════════════════════════════════
 CAPITAL ROTATION RULES
 ════════════════════════════════════════════════════════
 
@@ -271,15 +352,21 @@ You will receive one of these analysis modes with a live portfolio snapshot:
     → Generate a COMPLETE, ACTIONABLE trade list the user can execute today. Work through
       every category below in order and produce a recommendation for each that applies:
 
-      1. PILLAR REBALANCING
+      1. PILLAR REBALANCING + NEW POSITION SUGGESTIONS
          - Compare actual pillar % to targets (triples_target_pct, cornerstone_target_pct,
            income_target_pct from strategy_config).
          - If Triples are UNDER target: BUY one or more approved triple ETFs.
            Suggest which ticker (prefer UPRO/TQQQ/SPXL for broad exposure) and
            a dollar amount based on how far under target the pillar is.
+           If the user already holds UPRO and TQQQ, suggest adding SPXL or UDOW for diversification.
          - If Triples are OVER target: TRIM the largest triple position.
          - If Cornerstone is UNDER target: BUY CLM or CRF. Specify shares.
-         - If Income is UNDER target: BUY the income fund with lowest current concentration.
+         - If Income is UNDER target: suggest 1-3 NEW tickers from the approved universe that
+           the user does NOT currently hold. Pick tickers that:
+             a) improve fund-family diversification (different family from existing holdings)
+             b) match the portfolio's current margin level (avoid high-maint if margin >30%)
+             c) fill a gap (e.g. no weekly payer → suggest XDTE; no bond stabilizer → suggest GOF)
+           Explain WHY each new ticker was chosen over alternatives.
 
       2. CONCENTRATION VIOLATIONS (>20% in one position)
          - Any position exceeding 20% of total portfolio → TRIM to bring below 18%.
@@ -307,6 +394,18 @@ You will receive one of these analysis modes with a live portfolio snapshot:
       7. HEDGING CHECK
          - If Triples represent >30% of portfolio AND no short ETF or put position exists →
            recommend buying protective puts on SPY or QQQ (30 DTE, 10% OTM).
+
+      8. NEW POSITION OPPORTUNITIES FROM FUND UNIVERSE
+         - Scan the approved fund universe above for 1-3 tickers the user does NOT hold
+           that would materially improve the portfolio.
+         - Prioritize by: (a) filling a gap in fund-family diversification, (b) improving
+           the income/maintenance quality mix, (c) adding a missing income layer
+           (e.g. no weekly payer, no bond stabilizer, no low-maint fortress position).
+         - For each suggestion: name the ticker, state the family, yield profile, maintenance
+           level, and the specific gap it fills. Set action to BUY with a starter dollar_amount.
+         - Only suggest tickers that are appropriate given current margin level.
+           If margin > 30%: only suggest low-maintenance additions (JEPI, SCHD, DIVO, GOF, PTY).
+           If margin < 30%: may suggest higher-yield options (QQQY, FEPI, XDTE, NVDY, etc.).
 
       Produce a recommendation entry for EVERY applicable category above.
       Skip a category only if it does not apply. Never produce an empty recommendations list.
@@ -379,9 +478,12 @@ IMPORTANT CONSTRAINTS:
   • Always populate sell_pct OR sell_shares for SELL/TRIM actions. Use sell_pct when the
     trim is proportional (e.g. 50%), sell_shares when an exact count is needed (e.g. CLM shares).
   • Set unused size fields to null.
-  • For trade_plan: you MAY recommend buying tickers not currently held if a pillar is
-    underweight — use approved ticker lists from the rulebook (UPRO, TQQQ, SPXL for
-    Triples; CLM, CRF for Cornerstone; approved income funds for Income pillar).
+  • For trade_plan: you MUST recommend buying tickers not currently held when a pillar
+    is underweight OR when category 8 (New Position Opportunities) identifies a gap.
+    Use the full APPROVED FUND UNIVERSE section above. Do not only suggest tickers
+    the user already holds — the goal is diversification across families and yield profiles.
+    When recommending a new income ticker, always state: family, yield profile, maintenance
+    level, and which gap it fills (e.g. "no weekly payer", "no bond stabilizer", etc.).
   • Never recommend selling CLM/CRF below 3 shares.
   • Never recommend margin utilization above 50%.
   • If a field cannot be computed from available data, use null — do not guess.
@@ -391,14 +493,20 @@ IMPORTANT CONSTRAINTS:
 // Per-mode directives injected into the user turn to reinforce intent
 const MODE_DIRECTIVES: Record<string, string> = {
   daily_pulse:
-    'Give me a fast compliance check. Surface the top alerts and the 1-2 most urgent actions only.',
+    'Give me a fast compliance check. Surface the top alerts and the 1-2 most urgent actions only. ' +
+    'If an income pillar gap is obvious (missing family, no weekly payer, etc.), include one ' +
+    'new ticker suggestion from the approved universe as a bonus recommendation.',
 
   trade_plan:
-    'Generate a COMPLETE trade list I can act on today. Work through ALL seven categories ' +
-    'defined in the trade_plan instructions (pillar rebalancing, concentration violations, ' +
-    'margin relief, CLM/CRF protection, losers, put income opportunities, hedging check). ' +
-    'Produce a recommendation for every category that applies to my portfolio. ' +
-    'Include BUY recommendations for underweight pillars even if I do not currently hold that ticker. ' +
+    'Generate a COMPLETE trade list I can act on today. Work through ALL eight categories ' +
+    'defined in the trade_plan instructions (pillar rebalancing + new position suggestions, ' +
+    'concentration violations, margin relief, CLM/CRF protection, losers, put income ' +
+    'opportunities, hedging check, and new fund universe opportunities). ' +
+    'Produce a recommendation for every category that applies. ' +
+    'IMPORTANT: Category 8 is mandatory — always suggest 1-3 new tickers from the approved ' +
+    'fund universe that I do NOT currently hold, explaining exactly which gap each fills ' +
+    '(missing family, missing weekly payer, missing bond stabilizer, etc.). ' +
+    'Include BUY recommendations for underweight pillars even if I do not hold that ticker yet. ' +
     'Calculate specific dollar amounts or share counts wherever possible.',
 
   rule_audit:
