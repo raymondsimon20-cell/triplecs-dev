@@ -131,15 +131,17 @@ export function SettingsPanel() {
   }, []);
 
   /** Set a pillar % and auto-adjust the largest other pillar to keep sum ≤ 100 */
-  const setPillar = useCallback((key: 'triplesPct' | 'cornerstonePct' | 'incomePct' | 'hedgePct', value: number) => {
+  type PillarKey = 'triplesPct' | 'cornerstonePct' | 'incomePct' | 'hedgePct';
+  const PILLAR_KEYS: PillarKey[] = ['triplesPct', 'cornerstonePct', 'incomePct', 'hedgePct'];
+
+  const setPillar = useCallback((key: PillarKey, value: number) => {
     setDraft((prev) => {
-      const next = { ...prev, [key]: value };
-      const pillars: typeof key[] = ['triplesPct', 'cornerstonePct', 'incomePct', 'hedgePct'];
-      let sum = pillars.reduce((s, k) => s + next[k], 0);
+      const next: Record<string, number> = { ...prev, [key]: value };
+      let sum = PILLAR_KEYS.reduce((s, k) => s + next[k], 0);
 
       // If over 100, reduce the other pillars starting from the largest
       if (sum > 100) {
-        const others = pillars.filter((k) => k !== key).sort((a, b) => next[b] - next[a]);
+        const others = PILLAR_KEYS.filter((k) => k !== key).sort((a, b) => next[b] - next[a]);
         for (const other of others) {
           const excess = sum - 100;
           const reduction = Math.min(next[other], excess);
@@ -148,7 +150,7 @@ export function SettingsPanel() {
           if (sum <= 100) break;
         }
       }
-      return next;
+      return next as unknown as StrategyTargets;
     });
   }, []);
 
