@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList,
+  List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList, Eye,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -27,6 +27,7 @@ import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
+import { WatchlistPanel } from '@/components/WatchlistPanel';
 import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { fmt$, gainLossColor } from '@/lib/utils';
@@ -149,6 +150,7 @@ const NAV_ITEMS = [
   { id: 'puts',         label: 'Open Puts',     icon: History     },
   { id: 'families',     label: 'Fund Families', icon: List        },
   { id: 'simulator',    label: 'Simulator',     icon: Gauge       },
+  { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
   { id: 'positions',    label: 'Positions',     icon: List        },
 ];
@@ -683,6 +685,19 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <TradeHistoryPanel />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Watchlist ─────────────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="watchlist"
+          title="Watchlist"
+          icon={<Eye className="w-4 h-4 text-purple-400" />}
+          accentClass="border-purple-500/30"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <WatchlistPanel />
           </div>
         </CollapsiblePanel>
 
