@@ -153,36 +153,53 @@ const FUND_BASES: Record<Ticker, string> = {
   CLM: 'https://www.cornerstonestrategicvaluefund.com',
 };
 
-/** Extract CSV/JSON data URLs from a page's inline <script> blocks */
-function extractDataUrls(html: string, baseUrl: string): string[] {
-  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
+/** Resolve a relative URL against a base */
+function resolveUrl(raw: string, base: string): string {
+  if (raw.startsWith('http')) return raw;
+  return `${base}${raw.startsWith('/') ? '' : '/'}${raw}`;
+}
+
+/** Extract CSV data URLs from inline scripts and HTML attributes */
+function extractInlineDataUrls(html: string, base: string): string[] {
+  const found = new Set<string>();
+  const inlineScripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)].map((m) => m[1]).join('\n');
+
+  for (const m of inlineScripts.matchAll(/['"`]([^'"`\s]*\.csv[^'"`\s]*)/gi))
+    found.add(resolveUrl(m[1], base));
+  for (const m of html.matchAll(/["'](\/wp-content\/uploads\/[^"'?\s]+)/gi))
+    found.add(`${base}${m[1]}`);
+  for (const m of html.matchAll(/data-(?:src|url|file)=['"]([^'"]+\.csv[^'"]*)/gi))
+    found.add(resolveUrl(m[1], base));
+
+  return [...found];
+}
+
+/** Fetch external same-domain <script src> files and scan them for CSV references */
+async function extractExternalScriptDataUrls(html: string, base: string, debug: string[]): Promise<string[]> {
+  const domain = base.replace('https://www.', '').replace('https://', '');
+  const srcs = [...html.matchAll(/<script[^>]+src=['"]([^'"]+)['"]/gi)]
     .map((m) => m[1])
-    .join('\n');
+    // Only fetch scripts hosted on the fund's own domain (skip CDN/WordPress core)
+    .filter((src) => src.includes(domain) && !/(jquery|wp-emoji|wp-polyfill|gutenberg)/i.test(src))
+    .map((src) => resolveUrl(src, base))
+    .slice(0, 6); // cap at 6 to stay within function timeout
+
+  debug.push(`FundSite: found ${srcs.length} same-domain script(s): ${srcs.join(', ')}`);
 
   const found = new Set<string>();
-
-  // CSV references (any path containing .csv)
-  for (const m of scripts.matchAll(/['"`]([^'"`\s]*\.csv[^'"`\s]*)/gi)) {
-    const raw = m[1];
-    found.add(raw.startsWith('http') ? raw : `${baseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`);
-  }
-  // wp-content/uploads paths (WordPress media)
-  for (const m of html.matchAll(/["'](\/wp-content\/uploads\/[^"'?\s]+)/gi)) {
-    const raw = m[1];
-    found.add(`${baseUrl}${raw}`);
-  }
-  // Any fetch/ajax/src URL containing nav/weekly/survey
-  for (const m of scripts.matchAll(/['"`]([^'"`\s]*(?:nav|weekly|survey)[^'"`\s]*)/gi)) {
-    const raw = m[1];
-    if (raw.startsWith('/') || raw.startsWith('http')) {
-      found.add(raw.startsWith('http') ? raw : `${baseUrl}${raw}`);
-    }
-  }
-  // JSON data-src or data-url attributes
-  for (const m of html.matchAll(/data-(?:src|url|file)=['"]([^'"]+)['"]/gi)) {
-    const raw = m[1];
-    found.add(raw.startsWith('http') ? raw : `${baseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`);
-  }
+  await Promise.all(srcs.map(async (src) => {
+    try {
+      const r = await fetchWithTimeout(src, { headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'] } }, 6000);
+      if (!r.ok) return;
+      const js = await r.text();
+      for (const m of js.matchAll(/['"`]([^'"`\s]*\.csv[^'"`\s]*)/gi)) found.add(resolveUrl(m[1], base));
+      for (const m of js.matchAll(/['"`](\/wp-content\/uploads\/[^'"`\s]+)/gi)) found.add(`${base}${m[1]}`);
+      for (const m of js.matchAll(/fetch\s*\(\s*['"`]([^'"`\s]+)/gi)) {
+        const u = resolveUrl(m[1], base);
+        if (u.includes(domain)) found.add(u);
+      }
+    } catch { /* skip */ }
+  }));
 
   return [...found];
 }
@@ -207,8 +224,10 @@ async function fetchFundWebsiteNAV(ticker: Ticker, debug: string[]): Promise<num
     debug.push(`FundSite ${ticker} navPage: ${e instanceof Error ? e.message : 'error'}`);
   }
 
-  // Step 2: Extract any data URLs the JS references on the page
-  const dataUrls = pageHtml ? extractDataUrls(pageHtml, base) : [];
+  // Step 2: Extract data URLs — first inline, then external scripts
+  const inlineUrls = pageHtml ? extractInlineDataUrls(pageHtml, base) : [];
+  const externalUrls = pageHtml ? await extractExternalScriptDataUrls(pageHtml, base, debug) : [];
+  const dataUrls = [...new Set([...inlineUrls, ...externalUrls])];
   debug.push(`FundSite ${ticker}: found ${dataUrls.length} data URL(s): ${dataUrls.slice(0, 5).join(', ')}`);
 
   // Step 3: Try each discovered URL as a CSV
