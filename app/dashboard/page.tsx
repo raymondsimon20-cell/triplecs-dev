@@ -24,6 +24,9 @@ import { PendingOrdersPanel, usePendingOrderSymbols } from '@/components/Pending
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
+import { ThemeToggle } from '@/components/ThemeToggle';
+import { PortfolioExport } from '@/components/PortfolioExport';
+import { AlertMonitor } from '@/components/ToastProvider';
 import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { fmt$, gainLossColor } from '@/lib/utils';
@@ -364,6 +367,16 @@ export default function DashboardPage() {
             />
 
             <SettingsPanel />
+            <ThemeToggle />
+            <PortfolioExport
+              positions={account.positions}
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              accountNumber={account.accountNumber}
+              pillarSummary={account.pillarSummary}
+              dividendsAnnual={dividendsTotal}
+            />
 
             <button
               onClick={() => fetchAccounts(true)}
@@ -701,6 +714,22 @@ export default function DashboardPage() {
         {/* Footer spacer */}
         <div className="h-12" />
       </main>
+
+      {/* ── Real-time alert monitor (renders nothing, fires toasts) ─────── */}
+      <AlertMonitor
+        marginPct={
+          (account.equity + Math.abs(account.marginBalance)) > 0
+            ? (Math.abs(account.marginBalance) / (account.equity + Math.abs(account.marginBalance))) * 100
+            : 0
+        }
+        positions={account.positions.map((p) => ({
+          symbol: p.instrument.symbol,
+          portfolioPercent: p.portfolioPercent,
+        }))}
+        pendingOrderCount={pendingOrders.size}
+        marginWarnPct={strategyTargets.marginWarnPct}
+        marginLimitPct={strategyTargets.marginLimitPct}
+      />
     </div>
   );
 }
