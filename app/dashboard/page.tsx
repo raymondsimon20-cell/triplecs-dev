@@ -224,10 +224,10 @@ export default function DashboardPage() {
     try {
       const res = await fetch('/api/dividends');
       if (res.ok) {
-        const data = await res.json();
+        const data = await res.json() as { total?: number; monthly?: number };
         setDividendsTotal(data.total ?? 0);
         // Approximate monthly income from last 30-day window if available
-        setMonthlyIncome(data.monthly ?? data.total / 12 ?? 0);
+        setMonthlyIncome(data.monthly ?? (data.total ?? 0) / 12);
       }
     } catch { /* non-critical */ }
   }, []);
