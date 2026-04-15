@@ -285,6 +285,18 @@ export function AIAnalysisPanel({
         }),
       });
 
+      // Guard against HTML error pages (Netlify 500/502 pages, missing function, etc.)
+      const contentType = res.headers.get('content-type') ?? '';
+      if (!contentType.includes('application/json')) {
+        const text = await res.text();
+        const hint = res.status === 500
+          ? 'The AI function crashed on startup — check that npm install ran and the Netlify deploy succeeded.'
+          : res.status === 404
+          ? 'API route not found — the Netlify function may not have deployed yet.'
+          : `HTTP ${res.status}`;
+        throw new Error(hint + (text ? ` (${text.slice(0, 120).trim()})` : ''));
+      }
+
       const data = await res.json();
 
       if (!res.ok) {
