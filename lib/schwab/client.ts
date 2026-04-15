@@ -115,7 +115,7 @@ export async function getQuotes(
 export async function getTransactions(
   tokens: SchwabTokens,
   accountHash: string,
-  startDate: string, // YYYY-MM-DD
+  startDate: string, // ISO 8601 datetime e.g. 2025-04-15T00:00:00.000Z (bare YYYY-MM-DD is rejected by Schwab)
   endDate: string,
   types = 'DIVIDEND_OR_INTEREST',
 ): Promise<import('./types').SchwabTransaction[]> {

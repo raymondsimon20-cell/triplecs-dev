@@ -12,10 +12,10 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  // Default: last 12 months of dividends
-  const endDate = new Date().toISOString().split('T')[0];
+  // Schwab transactions API requires full ISO 8601 datetime strings, not bare YYYY-MM-DD dates
+  const endDate = new Date().toISOString();                                          // e.g. 2026-04-14T23:59:59.000Z
   const startDate = searchParams.get('start') ??
-    new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();               // 12 months ago
 
   try {
     const tokens = await getTokens();
