@@ -14,6 +14,7 @@ import { useState } from 'react';
 import { AlertTriangle, CheckCircle, AlertCircle, TrendingDown, DollarSign, ChevronDown, ChevronUp } from 'lucide-react';
 import { getFundFamilyConcentrations } from '@/lib/classify';
 import type { EnrichedPosition } from '@/lib/schwab/types';
+import { fmt$, fmtDollar } from '@/lib/utils';
 
 interface Props {
   equity: number;
@@ -27,15 +28,6 @@ interface Props {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmt$(n: number) {
-  const abs = Math.abs(n);
-  const str = abs.toLocaleString('en-US', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-  return n < 0 ? `-$${str}` : `$${str}`;
-}
-
-function fmtDec$(n: number) {
-  return `$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-}
 
 // ─── Section 1: Three-tier Margin Meter ───────────────────────────────────────
 
@@ -154,13 +146,13 @@ function InterestCoverageSection({
       <div className="grid grid-cols-2 gap-2">
         <div className="bg-[#22263a] rounded-lg p-3 space-y-1">
           <div className="text-xs text-[#4a5070]">Monthly Margin Interest</div>
-          <div className="text-base font-mono font-semibold text-red-400">{fmtDec$(monthlyInterest)}</div>
-          <div className="text-xs text-[#4a5070]">{fmtDec$(annualInterest)}/yr @ {(rateNum * 100).toFixed(2)}%</div>
+          <div className="text-base font-mono font-semibold text-red-400">{fmtDollar(monthlyInterest)}</div>
+          <div className="text-xs text-[#4a5070]">{fmtDollar(annualInterest)}/yr @ {(rateNum * 100).toFixed(2)}%</div>
         </div>
         <div className="bg-[#22263a] rounded-lg p-3 space-y-1">
           <div className="text-xs text-[#4a5070]">Monthly Dividends</div>
-          <div className="text-base font-mono font-semibold text-emerald-400">{fmtDec$(monthlyDividends)}</div>
-          <div className="text-xs text-[#4a5070]">{fmtDec$(dividendsAnnual)}/yr (trailing)</div>
+          <div className="text-base font-mono font-semibold text-emerald-400">{fmtDollar(monthlyDividends)}</div>
+          <div className="text-xs text-[#4a5070]">{fmtDollar(dividendsAnnual)}/yr (trailing)</div>
         </div>
       </div>
 
@@ -176,8 +168,8 @@ function InterestCoverageSection({
             : <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />}
           <span>
             {isCovered
-              ? `Dividends cover margin interest ${coverageRatio === Infinity ? '✓' : `(${coverageRatio.toFixed(1)}× coverage)`} — surplus ${fmtDec$(surplus)}/mo`
-              : `Dividends do NOT cover margin interest — shortfall ${fmtDec$(Math.abs(surplus))}/mo. Reduce margin or grow dividend income.`}
+              ? `Dividends cover margin interest ${coverageRatio === Infinity ? '✓' : `(${coverageRatio.toFixed(1)}× coverage)`} — surplus ${fmtDollar(surplus)}/mo`
+              : `Dividends do NOT cover margin interest — shortfall ${fmtDollar(Math.abs(surplus))}/mo. Reduce margin or grow dividend income.`}
           </span>
         </div>
       ) : (
@@ -246,7 +238,7 @@ function ConcentrationSection({
                 <div className="flex items-center gap-2">
                   {isOver && trimAmount > 0 && (
                     <span className="text-red-400/80">
-                      Trim ~{fmtDec$(trimAmount)}{trimShares > 0 ? ` (≈${trimShares} sh)` : ''} → reach 15%
+                      Trim ~{fmtDollar(trimAmount)}{trimShares > 0 ? ` (≈${trimShares} sh)` : ''} → reach 15%
                     </span>
                   )}
                   <span className={`font-mono ${isOver ? 'text-red-400 font-bold' : isNear ? 'text-amber-400' : 'text-[#7c82a0]'}`}>

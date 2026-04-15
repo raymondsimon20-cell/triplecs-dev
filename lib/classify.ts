@@ -87,11 +87,27 @@ export function enrichPositions(
       ? (currentValue / totalPortfolioValue) * 100
       : 0;
 
-    // For options, classify by underlying if possible
+    // For options, classify by underlying symbol and position direction.
+    // Option symbols look like "SPXU  250117P00040000" or "TQQQ250620C00080000"
     let pillar = classifySymbol(symbol);
-    if (pillar === 'other' && pos.instrument.assetType === 'OPTION') {
-      // Options used as hedges — put them in hedge pillar
-      pillar = 'hedge';
+    if (pos.instrument.assetType === 'OPTION') {
+      if (pillar !== 'other') {
+        // Keep the underlying's pillar (e.g. a TQQQ call stays in 'triples')
+      } else {
+        // Unknown underlying — use direction to infer intent:
+        //   short quantity = sold put/call (income strategy)  → income
+        //   long put = protective hedge                       → hedge
+        //   long call = speculative / income long             → income
+        const isLongPut  = pos.longQuantity  > 0 && symbol.toUpperCase().includes('P');
+        const isShortPos = pos.shortQuantity > 0;
+        if (isLongPut) {
+          pillar = 'hedge';      // long puts are hedges
+        } else if (isShortPos) {
+          pillar = 'income';     // short puts/calls = premium income
+        } else {
+          pillar = 'income';     // long calls = speculative income layer
+        }
+      }
     }
 
     // Compute today's gain/loss from quote (more reliable than Schwab's field)

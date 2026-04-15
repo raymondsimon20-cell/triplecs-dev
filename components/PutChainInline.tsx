@@ -43,6 +43,7 @@ interface PutChainInlineProps {
 }
 
 function fmt2(n: number) { return n.toFixed(2); }
+// Simple % display without sign prefix (not the same as fmtPct from utils)
 function fmtPct(n: number) { return `${n.toFixed(1)}%`; }
 
 function isSweetSpot(p: PutContract): boolean {

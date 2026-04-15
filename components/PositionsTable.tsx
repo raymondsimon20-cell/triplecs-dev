@@ -4,6 +4,7 @@ import { useState } from 'react';
 import { ChevronUp, ChevronDown } from 'lucide-react';
 import { PillarBadge } from './PillarBadge';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
+import { fmt$, gainLossColor } from '@/lib/utils';
 
 type SortKey = 'symbol' | 'value' | 'gainLoss' | 'portfolioPct' | 'dayGL';
 
@@ -46,11 +47,6 @@ export function PositionsTable({ positions }: Props) {
     sortKey === col
       ? sortAsc ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
       : <ChevronDown className="w-3 h-3 opacity-20" />;
-
-  const fmt$ = (n: number) =>
-    n >= 0
-      ? `$${n.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-      : `-$${Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 
   return (
     <div className="space-y-3">
@@ -128,13 +124,13 @@ export function PositionsTable({ positions }: Props) {
                   <td className="px-4 py-3 text-right text-[#7c82a0]">
                     {pos.portfolioPercent.toFixed(1)}%
                   </td>
-                  <td className={`px-4 py-3 text-right font-mono ${gl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  <td className={`px-4 py-3 text-right font-mono ${gainLossColor(gl)}`}>
                     {fmt$(gl)}
                     <div className="text-xs opacity-70">
                       {pos.gainLossPercent >= 0 ? '+' : ''}{pos.gainLossPercent.toFixed(1)}%
                     </div>
                   </td>
-                  <td className={`px-4 py-3 text-right font-mono text-xs ${dgl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  <td className={`px-4 py-3 text-right font-mono text-xs ${gainLossColor(dgl)}`}>
                     {dgl !== 0 ? fmt$(dgl) : '—'}
                   </td>
                   <td className="px-4 py-3 text-right font-mono text-[#7c82a0] text-xs">

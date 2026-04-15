@@ -18,6 +18,7 @@ import {
 } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { HEDGE_SYMBOLS } from '@/lib/classify';
+import { fmt$, fmtPct } from '@/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -38,18 +39,6 @@ interface CorrectionData {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmt$(n: number, decimals = 0) {
-  const abs = Math.abs(n);
-  const str = abs.toLocaleString('en-US', {
-    minimumFractionDigits: decimals,
-    maximumFractionDigits: decimals,
-  });
-  return n < 0 ? `-$${str}` : `$${str}`;
-}
-
-function fmtPct(n: number, decimals = 1) {
-  return `${n >= 0 ? '+' : ''}${n.toFixed(decimals)}%`;
-}
 
 /** Correction zone label based on % off ATH */
 function correctionZone(pct: number): { label: string; color: string; bg: string } {

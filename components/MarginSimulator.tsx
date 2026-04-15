@@ -17,6 +17,7 @@
 import { useState, useMemo } from 'react';
 import { Gauge, Plus, Minus, ArrowRight, AlertTriangle, CheckCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
+import { fmt$, fmtPct as fmtPctUtil } from '@/lib/utils';
 
 interface PillarSummary {
   pillar: PillarType;
@@ -65,10 +66,7 @@ function getPillar(symbol: string, existingPositions: EnrichedPosition[]): Pilla
 const WARN_MARGIN_PCT = 30;
 const MAX_MARGIN_PCT  = 50;
 
-function fmt$(n: number) {
-  return n.toLocaleString('en-US', { style: 'currency', currency: 'USD', maximumFractionDigits: 0 });
-}
-
+// fmtPct without sign prefix (used for % display only in this component)
 function fmtPct(n: number) { return `${n.toFixed(1)}%`; }
 
 const PILLAR_COLORS: Record<PillarType, string> = {

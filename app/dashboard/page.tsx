@@ -1,8 +1,11 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle, TrendingUp } from 'lucide-react';
-// Note: CheckCircle, AlertCircle used in ALERT_ICON map below
+import {
+  RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
+  TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
+  List, Calculator, PieChart, Calendar, Gauge, History,
+} from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
@@ -18,8 +21,11 @@ import { DistributionCalendar } from '@/components/DistributionCalendar';
 import { MarginSimulator } from '@/components/MarginSimulator';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
+import { CollapsiblePanel } from '@/components/CollapsiblePanel';
+import { SettingsPanel } from '@/components/SettingsPanel';
 import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
+import { fmt$, gainLossColor } from '@/lib/utils';
 
 interface AccountData {
   accountNumber: string;
@@ -37,52 +43,148 @@ interface AccountData {
   marginAlerts: RuleAlert[];
 }
 
+// ─── Alert icons ──────────────────────────────────────────────────────────────
+
 const ALERT_ICON = {
   danger: <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />,
-  warn: <AlertCircle className="w-4 h-4 text-orange-400 flex-shrink-0" />,
-  ok: <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0" />,
+  warn:   <AlertCircle   className="w-4 h-4 text-orange-400 flex-shrink-0" />,
+  ok:     <CheckCircle   className="w-4 h-4 text-emerald-400 flex-shrink-0" />,
 };
 
-const ALERT_STYLE = {
-  danger: 'bg-red-500/10 border-red-500/25 text-red-300',
-  warn: 'bg-orange-500/10 border-orange-500/25 text-orange-300',
-  ok: 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300',
-};
-
-function fmt$(n: number) {
-  const abs = Math.abs(n);
-  const str = abs.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-  return n < 0 ? `-$${str}` : `$${str}`;
-}
+// ─── Metric card ──────────────────────────────────────────────────────────────
 
 function MetricCard({
-  label,
-  value,
-  colorClass = 'text-white',
-  sub,
+  label, value, colorClass = 'text-white', sub, trend,
 }: {
   label: string;
   value: string;
   colorClass?: string;
   sub?: string;
+  trend?: 'up' | 'down' | null;
 }) {
   return (
-    <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4">
-      <div className="text-xs text-[#7c82a0] mb-1">{label}</div>
-      <div className={`text-xl font-bold ${colorClass}`}>{value}</div>
-      {sub && <div className="text-xs text-[#4a5070] mt-0.5">{sub}</div>}
+    <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4 flex flex-col gap-1 hover:border-[#3d4468] transition-colors">
+      <div className="text-[11px] text-[#7c82a0] font-medium tracking-wide uppercase">{label}</div>
+      <div className={`text-xl font-bold tabular-nums ${colorClass} flex items-center gap-1`}>
+        {value}
+        {trend === 'up'   && <TrendingUp   className="w-3.5 h-3.5 text-emerald-400 opacity-70" />}
+        {trend === 'down' && <TrendingUp   className="w-3.5 h-3.5 text-red-400 opacity-70 rotate-180" />}
+      </div>
+      {sub && <div className="text-[11px] text-[#4a5070] leading-snug">{sub}</div>}
     </div>
   );
 }
 
+// ─── FIRE progress bar ────────────────────────────────────────────────────────
+
+function FireProgress({ monthly, target }: { monthly: number; target: number }) {
+  const pct = target > 0 ? Math.min((monthly / target) * 100, 100) : 0;
+  const reached = pct >= 100;
+  return (
+    <div className="hidden md:flex items-center gap-2 min-w-[160px]" title={`FIRE target: $${target.toLocaleString()}/mo`}>
+      <span className="text-[11px] text-[#7c82a0] whitespace-nowrap">FIRE</span>
+      <div className="flex-1 h-1.5 bg-[#2d3248] rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all duration-700 ${reached ? 'bg-emerald-400' : 'bg-blue-500'}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <span className={`text-[11px] font-semibold tabular-nums ${reached ? 'text-emerald-400' : 'text-[#7c82a0]'}`}>
+        {pct.toFixed(0)}%
+      </span>
+    </div>
+  );
+}
+
+// ─── Section jump nav ─────────────────────────────────────────────────────────
+
+const NAV_ITEMS = [
+  { id: 'overview',     label: 'Overview',      icon: BarChart2   },
+  { id: 'cornerstone',  label: 'Cornerstone',   icon: PieChart    },
+  { id: 'margin',       label: 'Margin',        icon: Gauge       },
+  { id: 'triples',      label: 'Triples',       icon: Zap         },
+  { id: 'options',      label: 'Options',       icon: Shield      },
+  { id: 'ai',           label: 'AI Analysis',   icon: Brain       },
+  { id: 'income',       label: 'Income',        icon: DollarSign  },
+  { id: 'calendar',     label: 'Calendar',      icon: Calendar    },
+  { id: 'rebalance',    label: 'Rebalance',     icon: Calculator  },
+  { id: 'puts',         label: 'Open Puts',     icon: History     },
+  { id: 'families',     label: 'Fund Families', icon: List        },
+  { id: 'simulator',    label: 'Simulator',     icon: Gauge       },
+  { id: 'positions',    label: 'Positions',     icon: List        },
+];
+
+function SectionNav() {
+  const [active, setActive] = useState<string>('');
+
+  useEffect(() => {
+    const observer = new IntersectionObserver(
+      (entries) => {
+        const visible = entries.filter((e) => e.isIntersecting);
+        if (visible.length > 0) {
+          // Pick the topmost visible section
+          const top = visible.reduce((a, b) =>
+            a.boundingClientRect.top < b.boundingClientRect.top ? a : b
+          );
+          setActive(top.target.id.replace('panel-', ''));
+        }
+      },
+      { rootMargin: '-60px 0px -60% 0px', threshold: 0 }
+    );
+    NAV_ITEMS.forEach(({ id }) => {
+      const el = document.getElementById(`panel-${id}`);
+      if (el) observer.observe(el);
+    });
+    return () => observer.disconnect();
+  }, []);
+
+  function scrollTo(id: string) {
+    const el = document.getElementById(`panel-${id}`);
+    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  return (
+    <nav className="w-full overflow-x-auto border-b border-[#2d3248] bg-[#0f1117] sticky top-[57px] z-30">
+      <div className="max-w-7xl mx-auto px-4 flex gap-0.5 py-1.5">
+        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
+          <button
+            key={id}
+            onClick={() => scrollTo(id)}
+            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors
+              ${active === id
+                ? 'bg-blue-600/20 text-blue-400'
+                : 'text-[#7c82a0] hover:text-white hover:bg-white/5'
+              }`}
+          >
+            <Icon className="w-3 h-3 flex-shrink-0" />
+            {label}
+          </button>
+        ))}
+      </div>
+    </nav>
+  );
+}
+
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 export default function DashboardPage() {
-  const [accounts, setAccounts] = useState<AccountData[]>([]);
-  const [selectedIdx, setSelectedIdx] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [accounts, setAccounts]         = useState<AccountData[]>([]);
+  const [selectedIdx, setSelectedIdx]   = useState(0);
+  const [loading, setLoading]           = useState(true);
+  const [refreshing, setRefreshing]     = useState(false);
+  const [error, setError]               = useState<string | null>(null);
+  const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
+  // Estimated monthly income from dividend data (for FIRE pill)
+  const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
+  // FIRE target from settings (default 10 000)
+  const [fireTarget] = useState<number>(() => {
+    if (typeof window === 'undefined') return 10_000;
+    try {
+      const raw = localStorage.getItem('triplec_strategy_targets');
+      return raw ? (JSON.parse(raw).fireNumber ?? 10_000) : 10_000;
+    } catch { return 10_000; }
+  });
 
   const fetchDividends = useCallback(async () => {
     try {
@@ -90,24 +192,20 @@ export default function DashboardPage() {
       if (res.ok) {
         const data = await res.json();
         setDividendsTotal(data.total ?? 0);
+        // Approximate monthly income from last 30-day window if available
+        setMonthlyIncome(data.monthly ?? data.total / 12 ?? 0);
       }
-    } catch {
-      // non-critical — fail silently
-    }
+    } catch { /* non-critical */ }
   }, []);
 
   const fetchAccounts = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
     else setLoading(true);
     setError(null);
-
     try {
       const res = await fetch('/api/accounts');
       if (!res.ok) {
-        if (res.status === 401) {
-          window.location.href = '/';
-          return;
-        }
+        if (res.status === 401) { window.location.href = '/'; return; }
         throw new Error(`HTTP ${res.status}`);
       }
       const data = await res.json();
@@ -124,12 +222,13 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchAccounts();
     fetchDividends();
-    // Auto-refresh every 60 seconds during market hours
     const interval = setInterval(() => fetchAccounts(true), 60_000);
     return () => clearInterval(interval);
   }, [fetchAccounts, fetchDividends]);
 
   const account = accounts[selectedIdx];
+
+  // ── Loading / error states ──────────────────────────────────────────────────
 
   if (loading) {
     return (
@@ -168,37 +267,56 @@ export default function DashboardPage() {
     );
   }
 
-  const dayGL = account.dayGainLoss;
-  const unrealized = account.unrealizedGainLoss ?? 0;
-  const totalReturn = unrealized + dividendsTotal;
-  const availableForWithdrawal = account.availableForWithdrawal ?? 0;
+  // ── Derived values ──────────────────────────────────────────────────────────
 
-  const dangerAlerts = account.marginAlerts.filter((a) => a.level === 'danger');
+  const dayGL               = account.dayGainLoss;
+  const unrealized          = account.unrealizedGainLoss ?? 0;
+  const totalReturn         = unrealized + dividendsTotal;
+  const availableForWithdrawal = account.availableForWithdrawal ?? 0;
+  const dangerAlerts        = account.marginAlerts.filter((a) => a.level === 'danger');
+  const warnAlerts          = account.marginAlerts.filter((a) => a.level === 'warn');
 
   return (
     <div className="min-h-screen bg-[#0f1117]">
-      {/* Header */}
+
+      {/* ── Top header ────────────────────────────────────────────────────── */}
       <header className="border-b border-[#2d3248] bg-[#1a1d27] sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            <TrendingUp className="w-5 h-5 text-blue-400" />
-            <span className="font-bold text-white text-lg">Triple C</span>
+
+          {/* Brand */}
+          <div className="flex items-center gap-2.5">
+            <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+              <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
+            </div>
+            <div className="leading-none">
+              <div className="font-bold text-white text-sm tracking-tight">Triple C</div>
+              <div className="text-[10px] text-[#4a5070] hidden sm:block">Triples · Cornerstone · Core/Income</div>
+            </div>
           </div>
 
-          <div className="flex items-center gap-3 flex-wrap">
+          {/* FIRE progress */}
+          <FireProgress monthly={monthlyIncome} target={fireTarget} />
+
+          {/* Right controls */}
+          <div className="flex items-center gap-2 sm:gap-3">
             <AccountSwitcher
               accounts={accounts}
               selectedIndex={selectedIdx}
               onSelect={setSelectedIdx}
             />
 
+            <SettingsPanel />
+
             <button
               onClick={() => fetchAccounts(true)}
               disabled={refreshing}
               className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
+              title="Refresh portfolio data"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              {lastUpdated ? lastUpdated.toLocaleTimeString() : 'Refresh'}
+              <span className="hidden sm:inline">
+                {lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Refresh'}
+              </span>
             </button>
 
             <form action="/api/auth/logout" method="POST">
@@ -207,156 +325,305 @@ export default function DashboardPage() {
                 className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-red-400 transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />
-                Logout
+                <span className="hidden sm:inline">Logout</span>
               </button>
             </form>
           </div>
         </div>
       </header>
 
-      <main className="max-w-7xl mx-auto px-4 py-6 space-y-6">
-        {/* Alert banner for danger alerts */}
+      {/* ── Section nav ───────────────────────────────────────────────────── */}
+      <SectionNav />
+
+      <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+
+        {/* ── Danger banner ───────────────────────────────────────────────── */}
         {dangerAlerts.length > 0 && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-lg p-4 space-y-2">
+          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 space-y-2">
+            <div className="flex items-center gap-2 mb-1">
+              <AlertTriangle className="w-4 h-4 text-red-400" />
+              <span className="text-sm font-semibold text-red-300">
+                {dangerAlerts.length} Rule Violation{dangerAlerts.length > 1 ? 's' : ''}
+              </span>
+            </div>
             {dangerAlerts.map((a, i) => (
-              <div key={i} className="flex items-start gap-2 text-sm text-red-300">
-                {ALERT_ICON.danger}
+              <div key={i} className="flex items-start gap-2 text-sm text-red-300 ml-6">
+                <span>•</span>
                 <span><strong>{a.rule}:</strong> {a.detail}</span>
               </div>
             ))}
           </div>
         )}
 
-        {/* Portfolio summary cards — 6 metrics in 2 rows of 3 */}
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          <MetricCard
-            label="Portfolio Value"
-            value={fmt$(account.totalValue)}
-          />
-          <MetricCard
-            label="Equity"
-            value={fmt$(account.equity)}
-          />
-          <MetricCard
-            label="Day Gain / Loss"
-            value={fmt$(dayGL)}
-            colorClass={dayGL >= 0 ? 'text-emerald-400' : 'text-red-400'}
-          />
-          <MetricCard
-            label="Total Return"
-            value={fmt$(totalReturn)}
-            colorClass={totalReturn >= 0 ? 'text-emerald-400' : 'text-red-400'}
-            sub={`Includes $${dividendsTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} dividends`}
-          />
-          <MetricCard
-            label="Available to Withdraw"
-            value={fmt$(availableForWithdrawal)}
-            colorClass="text-blue-400"
-            sub="Cash + money market"
-          />
-          <MetricCard
-            label="Buying Power"
-            value={fmt$(account.buyingPower)}
-            colorClass="text-purple-400"
-          />
-        </div>
-
-        {/* Pillar allocation */}
-        <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
-          <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
-          <PillarAllocationBar summaries={account.pillarSummary} />
-        </div>
-
-        {/* Cornerstone NAV Tracker — Phase 2 */}
-        <CornerStoneCard />
-
-        {/* Phase 3 — Margin & Risk Intelligence */}
-        <MarginRiskPanel
-          equity={account.equity}
-          marginBalance={account.marginBalance}
-          totalValue={account.totalValue}
-          positions={account.positions}
-          dividendsAnnual={dividendsTotal}
-        />
-
-        {/* Phase 4 — Triple ETF Tactical Engine */}
-        <TriplesTacticalPanel
-          positions={account.positions}
-          totalValue={account.totalValue}
-        />
-
-        {/* Phase 5 — Options & Put Strategy */}
-        <OptionsStrategyPanel
-          positions={account.positions}
-          totalValue={account.totalValue}
-        />
-
-        {/* Phase 7 — AI Portfolio Analysis */}
-        <AIAnalysisPanel
-          positions={account.positions}
-          totalValue={account.totalValue}
-          equity={account.equity}
-          marginBalance={account.marginBalance}
-          pillarSummary={account.pillarSummary}
-          dividendsAnnual={dividendsTotal}
-          accountHash={account.accountHash}
-        />
-
-        {/* Trade History — orders placed through this dashboard */}
-        <TradeHistoryPanel />
-
-        {/* Rebalance Calculator — pillar targets + 1/3 rule math */}
-        <RebalanceCalculator
-          positions={account.positions}
-          totalValue={account.totalValue}
-          equity={account.equity}
-          marginBalance={account.marginBalance}
-          pillarSummary={account.pillarSummary}
-        />
-
-        {/* Open Put Tracker — Vol 6 LEAP put positions */}
-        <OpenPutTracker positions={account.positions} />
-
-        {/* Fund Family Concentration Monitor */}
-        <FundFamilyMonitor
-          positions={account.positions}
-          totalValue={account.totalValue}
-        />
-
-        {/* Distribution Calendar — estimated monthly income */}
-        <DistributionCalendar
-          positions={account.positions}
-          totalValue={account.totalValue}
-        />
-
-        {/* "What If" Margin Simulator */}
-        <MarginSimulator
-          positions={account.positions}
-          totalValue={account.totalValue}
-          equity={account.equity}
-          marginBalance={account.marginBalance}
-          pillarSummary={account.pillarSummary}
-        />
-
-        {/* Phase 6 — Income & Dividend Dashboard */}
-        <DividendIncomePanel
-          positions={account.positions}
-          totalValue={account.totalValue}
-          marginBalance={account.marginBalance}
-        />
-
-        {/* Positions table */}
-        <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
-          <div className="flex items-center justify-between">
-            <h2 className="text-sm font-semibold text-white">
-              Positions ({account.positions.length})
-            </h2>
-            <span className="text-xs text-[#7c82a0]">
-              Click column headers to sort
+        {warnAlerts.length > 0 && dangerAlerts.length === 0 && (
+          <div className="bg-orange-500/10 border border-orange-500/25 rounded-xl px-4 py-3 flex items-center gap-2">
+            {ALERT_ICON.warn}
+            <span className="text-sm text-orange-300">
+              {warnAlerts.length} warning{warnAlerts.length > 1 ? 's' : ''} — review Margin &amp; Risk below
             </span>
           </div>
-          <PositionsTable positions={account.positions} />
+        )}
+
+        {/* ── Portfolio overview ──────────────────────────────────────────── */}
+        <div id="panel-overview" className="scroll-mt-20 space-y-4">
+          {/* Metric cards */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+            <MetricCard label="Portfolio Value" value={fmt$(account.totalValue)} />
+            <MetricCard label="Equity"          value={fmt$(account.equity)} />
+            <MetricCard
+              label="Day P&amp;L"
+              value={fmt$(dayGL)}
+              colorClass={gainLossColor(dayGL)}
+              trend={dayGL > 0 ? 'up' : dayGL < 0 ? 'down' : null}
+            />
+            <MetricCard
+              label="Unrealized Return"
+              value={fmt$(totalReturn)}
+              colorClass={gainLossColor(totalReturn)}
+              sub={`Includes $${dividendsTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} dividends`}
+            />
+            <MetricCard
+              label="Available Cash"
+              value={fmt$(availableForWithdrawal)}
+              colorClass="text-blue-400"
+              sub="Cash + money market"
+            />
+            <MetricCard
+              label="Buying Power"
+              value={fmt$(account.buyingPower)}
+              colorClass="text-purple-400"
+            />
+          </div>
+
+          {/* Pillar allocation bar */}
+          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
+            <div className="flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
+              <span className="text-xs text-[#4a5070]">{account.positions.length} positions</span>
+            </div>
+            <PillarAllocationBar summaries={account.pillarSummary} />
+          </div>
         </div>
+
+        {/* ── Cornerstone ─────────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="cornerstone"
+          title="Cornerstone — CLM / CRF"
+          icon={<PieChart className="w-4 h-4 text-amber-400" />}
+          accentClass="border-amber-500/60"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <CornerStoneCard />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Margin & Risk ────────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="margin"
+          title="Margin & Risk Intelligence"
+          icon={<Gauge className="w-4 h-4 text-orange-400" />}
+          badge={
+            dangerAlerts.length > 0 ? (
+              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+                {dangerAlerts.length} ALERT{dangerAlerts.length > 1 ? 'S' : ''}
+              </span>
+            ) : undefined
+          }
+          accentClass={dangerAlerts.length > 0 ? 'border-red-500/60' : 'border-orange-500/40'}
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <MarginRiskPanel
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              totalValue={account.totalValue}
+              positions={account.positions}
+              dividendsAnnual={dividendsTotal}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Triples Tactical Engine ──────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="triples"
+          title="Triple ETF Tactical Engine"
+          icon={<Zap className="w-4 h-4 text-violet-400" />}
+          accentClass="border-violet-500/40"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <TriplesTacticalPanel
+              positions={account.positions}
+              totalValue={account.totalValue}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Options / Put Strategy ───────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="options"
+          title="Options & Put Strategy"
+          icon={<Shield className="w-4 h-4 text-blue-400" />}
+          accentClass="border-blue-500/40"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <OptionsStrategyPanel
+              positions={account.positions}
+              totalValue={account.totalValue}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── AI Analysis ─────────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="ai"
+          title="AI Portfolio Analysis"
+          icon={<Brain className="w-4 h-4 text-cyan-400" />}
+          accentClass="border-cyan-500/40"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <AIAnalysisPanel
+              positions={account.positions}
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              pillarSummary={account.pillarSummary}
+              dividendsAnnual={dividendsTotal}
+              accountHash={account.accountHash}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Income & Dividends ───────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="income"
+          title="Income & Dividend Dashboard"
+          icon={<DollarSign className="w-4 h-4 text-emerald-400" />}
+          accentClass="border-emerald-500/40"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <DividendIncomePanel
+              positions={account.positions}
+              totalValue={account.totalValue}
+              marginBalance={account.marginBalance}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Distribution Calendar ────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="calendar"
+          title="Distribution Calendar"
+          icon={<Calendar className="w-4 h-4 text-pink-400" />}
+          accentClass="border-pink-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <DistributionCalendar
+              positions={account.positions}
+              totalValue={account.totalValue}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Rebalance Calculator ─────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="rebalance"
+          title="Rebalance Calculator"
+          icon={<Calculator className="w-4 h-4 text-yellow-400" />}
+          accentClass="border-yellow-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <RebalanceCalculator
+              positions={account.positions}
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              pillarSummary={account.pillarSummary}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Open Put Tracker ─────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="puts"
+          title="Open Put Tracker"
+          icon={<History className="w-4 h-4 text-indigo-400" />}
+          accentClass="border-indigo-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <OpenPutTracker positions={account.positions} />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Fund Family Monitor ──────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="families"
+          title="Fund Family Concentration"
+          icon={<List className="w-4 h-4 text-teal-400" />}
+          accentClass="border-teal-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <FundFamilyMonitor
+              positions={account.positions}
+              totalValue={account.totalValue}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── "What If" Margin Simulator ───────────────────────────────────── */}
+        <CollapsiblePanel
+          id="simulator"
+          title='"What If" Margin Simulator'
+          icon={<Gauge className="w-4 h-4 text-rose-400" />}
+          accentClass="border-rose-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <MarginSimulator
+              positions={account.positions}
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              pillarSummary={account.pillarSummary}
+            />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Trade History ────────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="history"
+          title="Trade History"
+          icon={<History className="w-4 h-4 text-slate-400" />}
+          accentClass="border-slate-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <TradeHistoryPanel />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Positions table ──────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="positions"
+          title={`All Positions (${account.positions.length})`}
+          icon={<BarChart2 className="w-4 h-4 text-[#7c82a0]" />}
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <PositionsTable positions={account.positions} />
+          </div>
+        </CollapsiblePanel>
+
+        {/* Footer spacer */}
+        <div className="h-12" />
       </main>
     </div>
   );
