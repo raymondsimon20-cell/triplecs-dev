@@ -86,15 +86,77 @@ function getFrequency(symbol: string): Frequency {
   return FREQ_MAP[symbol.toUpperCase()] ?? 'quarterly';
 }
 
+// ─── Approximate annual distribution yields (%) ──────────────────────────────
+// Schwab often reports divYield = 0 for covered-call ETFs and CEFs because
+// their payouts are classified as "distributions" or "return of capital"
+// rather than qualified dividends. This fallback table uses approximate
+// trailing 12-month yields so the calendar always has something to show.
+// These are conservative estimates — actual yields fluctuate.
+
+const FALLBACK_YIELDS: Record<string, number> = {
+  // Roundhill weekly payers (~25–60% trailing yields)
+  XDTE: 30, QDTE: 35, RDTE: 28, WDTE: 30, MDTE: 28,
+
+  // YieldMax single-stock (~20–80% trailing)
+  TSLY: 55, NVDY: 50, CONY: 70, MSFO: 30, AMZY: 45,
+  GOOGY: 25, JPMO: 15, NFLXY: 35, AMDY: 40, PYPLY: 30,
+  AIYY: 35, OILY: 35, CVNY: 30, MRNY: 40, SNOY: 25,
+  BIOY: 25, DISO: 30, ULTY: 55, YMAX: 40, YMAG: 35,
+  FBY: 35, GDXY: 25, XOMO: 30, TSMY: 30,
+
+  // Defiance (~30–60%)
+  QQQY: 50, IWMY: 55, JEPY: 35, QDTY: 30, SDTY: 30,
+
+  // RexShares / Neos (~10–30%)
+  FEPI: 20, AIPI: 25, SPYI: 12, QDVO: 10, JPEI: 12, IWMI: 15,
+
+  // JPMorgan (~7–10%)
+  JEPI: 7.5, JEPQ: 9.5,
+
+  // Cornerstone CEFs (~15–20% managed distribution)
+  CLM: 18, CRF: 18,
+
+  // Other CEFs (~8–15%)
+  OXLC: 18, PDI: 13, PDO: 12, PTY: 10, PCN: 9, PFL: 10, PFN: 10,
+  ETV: 8.5, ETB: 8, EOS: 8, EOI: 8,
+  BST: 6, BDJ: 7, ECAT: 9, RIV: 12, OPP: 12, GOF: 14,
+  STK: 7, USA: 10, KLIP: 35,
+
+  // Global X covered-call (~10–12%)
+  QYLD: 12, RYLD: 12, XYLD: 11,
+
+  // Amplify
+  DIVO: 4.5,
+
+  // Traditional dividend ETFs / stocks (~1–4%)
+  SCHD: 3.5, VYM: 3, QQQ: 0.6, SPY: 1.3, IVV: 1.3,
+  VOO: 1.3, VTI: 1.3, NVDA: 0.03, AAPL: 0.5, MSFT: 0.7, SPYG: 0.8,
+
+  // 3× ETFs (negligible)
+  UPRO: 0, TQQQ: 0, SPXL: 0, UDOW: 0, SQQQ: 0,
+};
+
 function estimateAnnualDividend(pos: EnrichedPosition): number {
-  // Prefer quote divYield × market value
+  const symbol = pos.instrument?.symbol?.toUpperCase() ?? '';
+
+  // 1) Prefer Schwab quote divYield if it's actually populated
   if (pos.quote?.divYield && pos.quote.divYield > 0) {
     return pos.marketValue * (pos.quote.divYield / 100);
   }
-  // Fallback: use divAmount × quantity (if annual per share)
+
+  // 2) Try divAmount × frequency as annual estimate
   if (pos.quote?.divAmount && pos.quote.divAmount > 0) {
-    return pos.quote.divAmount * pos.longQuantity;
+    const freq = getFrequency(symbol);
+    const paymentsPerYear = freq === 'weekly' ? 52 : freq === 'monthly' ? 12 : freq === 'quarterly' ? 4 : 1;
+    return pos.quote.divAmount * paymentsPerYear * pos.longQuantity;
   }
+
+  // 3) Fallback to known approximate yields
+  const fallbackYield = FALLBACK_YIELDS[symbol];
+  if (fallbackYield && fallbackYield > 0) {
+    return pos.marketValue * (fallbackYield / 100);
+  }
+
   return 0;
 }
 
