@@ -11,6 +11,11 @@ import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { DividendIncomePanel } from '@/components/DividendIncomePanel';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHistoryPanel } from '@/components/TradeHistoryPanel';
+import { RebalanceCalculator } from '@/components/RebalanceCalculator';
+import { OpenPutTracker } from '@/components/OpenPutTracker';
+import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
+import { DistributionCalendar } from '@/components/DistributionCalendar';
+import { MarginSimulator } from '@/components/MarginSimulator';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -299,6 +304,39 @@ export default function DashboardPage() {
 
         {/* Trade History — orders placed through this dashboard */}
         <TradeHistoryPanel />
+
+        {/* Rebalance Calculator — pillar targets + 1/3 rule math */}
+        <RebalanceCalculator
+          positions={account.positions}
+          totalValue={account.totalValue}
+          equity={account.equity}
+          marginBalance={account.marginBalance}
+          pillarSummary={account.pillarSummary}
+        />
+
+        {/* Open Put Tracker — Vol 6 LEAP put positions */}
+        <OpenPutTracker positions={account.positions} />
+
+        {/* Fund Family Concentration Monitor */}
+        <FundFamilyMonitor
+          positions={account.positions}
+          totalValue={account.totalValue}
+        />
+
+        {/* Distribution Calendar — estimated monthly income */}
+        <DistributionCalendar
+          positions={account.positions}
+          totalValue={account.totalValue}
+        />
+
+        {/* "What If" Margin Simulator */}
+        <MarginSimulator
+          positions={account.positions}
+          totalValue={account.totalValue}
+          equity={account.equity}
+          marginBalance={account.marginBalance}
+          pillarSummary={account.pillarSummary}
+        />
 
         {/* Phase 6 — Income & Dividend Dashboard */}
         <DividendIncomePanel
