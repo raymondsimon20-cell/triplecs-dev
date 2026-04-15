@@ -8,6 +8,7 @@ import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
+import { DividendIncomePanel } from '@/components/DividendIncomePanel';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -280,6 +281,13 @@ export default function DashboardPage() {
         <OptionsStrategyPanel
           positions={account.positions}
           totalValue={account.totalValue}
+        />
+
+        {/* Phase 6 — Income & Dividend Dashboard */}
+        <DividendIncomePanel
+          positions={account.positions}
+          totalValue={account.totalValue}
+          marginBalance={account.marginBalance}
         />
 
         {/* Positions table */}
