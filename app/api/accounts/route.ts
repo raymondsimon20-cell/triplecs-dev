@@ -7,6 +7,20 @@ import type { SchwabAccountWrapper } from '@/lib/schwab/types';
 
 export const dynamic = 'force-dynamic';
 
+// ─── Per-account lock to prevent concurrent fetches for the same account ──────
+const _inflightFetches = new Map<string, Promise<unknown>>();
+
+function withAccountLock<T>(accountNumber: string, fn: () => Promise<T>): Promise<T> {
+  const existing = _inflightFetches.get(accountNumber);
+  if (existing) return existing as Promise<T>;
+
+  const promise = fn().finally(() => {
+    _inflightFetches.delete(accountNumber);
+  });
+  _inflightFetches.set(accountNumber, promise);
+  return promise;
+}
+
 export async function GET(req: Request) {
   try {
     await requireAuth();
@@ -46,8 +60,10 @@ export async function GET(req: Request) {
     }
 
     // Enrich each account with classification, quotes, and rule checks
+    // withAccountLock prevents duplicate concurrent fetches for the same account
     const enriched = await Promise.all(
-      accounts.map(async ({ securitiesAccount: acct }) => {
+      accounts.map(({ securitiesAccount: acct }) =>
+        withAccountLock(acct.accountNumber, async () => {
         // Check cache first
         const cached = await getCachedPortfolio(acct.accountNumber);
         if (cached) return cached;
@@ -115,7 +131,7 @@ export async function GET(req: Request) {
         // Cache for 60 seconds
         await cachePortfolio(acct.accountNumber, result);
         return result;
-      })
+      }))
     );
 
     return NextResponse.json({ accounts: enriched });

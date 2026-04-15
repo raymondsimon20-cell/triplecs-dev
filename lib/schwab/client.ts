@@ -1,9 +1,10 @@
 /**
  * Schwab Trader API client
- * Wraps all API calls with automatic token refresh and error handling.
+ * Wraps all API calls with automatic token refresh, retry with exponential
+ * backoff, and error handling.
  */
 
-import { refreshAccessToken, isAccessTokenExpired } from './auth';
+import { refreshAccessToken, isAccessTokenExpired, isRefreshTokenExpired } from './auth';
 import { getTokens, saveTokens } from '../storage';
 import type {
   SchwabAccountNumberHash,
@@ -15,6 +16,16 @@ import type {
 const TRADER_BASE = 'https://api.schwabapi.com/trader/v1';
 const MARKET_BASE = 'https://api.schwabapi.com/marketdata/v1';
 
+// ─── Retry configuration ─────────────────────────────────────────────────────
+
+const MAX_RETRIES  = 3;
+const BASE_DELAY   = 500;   // ms
+const RETRYABLE    = new Set([408, 429, 500, 502, 503, 504]);
+
+async function sleep(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
 // ─── Core fetch wrapper ───────────────────────────────────────────────────────
 
 async function schwabFetch<T>(
@@ -25,28 +36,69 @@ async function schwabFetch<T>(
   // Auto-refresh if the access token is stale
   let activeTokens = tokens;
   if (isAccessTokenExpired(tokens)) {
+    if (isRefreshTokenExpired(tokens)) {
+      throw new Error('REFRESH_TOKEN_EXPIRED');
+    }
     activeTokens = await refreshAccessToken(tokens.refresh_token);
     await saveTokens(activeTokens);
   }
 
-  const response = await fetch(url, {
-    ...options,
-    headers: {
-      Accept: 'application/json',
-      Authorization: `Bearer ${activeTokens.access_token}`,
-      ...options.headers,
-    },
-  });
+  let lastError: Error | null = null;
 
-  if (!response.ok) {
-    const body = await response.text();
-    throw new Error(`Schwab API error ${response.status}: ${body}`);
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    try {
+      const response = await fetch(url, {
+        ...options,
+        headers: {
+          Accept: 'application/json',
+          Authorization: `Bearer ${activeTokens.access_token}`,
+          ...options.headers,
+        },
+      });
+
+      // 401 — force one token refresh then retry immediately
+      if (response.status === 401 && attempt === 0) {
+        try {
+          activeTokens = await refreshAccessToken(activeTokens.refresh_token);
+          await saveTokens(activeTokens);
+          continue; // retry with fresh token
+        } catch {
+          throw new Error('REFRESH_TOKEN_EXPIRED');
+        }
+      }
+
+      // Retryable server errors — backoff and retry
+      if (RETRYABLE.has(response.status)) {
+        const delay = BASE_DELAY * Math.pow(2, attempt);
+        console.warn(`[schwab] ${response.status} on ${url} — retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
+        await sleep(delay);
+        lastError = new Error(`Schwab API error ${response.status}`);
+        continue;
+      }
+
+      if (!response.ok) {
+        const body = await response.text();
+        throw new Error(`Schwab API error ${response.status}: ${body}`);
+      }
+
+      // 204 No Content
+      if (response.status === 204) return undefined as T;
+
+      return response.json() as Promise<T>;
+    } catch (err) {
+      // Network errors (fetch itself throws) — retry with backoff
+      if (err instanceof TypeError && attempt < MAX_RETRIES - 1) {
+        const delay = BASE_DELAY * Math.pow(2, attempt);
+        console.warn(`[schwab] Network error on ${url} — retry ${attempt + 1}/${MAX_RETRIES} in ${delay}ms`);
+        await sleep(delay);
+        lastError = err;
+        continue;
+      }
+      throw err;
+    }
   }
 
-  // 204 No Content
-  if (response.status === 204) return undefined as T;
-
-  return response.json() as Promise<T>;
+  throw lastError ?? new Error(`Schwab API failed after ${MAX_RETRIES} retries`);
 }
 
 // ─── Account endpoints ────────────────────────────────────────────────────────

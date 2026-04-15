@@ -72,6 +72,7 @@ export function CollapsiblePanel({
         onClick={toggle}
         className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-white/[0.02] transition-colors group"
         aria-expanded={open}
+        aria-label={`${open ? 'Collapse' : 'Expand'} ${title}`}
       >
         <div className="flex items-center gap-2.5 min-w-0">
           {icon && (

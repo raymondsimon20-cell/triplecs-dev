@@ -68,6 +68,7 @@ export interface SchwabBalance {
   maintenanceCall: number;
   maintenanceRequirement: number;
   margin: number;
+  /** Margin balance: negative = margin debt (borrowed), positive = credit. Use Math.abs() for display. */
   marginBalance: number;
   regTCall: number;
   shortBalance: number;

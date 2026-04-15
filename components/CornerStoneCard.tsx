@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react';
 import { AlertTriangle, TrendingUp, Info, RefreshCw, Check, ExternalLink, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { Skeleton } from './Skeleton';
 
 interface CEFData {
   ticker: string;
@@ -527,7 +528,7 @@ export function CornerStoneCard() {
 
       {/* Cards */}
       {loading ? (
-        <div className="text-xs text-[#4a5070] text-center py-4">Loading…</div>
+        <Skeleton variant="card" rows={2} />
       ) : error ? (
         <div className="text-xs text-red-400 text-center py-4">
           Failed to load — <button onClick={() => fetchData(true)} className="underline">retry</button>

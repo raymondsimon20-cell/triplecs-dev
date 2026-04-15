@@ -96,6 +96,40 @@ function FireProgress({ monthly, target }: { monthly: number; target: number }) 
   );
 }
 
+// ─── Data age indicator ───────────────────────────────────────────────────────
+
+function DataAge({ updated }: { updated: Date }) {
+  const [, forceRender] = useState(0);
+
+  // Re-render every 15 seconds to update the age display
+  useEffect(() => {
+    const id = setInterval(() => forceRender((n) => n + 1), 15_000);
+    return () => clearInterval(id);
+  }, []);
+
+  const ageSec = Math.floor((Date.now() - updated.getTime()) / 1000);
+  const ageMin = Math.floor(ageSec / 60);
+
+  let dotColor = 'bg-emerald-400';   // fresh (< 2 min)
+  let label = `${ageSec}s ago`;
+  if (ageMin >= 5) {
+    dotColor = 'bg-orange-400';
+    label = `${ageMin}m ago`;
+  } else if (ageMin >= 2) {
+    dotColor = 'bg-yellow-400';
+    label = `${ageMin}m ago`;
+  } else if (ageSec >= 60) {
+    label = `1m ago`;
+  }
+
+  return (
+    <span className="hidden sm:flex items-center gap-1.5">
+      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
+      <span className="tabular-nums">{label}</span>
+    </span>
+  );
+}
+
 // ─── Section jump nav ─────────────────────────────────────────────────────────
 
 const NAV_ITEMS = [
@@ -311,17 +345,20 @@ export default function DashboardPage() {
               onClick={() => fetchAccounts(true)}
               disabled={refreshing}
               className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
-              title="Refresh portfolio data"
+              title={lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString()}` : 'Refresh portfolio data'}
+              aria-label="Refresh portfolio data"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">
-                {lastUpdated ? lastUpdated.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Refresh'}
-              </span>
+              {lastUpdated && (
+                <DataAge updated={lastUpdated} />
+              )}
+              {!lastUpdated && <span className="hidden sm:inline">Refresh</span>}
             </button>
 
             <form action="/api/auth/logout" method="POST">
               <button
                 type="submit"
+                aria-label="Log out of Schwab"
                 className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-red-400 transition-colors"
               >
                 <LogOut className="w-3.5 h-3.5" />

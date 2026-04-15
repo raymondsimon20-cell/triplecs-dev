@@ -130,6 +130,28 @@ export function SettingsPanel() {
     setDraft((prev) => ({ ...prev, [key]: value }));
   }, []);
 
+  /** Set a pillar % and auto-adjust the largest other pillar to keep sum ≤ 100 */
+  const setPillar = useCallback((key: 'triplesPct' | 'cornerstonePct' | 'incomePct' | 'hedgePct', value: number) => {
+    setDraft((prev) => {
+      const next = { ...prev, [key]: value };
+      const pillars: typeof key[] = ['triplesPct', 'cornerstonePct', 'incomePct', 'hedgePct'];
+      let sum = pillars.reduce((s, k) => s + next[k], 0);
+
+      // If over 100, reduce the other pillars starting from the largest
+      if (sum > 100) {
+        const others = pillars.filter((k) => k !== key).sort((a, b) => next[b] - next[a]);
+        for (const other of others) {
+          const excess = sum - 100;
+          const reduction = Math.min(next[other], excess);
+          next[other] -= reduction;
+          sum -= reduction;
+          if (sum <= 100) break;
+        }
+      }
+      return next;
+    });
+  }, []);
+
   function handleSave() {
     broadcast(draft);
     setSaved(true);
@@ -153,6 +175,7 @@ export function SettingsPanel() {
         onClick={() => setOpen(true)}
         className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors"
         title="Strategy Settings"
+        aria-label="Open strategy settings"
       >
         <Settings className="w-3.5 h-3.5" />
         <span className="hidden sm:inline">Settings</span>
@@ -195,28 +218,28 @@ export function SettingsPanel() {
                   description="3× leveraged ETFs (UPRO, TQQQ…)"
                   value={draft.triplesPct}
                   min={0} max={40}
-                  onChange={(v) => set('triplesPct', v)}
+                  onChange={(v) => setPillar('triplesPct', v)}
                 />
                 <SliderRow
                   label="Cornerstone"
                   description="CLM / CRF closed-end funds"
                   value={draft.cornerstonePct}
                   min={0} max={40}
-                  onChange={(v) => set('cornerstonePct', v)}
+                  onChange={(v) => setPillar('cornerstonePct', v)}
                 />
                 <SliderRow
                   label="Core / Income"
                   description="Yieldmax, Defiance, JEPI…"
                   value={draft.incomePct}
                   min={0} max={100}
-                  onChange={(v) => set('incomePct', v)}
+                  onChange={(v) => setPillar('incomePct', v)}
                 />
                 <SliderRow
                   label="Hedge"
                   description="Inverse ETFs, put protection"
                   value={draft.hedgePct}
                   min={0} max={30}
-                  onChange={(v) => set('hedgePct', v)}
+                  onChange={(v) => setPillar('hedgePct', v)}
                 />
               </section>
 

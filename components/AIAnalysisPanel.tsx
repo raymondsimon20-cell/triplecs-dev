@@ -154,21 +154,35 @@ const MARGIN_COLORS: Record<string, string> = {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────────
 
+/** Clamp a recommendation's numeric fields to sane bounds */
+function sanitizeRec(rec: Recommendation): Recommendation {
+  return {
+    ...rec,
+    sell_pct:      rec.sell_pct      != null ? Math.min(100, Math.max(0, rec.sell_pct))          : null,
+    dollar_amount: rec.dollar_amount != null ? Math.max(0, rec.dollar_amount)                    : null,
+    sell_shares:   rec.sell_shares   != null ? Math.max(0, Math.floor(rec.sell_shares))           : null,
+  };
+}
+
 /** Estimate shares from a recommendation + live positions */
 function estimateShares(rec: Recommendation, positions: EnrichedPosition[]): number {
+  const safe = sanitizeRec(rec);
   const pos = positions.find(
-    (p) => p.instrument?.symbol?.toUpperCase() === rec.ticker.toUpperCase()
+    (p) => p.instrument?.symbol?.toUpperCase() === safe.ticker.toUpperCase()
   );
+  const maxShares = pos ? (pos.longQuantity || pos.shortQuantity || 999_999) : 999_999;
 
-  if (rec.action === 'BUY' && rec.dollar_amount) {
-    // Use current price if we hold the position, otherwise 1 placeholder
+  if (safe.action === 'BUY' && safe.dollar_amount && safe.dollar_amount > 0) {
     const price = pos ? (pos.marketValue / (pos.longQuantity || 1)) : 1;
-    return Math.max(1, Math.floor(rec.dollar_amount / price));
+    if (price <= 0) return 1;
+    return Math.min(999_999, Math.max(1, Math.floor(safe.dollar_amount / price)));
   }
 
-  if ((rec.action === 'SELL' || rec.action === 'TRIM') && pos) {
-    if (rec.sell_shares) return Math.floor(rec.sell_shares);
-    if (rec.sell_pct)    return Math.max(1, Math.floor((rec.sell_pct / 100) * pos.longQuantity));
+  if ((safe.action === 'SELL' || safe.action === 'TRIM') && pos) {
+    if (safe.sell_shares && safe.sell_shares > 0)
+      return Math.min(safe.sell_shares, maxShares);
+    if (safe.sell_pct && safe.sell_pct > 0)
+      return Math.min(maxShares, Math.max(1, Math.floor((safe.sell_pct / 100) * pos.longQuantity)));
     return pos.longQuantity; // default: sell all
   }
 
@@ -376,6 +390,10 @@ export function AIAnalysisPanel({
       })),
     };
 
+    // Client-side timeout: abort after 90 seconds
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 90_000);
+
     try {
       const res = await fetch('/api/ai-analysis', {
         method: 'POST',
@@ -384,6 +402,7 @@ export function AIAnalysisPanel({
           mode, portfolio: snapshot,
           question: mode === 'open_question' ? question : undefined,
         }),
+        signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -430,8 +449,13 @@ export function AIAnalysisPanel({
 
       setAnalysis(data);
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Analysis failed — try again.');
+      if (e instanceof DOMException && e.name === 'AbortError') {
+        setError('Analysis timed out after 90 seconds. Try again or use a simpler query.');
+      } else {
+        setError(e instanceof Error ? e.message : 'Analysis failed — try again.');
+      }
     } finally {
+      clearTimeout(timeoutId);
       setLoading(false);
     }
   }, [mode, question, positions, totalValue, equity, marginBalance, pillarSummary, dividendsAnnual]);

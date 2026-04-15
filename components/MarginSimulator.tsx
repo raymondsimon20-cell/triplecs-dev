@@ -17,7 +17,7 @@
 import { useState, useMemo } from 'react';
 import { Gauge, Plus, Minus, ArrowRight, AlertTriangle, CheckCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
-import { fmt$, fmtPct as fmtPctUtil } from '@/lib/utils';
+import { fmt$ } from '@/lib/utils';
 
 interface PillarSummary {
   pillar: PillarType;
