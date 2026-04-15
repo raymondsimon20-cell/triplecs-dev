@@ -242,7 +242,7 @@ export function AIAnalysisPanel({
     setError(null);
     setAnalysis(null);
 
-    // Build a lean portfolio snapshot — only what the AI needs
+    // Build a lean portfolio snapshot — only essential fields to keep the prompt small
     const snapshot = {
       total_value: totalValue,
       equity,
@@ -255,22 +255,17 @@ export function AIAnalysisPanel({
         total_value: p.totalValue,
         portfolio_pct: p.portfolioPercent,
         position_count: p.positionCount,
-        day_gain_loss: p.dayGainLoss,
       })),
+      // Trim positions to the fields the AI actually needs
       positions: positions.map((p) => ({
-        symbol: p.instrument?.symbol ?? p.instrument?.assetType,
-        description: p.instrument?.description,
+        symbol: p.instrument?.symbol ?? p.instrument?.assetType ?? 'UNKNOWN',
         pillar: p.pillar,
         market_value: p.marketValue,
-        long_quantity: p.longQuantity,
-        average_price: p.averagePrice,
-        current_price: p.currentDayProfitLossPercentage != null
-          ? undefined // omit if not directly available
-          : undefined,
-        day_gain_loss: p.currentDayProfitLoss,
-        day_gain_pct: p.currentDayProfitLossPercentage,
-        unrealized_gain_loss: p.longOpenProfitLoss,
-        portfolio_pct: totalValue > 0 ? (p.marketValue / totalValue) * 100 : 0,
+        shares: p.longQuantity,
+        avg_cost: p.averagePrice,
+        day_pct: p.currentDayProfitLossPercentage,
+        unrealized_gl: p.longOpenProfitLoss,
+        pct_of_portfolio: totalValue > 0 ? +((p.marketValue / totalValue) * 100).toFixed(2) : 0,
       })),
     };
 
@@ -285,25 +280,58 @@ export function AIAnalysisPanel({
         }),
       });
 
-      // Guard against HTML error pages (Netlify 500/502 pages, missing function, etc.)
-      const contentType = res.headers.get('content-type') ?? '';
-      if (!contentType.includes('application/json')) {
+      if (!res.ok || !res.body) {
+        // Non-streaming error (auth failure, 503, etc.) — may be JSON or HTML
+        const ct = res.headers.get('content-type') ?? '';
+        if (ct.includes('application/json')) {
+          const data = await res.json();
+          throw new Error(data.error ?? `HTTP ${res.status}`);
+        }
         const text = await res.text();
-        const hint = res.status === 500
-          ? 'The AI function crashed on startup — check that npm install ran and the Netlify deploy succeeded.'
-          : res.status === 404
-          ? 'API route not found — the Netlify function may not have deployed yet.'
-          : `HTTP ${res.status}`;
-        throw new Error(hint + (text ? ` (${text.slice(0, 120).trim()})` : ''));
+        throw new Error(`HTTP ${res.status}: ${text.slice(0, 200).trim()}`);
       }
 
-      const data = await res.json();
+      // Read the streamed plain-text response chunk by chunk
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
 
-      if (!res.ok) {
-        throw new Error(data.error ?? `HTTP ${res.status}`);
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        accumulated += decoder.decode(value, { stream: true });
+        // Stop consuming once we see the sentinel
+        if (accumulated.includes('__DONE__')) break;
       }
 
-      setAnalysis(data as AIAnalysis);
+      const rawText = accumulated.replace('__DONE__', '').trim();
+
+      // Check if the model returned an error object
+      if (rawText.startsWith('{"error"')) {
+        const errObj = JSON.parse(rawText) as { error: string };
+        throw new Error(errObj.error);
+      }
+
+      // Extract and parse JSON from the accumulated text
+      const candidate = (() => {
+        const xmlMatch = rawText.match(/<json>([\s\S]*?)<\/json>/i);
+        if (xmlMatch) return xmlMatch[1].trim();
+        const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+        if (fenceMatch) return fenceMatch[1].trim();
+        const first = rawText.indexOf('{');
+        const last  = rawText.lastIndexOf('}');
+        if (first !== -1 && last > first) return rawText.slice(first, last + 1);
+        return rawText;
+      })();
+
+      let data: AIAnalysis;
+      try {
+        data = JSON.parse(candidate) as AIAnalysis;
+      } catch {
+        throw new Error(`Could not parse AI response as JSON.\n\nRaw output:\n${rawText.slice(0, 400)}`);
+      }
+
+      setAnalysis(data);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Analysis failed — try again.');
     } finally {

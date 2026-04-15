@@ -1,36 +1,26 @@
 /**
  * POST /api/ai-analysis
  *
- * Accepts a portfolio snapshot + analysis mode, calls the Anthropic Claude API
- * with the Triple C system prompt, and returns structured JSON analysis.
+ * Streams the Anthropic response directly to the client so Netlify's
+ * inactivity timeout never fires.  The client accumulates all chunks,
+ * then extracts and parses the JSON at the end.
  *
  * Body:
  *   {
  *     mode: 'daily_pulse' | 'trade_plan' | 'rule_audit' | 'what_to_sell' | 'open_question',
- *     portfolio: { ...account data, positions, pillarSummary, marginBalance, ... },
- *     question?: string,   // only for open_question mode
- *     config?: {           // optional strategy config overrides
- *       triplesTargetPct: number,
- *       cornerstoneTargetPct: number,
- *       incomeTargetPct: number,
- *       marginWarnPct: number,
- *       marginMaxPct: number,
- *       fireMonthlyTarget: number,
- *     }
+ *     portfolio: { ...lean snapshot },
+ *     question?: string,
+ *     config?: { triplesTargetPct, cornerstoneTargetPct, incomeTargetPct,
+ *                marginWarnPct, marginMaxPct, fireMonthlyTarget }
  *   }
- *
- * Uses claude-haiku-4-5 for daily_pulse / what_to_sell (fast, cheap).
- * Uses claude-sonnet-4-6 for trade_plan / rule_audit / open_question (thorough).
  */
 
-import { NextResponse } from 'next/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { requireAuth } from '@/lib/session';
 import { TRIPLE_C_SYSTEM_PROMPT, buildUserMessage } from '@/lib/ai/system-prompt';
 
 export const dynamic = 'force-dynamic';
 
-// Model selection by mode
 const MODEL_MAP: Record<string, string> = {
   daily_pulse:   'claude-haiku-4-5-20251001',
   what_to_sell:  'claude-haiku-4-5-20251001',
@@ -39,7 +29,6 @@ const MODEL_MAP: Record<string, string> = {
   open_question: 'claude-sonnet-4-6',
 };
 
-// Higher token limits — large portfolios + full JSON can exceed 1024 easily
 const MAX_TOKENS_MAP: Record<string, number> = {
   daily_pulse:   2048,
   what_to_sell:  2048,
@@ -50,38 +39,30 @@ const MAX_TOKENS_MAP: Record<string, number> = {
 
 const VALID_MODES = new Set(Object.keys(MODEL_MAP));
 
-/**
- * Extract JSON from model output using multiple strategies:
- *  1. Content between <json>…</json> tags (preferred — what we ask for)
- *  2. Content between ```json … ``` fences
- *  3. First { … } block found anywhere in the text
- *  4. Raw text as-is
- */
+/** Pull the first complete JSON object out of arbitrary text. */
 function extractJSON(text: string): string {
-  // Strategy 1: XML tag wrapper
   const xmlMatch = text.match(/<json>([\s\S]*?)<\/json>/i);
   if (xmlMatch) return xmlMatch[1].trim();
 
-  // Strategy 2: markdown code fence
   const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
   if (fenceMatch) return fenceMatch[1].trim();
 
-  // Strategy 3: first { to last } (handles leading/trailing text)
   const first = text.indexOf('{');
   const last  = text.lastIndexOf('}');
   if (first !== -1 && last > first) return text.slice(first, last + 1);
 
-  // Strategy 4: return as-is and let JSON.parse fail gracefully
   return text.trim();
 }
 
 export async function POST(req: Request) {
-  // Auth check
+  // ── Auth ──────────────────────────────────────────────────────────────────
   try { await requireAuth(); } catch {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401, headers: { 'Content-Type': 'application/json' },
+    });
   }
 
-  // Parse body
+  // ── Parse body ────────────────────────────────────────────────────────────
   let body: {
     mode: string;
     portfolio: Record<string, unknown>;
@@ -89,125 +70,96 @@ export async function POST(req: Request) {
     config?: Record<string, number>;
   };
 
-  try {
-    body = await req.json();
-  } catch {
-    return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
+  try { body = await req.json(); } catch {
+    return new Response(JSON.stringify({ error: 'Invalid JSON body' }), {
+      status: 400, headers: { 'Content-Type': 'application/json' },
+    });
   }
 
   const { mode, portfolio, question, config } = body;
 
   if (!mode || !VALID_MODES.has(mode)) {
-    return NextResponse.json(
-      { error: `Invalid mode. Must be one of: ${[...VALID_MODES].join(', ')}` },
-      { status: 400 }
+    return new Response(
+      JSON.stringify({ error: `Invalid mode. Must be one of: ${[...VALID_MODES].join(', ')}` }),
+      { status: 400, headers: { 'Content-Type': 'application/json' } }
     );
-  }
-
-  if (!portfolio || typeof portfolio !== 'object') {
-    return NextResponse.json({ error: 'Missing portfolio snapshot' }, { status: 400 });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
-    return NextResponse.json(
-      { error: 'ANTHROPIC_API_KEY is not configured. Add it to your Netlify environment variables.' },
-      { status: 503 }
+    return new Response(
+      JSON.stringify({ error: 'ANTHROPIC_API_KEY is not configured in Netlify environment variables.' }),
+      { status: 503, headers: { 'Content-Type': 'application/json' } }
     );
   }
 
-  // Merge strategy config into the snapshot
+  // ── Build snapshot ────────────────────────────────────────────────────────
   const enrichedSnapshot = {
     ...portfolio,
     strategy_config: config ?? {
-      triplesTargetPct: 25,
+      triplesTargetPct:     25,
       cornerstoneTargetPct: 15,
-      incomeTargetPct: 60,
-      marginWarnPct: 30,
-      marginMaxPct: 50,
-      fireMonthlyTarget: 10000,
+      incomeTargetPct:      60,
+      marginWarnPct:        30,
+      marginMaxPct:         50,
+      fireMonthlyTarget:    10000,
     },
     analysis_mode: mode,
     timestamp: new Date().toISOString(),
   };
 
-  // Append a hard JSON-only instruction to the user message.
-  // Using <json> tags gives the model a clear container to write into,
-  // and our extractor pulls from those tags first.
   const baseMessage = buildUserMessage(mode, enrichedSnapshot, question);
   const userMessage =
     baseMessage +
     '\n\nIMPORTANT: Wrap your entire JSON response in <json> and </json> tags. ' +
-    'Do not include any text outside those tags. Example: <json>{ ... }</json>';
+    'No text outside those tags.';
 
   const model     = MODEL_MAP[mode];
   const maxTokens = MAX_TOKENS_MAP[mode];
 
-  try {
-    const client = new Anthropic({ apiKey });
+  // ── Stream Anthropic → client ─────────────────────────────────────────────
+  // Streaming keeps bytes flowing so Netlify's inactivity timer never fires.
+  // The client accumulates all chunks then parses the complete JSON.
+  const encoder = new TextEncoder();
 
-    const message = await client.messages.create({
-      model,
-      max_tokens: maxTokens,
-      system: TRIPLE_C_SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: userMessage }],
-    });
+  const readable = new ReadableStream({
+    async start(controller) {
+      try {
+        const client = new Anthropic({ apiKey });
 
-    // Collect full text response
-    const rawText = message.content
-      .filter((block) => block.type === 'text')
-      .map((block) => (block as { type: 'text'; text: string }).text)
-      .join('');
+        const stream = await client.messages.stream({
+          model,
+          max_tokens: maxTokens,
+          system: TRIPLE_C_SYSTEM_PROMPT,
+          messages: [{ role: 'user', content: userMessage }],
+        });
 
-    // Check for truncation — if stop_reason is max_tokens the JSON is incomplete
-    if (message.stop_reason === 'max_tokens') {
-      console.warn('AI response truncated at max_tokens — increase MAX_TOKENS_MAP for mode:', mode);
-    }
+        for await (const event of stream) {
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'text_delta'
+          ) {
+            controller.enqueue(encoder.encode(event.delta.text));
+          }
+        }
 
-    // Extract and parse JSON
-    const candidate = extractJSON(rawText);
-    let analysis: Record<string, unknown>;
+        // Signal end of JSON with a sentinel the client can detect
+        controller.enqueue(encoder.encode('\n__DONE__'));
+        controller.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        controller.enqueue(encoder.encode(JSON.stringify({ error: msg })));
+        controller.enqueue(encoder.encode('\n__DONE__'));
+        controller.close();
+      }
+    },
+  });
 
-    try {
-      analysis = JSON.parse(candidate);
-    } catch (parseErr) {
-      // Return raw so the UI can show it and we can debug from Netlify logs
-      console.error('JSON parse failed for mode:', mode);
-      console.error('stop_reason:', message.stop_reason);
-      console.error('raw response (first 2000 chars):', rawText.slice(0, 2000));
-      return NextResponse.json({
-        mode,
-        raw: rawText,
-        candidate_extracted: candidate.slice(0, 500),
-        parse_error: 'AI returned non-JSON response — displaying raw output',
-        stop_reason: message.stop_reason,
-        model,
-        usage: message.usage,
-      });
-    }
-
-    return NextResponse.json({
-      ...analysis,
-      model,
-      usage: message.usage,
-    });
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    console.error('AI Analysis API error:', msg);
-
-    if (msg.includes('401') || msg.includes('authentication')) {
-      return NextResponse.json(
-        { error: 'Invalid ANTHROPIC_API_KEY — check your Netlify environment variables.' },
-        { status: 401 }
-      );
-    }
-    if (msg.includes('429') || msg.includes('rate')) {
-      return NextResponse.json(
-        { error: 'Anthropic rate limit hit — wait a moment and try again.' },
-        { status: 429 }
-      );
-    }
-
-    return NextResponse.json({ error: msg }, { status: 500 });
-  }
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Accel-Buffering': 'no',   // disable proxy buffering (nginx / Netlify edge)
+      'Cache-Control': 'no-cache',
+    },
+  });
 }
