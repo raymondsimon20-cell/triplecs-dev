@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, TrendingUp, Info, RefreshCw, Check, ExternalLink, Clock } from 'lucide-react';
+import { AlertTriangle, TrendingUp, Info, RefreshCw, Check, ExternalLink, Clock, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface CEFData {
   ticker: string;
@@ -11,6 +11,15 @@ interface CEFData {
   navUpdatedAt: string;
   priceUpdatedAt: string;
   source: 'live' | 'manual' | 'unavailable';
+}
+
+type ROStage = 'none' | 'announced' | 'subscription_open' | 'subscription_closed' | 'complete';
+
+interface ROStatus {
+  ticker: string;
+  status: ROStage;
+  notes: string;
+  updatedAt: string;
 }
 
 function fmt$(n: number) { return `$${n.toFixed(2)}`; }
@@ -49,6 +58,123 @@ function PremiumBadge({ pct }: { pct: number }) {
     <span className="px-2 py-0.5 rounded text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
       {pct.toFixed(1)}% Discount
     </span>
+  );
+}
+
+const RO_STAGE_META: Record<ROStage, { label: string; color: string; bgColor: string; borderColor: string }> = {
+  none:                { label: 'No Active RO',        color: 'text-[#7c82a0]',  bgColor: 'bg-[#2d3248]/60',      borderColor: 'border-[#3d4260]' },
+  announced:           { label: 'RO Announced',         color: 'text-amber-400',  bgColor: 'bg-amber-500/10',      borderColor: 'border-amber-500/30' },
+  subscription_open:   { label: 'Subscription Open',    color: 'text-orange-400', bgColor: 'bg-orange-500/10',     borderColor: 'border-orange-500/30' },
+  subscription_closed: { label: 'Subscription Closed',  color: 'text-blue-400',   bgColor: 'bg-blue-500/10',       borderColor: 'border-blue-500/30' },
+  complete:            { label: 'RO Complete',           color: 'text-emerald-400',bgColor: 'bg-emerald-500/10',   borderColor: 'border-emerald-500/30' },
+};
+
+const RO_STAGE_ORDER: ROStage[] = ['none', 'announced', 'subscription_open', 'subscription_closed', 'complete'];
+
+function roStrategyGuidance(stage: ROStage, premiumPct: number): { text: string; urgent: boolean } | null {
+  if (stage === 'none') return null;
+
+  if (stage === 'announced') {
+    if (premiumPct >= 30) return { text: 'RO announced + premium ≥30%: Sell down to ~3 shares and wait for RO completion to buy back.', urgent: true };
+    if (premiumPct >= 20) return { text: 'RO announced + premium ≥20%: Consider boxing the position until RO completes.', urgent: true };
+    return { text: 'RO announced: Monitor premium — box or sell if premium rises above 20–30%.', urgent: false };
+  }
+  if (stage === 'subscription_open') {
+    if (premiumPct >= 20) return { text: 'Subscription open + elevated premium: Box or reduce position. Avoid buying at premium during subscription.', urgent: true };
+    return { text: 'Subscription period active. Participate via DRIP at NAV if subscribed. Avoid buying at market.', urgent: false };
+  }
+  if (stage === 'subscription_closed') {
+    return { text: 'Subscription closed — shares being issued. Wait for RO completion before adding.', urgent: false };
+  }
+  if (stage === 'complete') {
+    return { text: 'RO complete: Buy-back opportunity at or near NAV. Resume normal DRIP and accumulation.', urgent: false };
+  }
+  return null;
+}
+
+function ROStageBadge({ stage }: { stage: ROStage }) {
+  const meta = RO_STAGE_META[stage];
+  return (
+    <span className={`px-2 py-0.5 rounded text-xs font-medium ${meta.bgColor} ${meta.color} border ${meta.borderColor}`}>
+      {meta.label}
+    </span>
+  );
+}
+
+function ROUpdateForm({ ticker, current, onSave }: { ticker: string; current: ROStatus; onSave: (updated: ROStatus) => void }) {
+  const [stage, setStage] = useState<ROStage>(current.status);
+  const [notes, setNotes] = useState(current.notes);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  const save = async () => {
+    setSaving(true);
+    setError('');
+    try {
+      const res = await fetch('/api/ro-status', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ticker, status: stage, notes }),
+      });
+      if (!res.ok) throw new Error('Save failed');
+      const data = await res.json();
+      onSave(data.entry);
+    } catch {
+      setError('Save failed — try again');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2 pt-2 border-t border-[#2d3248]">
+      <div className="text-xs text-[#7c82a0] font-medium">Update RO Status</div>
+      <div className="grid grid-cols-1 gap-2">
+        {/* Stage selector */}
+        <div className="flex flex-wrap gap-1">
+          {RO_STAGE_ORDER.map((s) => {
+            const meta = RO_STAGE_META[s];
+            const selected = stage === s;
+            return (
+              <button
+                key={s}
+                onClick={() => setStage(s)}
+                className={`px-2 py-1 rounded text-xs font-medium border transition-colors ${
+                  selected
+                    ? `${meta.bgColor} ${meta.color} ${meta.borderColor}`
+                    : 'bg-transparent text-[#4a5070] border-[#3d4260] hover:text-[#7c82a0]'
+                }`}
+              >
+                {meta.label}
+              </button>
+            );
+          })}
+        </div>
+
+        {/* Notes field */}
+        <input
+          type="text"
+          placeholder="Notes (optional) — e.g. RO announced Feb 14"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && save()}
+          className="w-full bg-[#2d3248] border border-[#3d4260] rounded px-2 py-1.5 text-xs text-white placeholder-[#4a5070] focus:outline-none focus:border-blue-500"
+        />
+
+        {/* Save button */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={save}
+            disabled={saving}
+            className="flex items-center gap-1 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium disabled:opacity-50 transition-colors"
+          >
+            <Check className="w-3 h-3" />
+            {saving ? 'Saving…' : 'Save'}
+          </button>
+          {error && <span className="text-xs text-red-400">{error}</span>}
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -116,13 +242,30 @@ function NAVEntryForm({ ticker, onSave }: { ticker: string; onSave: () => void }
   );
 }
 
-function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void }) {
-  const [showEntry, setShowEntry] = useState(fund.source === 'unavailable');
+function FundCard({
+  fund,
+  roStatus,
+  onRefresh,
+  onROUpdate,
+}: {
+  fund: CEFData;
+  roStatus: ROStatus | null;
+  onRefresh: () => void;
+  onROUpdate: (updated: ROStatus) => void;
+}) {
+  const [showNavEntry, setShowNavEntry] = useState(fund.source === 'unavailable');
+  const [showROForm, setShowROForm] = useState(false);
+
   const hasNAV = fund.nav > 0;
   const hasPrice = fund.marketPrice > 0;
   const dripEdge = hasNAV && hasPrice ? ((fund.marketPrice - fund.nav) / fund.nav) * 100 : 0;
   const navDays = navAgeDays(fund.navUpdatedAt);
   const navStale = navDays !== null && navDays > 7;
+
+  const roStage: ROStage = roStatus?.status ?? 'none';
+  const roMeta = RO_STAGE_META[roStage];
+  const roGuidance = hasNAV && hasPrice ? roStrategyGuidance(roStage, fund.premiumDiscount) : null;
+  const hasActiveRO = roStage !== 'none';
 
   return (
     <div className="bg-[#22263a] rounded-xl p-4 space-y-3 border border-[#2d3248]">
@@ -133,10 +276,10 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
           {hasNAV && hasPrice && <PremiumBadge pct={fund.premiumDiscount} />}
         </div>
         <button
-          onClick={() => setShowEntry((s) => !s)}
-          className={`text-xs px-2 py-1 rounded transition-colors ${showEntry ? 'bg-blue-600 text-white' : 'text-[#4a5070] hover:text-white border border-[#3d4260]'}`}
+          onClick={() => setShowNavEntry((s) => !s)}
+          className={`text-xs px-2 py-1 rounded transition-colors ${showNavEntry ? 'bg-blue-600 text-white' : 'text-[#4a5070] hover:text-white border border-[#3d4260]'}`}
         >
-          {showEntry ? 'Cancel' : 'Update NAV'}
+          {showNavEntry ? 'Cancel' : 'Update NAV'}
         </button>
       </div>
 
@@ -167,7 +310,7 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
         </div>
       </div>
 
-      {/* Rule guidance */}
+      {/* Premium rule guidance */}
       {hasNAV && hasPrice && (
         <div className="text-xs pt-1 border-t border-[#2d3248]">
           {fund.premiumDiscount >= 30 && (
@@ -191,11 +334,70 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
         </div>
       )}
 
+      {/* ─── Rights Offering Section ─── */}
+      <div className="pt-1 border-t border-[#2d3248] space-y-2">
+        {/* RO header row */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="text-xs text-[#7c82a0] font-medium">Rights Offering</span>
+            <ROStageBadge stage={roStage} />
+          </div>
+          <button
+            onClick={() => setShowROForm((s) => !s)}
+            className={`flex items-center gap-1 text-xs px-2 py-1 rounded transition-colors ${
+              showROForm ? 'bg-blue-600 text-white' : 'text-[#4a5070] hover:text-white border border-[#3d4260]'
+            }`}
+          >
+            {showROForm ? (
+              <><ChevronUp className="w-3 h-3" />Cancel</>
+            ) : (
+              <><ChevronDown className="w-3 h-3" />Update</>
+            )}
+          </button>
+        </div>
+
+        {/* RO notes if any */}
+        {roStatus?.notes && (
+          <div className="text-xs text-[#7c82a0] italic pl-1">{roStatus.notes}</div>
+        )}
+
+        {/* Combined RO + premium strategy guidance */}
+        {roGuidance && (
+          <div className={`flex items-start gap-1.5 text-xs rounded p-2 ${
+            roGuidance.urgent
+              ? 'bg-red-500/10 text-red-400 border border-red-500/20'
+              : 'bg-blue-500/10 text-blue-300 border border-blue-500/20'
+          }`}>
+            <AlertTriangle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+            <span>{roGuidance.text}</span>
+          </div>
+        )}
+
+        {/* Updated at timestamp for RO */}
+        {roStatus?.updatedAt && roStage !== 'none' && (
+          <div className="text-xs text-[#4a5070]">
+            Status updated {new Date(roStatus.updatedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
+          </div>
+        )}
+
+        {/* RO update form */}
+        {showROForm && (
+          <ROUpdateForm
+            ticker={fund.ticker}
+            current={roStatus ?? { ticker: fund.ticker, status: 'none', notes: '', updatedAt: '' }}
+            onSave={(updated) => {
+              onROUpdate(updated);
+              setShowROForm(false);
+            }}
+          />
+        )}
+      </div>
+
       {/* NAV entry form */}
-      {showEntry && (
+      {showNavEntry && (
         <NAVEntryForm
           ticker={fund.ticker}
-          onSave={() => { setShowEntry(false); onRefresh(); }}
+          onSave={() => { setShowNavEntry(false); onRefresh(); }}
         />
       )}
     </div>
@@ -204,6 +406,7 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
 
 export function CornerStoneCard() {
   const [funds, setFunds] = useState<CEFData[]>([]);
+  const [roStatuses, setROStatuses] = useState<Record<string, ROStatus>>({});
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
   const [lastUpdated, setLastUpdated] = useState('');
@@ -215,17 +418,29 @@ export function CornerStoneCard() {
     setLoading(true);
     setError(false);
     try {
-      const res = await fetch(forceRefresh ? '/api/cornerstone?refresh=true' : '/api/cornerstone');
-      if (!res.ok) throw new Error();
-      const data = await res.json();
+      const [navRes, roRes] = await Promise.all([
+        fetch(forceRefresh ? '/api/cornerstone?refresh=true' : '/api/cornerstone'),
+        fetch('/api/ro-status'),
+      ]);
+
+      if (!navRes.ok) throw new Error();
+      const data = await navRes.json();
       setFunds(data.funds ?? []);
       setLastUpdated(new Date().toLocaleTimeString());
       setDataSource(data.source ?? '');
       if (data.dataDate) {
-        // Format YYYYMMDD → "Apr 10"
         const s = String(data.dataDate);
         const d = new Date(`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`);
         setDataDate(d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }));
+      }
+
+      if (roRes.ok) {
+        const roData = await roRes.json();
+        const map: Record<string, ROStatus> = {};
+        for (const s of (roData.statuses ?? [])) {
+          map[s.ticker] = s;
+        }
+        setROStatuses(map);
       }
     } catch {
       setError(true);
@@ -236,9 +451,14 @@ export function CornerStoneCard() {
 
   useEffect(() => { fetchData(); }, []);
 
+  const handleROUpdate = (updated: ROStatus) => {
+    setROStatuses((prev) => ({ ...prev, [updated.ticker]: updated }));
+  };
+
   const boxAlerts  = funds.filter((f) => f.nav > 0 && f.premiumDiscount >= 20 && f.premiumDiscount < 30).length;
   const sellAlerts = funds.filter((f) => f.nav > 0 && f.premiumDiscount >= 30).length;
   const staleCount = funds.filter((f) => { const d = navAgeDays(f.navUpdatedAt); return d !== null && d > 7; }).length;
+  const activeROCount = Object.values(roStatuses).filter((r) => r.status !== 'none').length;
 
   return (
     <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
@@ -256,7 +476,12 @@ export function CornerStoneCard() {
               {boxAlerts} BOX
             </span>
           )}
-          {staleCount > 0 && sellAlerts === 0 && boxAlerts === 0 && (
+          {activeROCount > 0 && (
+            <span className="px-1.5 py-0.5 rounded text-xs bg-orange-500/20 text-orange-400 border border-orange-500/30">
+              {activeROCount} RO Active
+            </span>
+          )}
+          {staleCount > 0 && sellAlerts === 0 && boxAlerts === 0 && activeROCount === 0 && (
             <span className="px-1.5 py-0.5 rounded text-xs bg-amber-500/10 text-amber-500 border border-amber-500/20">
               NAV needs update
             </span>
@@ -299,7 +524,13 @@ export function CornerStoneCard() {
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           {funds.map((f) => (
-            <FundCard key={f.ticker} fund={f} onRefresh={() => fetchData(true)} />
+            <FundCard
+              key={f.ticker}
+              fund={f}
+              roStatus={roStatuses[f.ticker] ?? null}
+              onRefresh={() => fetchData(true)}
+              onROUpdate={handleROUpdate}
+            />
           ))}
         </div>
       )}
