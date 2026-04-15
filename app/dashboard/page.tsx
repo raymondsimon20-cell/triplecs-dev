@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle, TrendingUp } from 'lucide-react';
+// Note: CheckCircle, AlertCircle used in ALERT_ICON map below
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
-import { MarginMeter } from '@/components/MarginMeter';
+import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -162,7 +163,6 @@ export default function DashboardPage() {
   const availableForWithdrawal = account.availableForWithdrawal ?? 0;
 
   const dangerAlerts = account.marginAlerts.filter((a) => a.level === 'danger');
-  const warnAlerts = account.marginAlerts.filter((a) => a.level === 'warn');
 
   return (
     <div className="min-h-screen bg-[#0f1117]">
@@ -250,39 +250,23 @@ export default function DashboardPage() {
           />
         </div>
 
-        {/* Two-column: Pillar allocation + Margin meter */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
-            <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
-            <PillarAllocationBar summaries={account.pillarSummary} />
-          </div>
-
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
-            <h2 className="text-sm font-semibold text-white">Margin Health</h2>
-            <MarginMeter
-              equity={account.equity}
-              marginBalance={account.marginBalance}
-            />
-
-            {/* Rule alerts (non-danger) */}
-            {warnAlerts.length > 0 && (
-              <div className="space-y-2 pt-2 border-t border-[#2d3248]">
-                {warnAlerts.map((a, i) => (
-                  <div
-                    key={i}
-                    className={`flex items-start gap-2 text-xs p-2 rounded border ${ALERT_STYLE[a.level]}`}
-                  >
-                    {ALERT_ICON[a.level]}
-                    <span><strong>{a.rule}:</strong> {a.detail}</span>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+        {/* Pillar allocation */}
+        <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
+          <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
+          <PillarAllocationBar summaries={account.pillarSummary} />
         </div>
 
         {/* Cornerstone NAV Tracker — Phase 2 */}
         <CornerStoneCard />
+
+        {/* Phase 3 — Margin & Risk Intelligence */}
+        <MarginRiskPanel
+          equity={account.equity}
+          marginBalance={account.marginBalance}
+          totalValue={account.totalValue}
+          positions={account.positions}
+          dividendsAnnual={dividendsTotal}
+        />
 
         {/* Positions table */}
         <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">

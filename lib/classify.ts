@@ -158,6 +158,78 @@ export function summarizeByPillar(
   return [...map.values()].filter((e) => e.positionCount > 0);
 }
 
+// ─── Fund family classification ───────────────────────────────────────────────
+
+export type FundFamily =
+  | 'Yieldmax'
+  | 'Defiance'
+  | 'Roundhill'
+  | 'RexShares'
+  | 'ProShares'
+  | 'Direxion'
+  | 'Cornerstone'
+  | 'Other';
+
+const FUND_FAMILY_MAP: Record<string, FundFamily> = {
+  // Yieldmax
+  TSLY: 'Yieldmax', NVDY: 'Yieldmax', AMZY: 'Yieldmax', GOOGY: 'Yieldmax',
+  MSFO: 'Yieldmax', APLY: 'Yieldmax', OARK: 'Yieldmax', JPMO: 'Yieldmax',
+  CONY: 'Yieldmax', NFLY: 'Yieldmax', DISO: 'Yieldmax', SQY: 'Yieldmax',
+  SMCY: 'Yieldmax', YMAX: 'Yieldmax', YMAG: 'Yieldmax', ULTY: 'Yieldmax',
+  KLIP: 'Yieldmax',
+  // Defiance
+  QQQY: 'Defiance', JEPY: 'Defiance', IWMY: 'Defiance', SPYY: 'Defiance',
+  DEFI: 'Defiance', WDTE: 'Defiance', BDTE: 'Defiance', IDTE: 'Defiance', QDTU: 'Defiance',
+  // Roundhill
+  XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', YBTC: 'Roundhill', WEEK: 'Roundhill',
+  // RexShares
+  FEPI: 'RexShares', AIPI: 'RexShares',
+  // ProShares (triple long)
+  UPRO: 'ProShares', TQQQ: 'ProShares', UDOW: 'ProShares',
+  // Direxion (triple long + short)
+  SPXL: 'Direxion', TECL: 'Direxion', SOXL: 'Direxion', LABU: 'Direxion',
+  TNA: 'Direxion', FAS: 'Direxion', FNGU: 'Direxion',
+  SPXS: 'Direxion', SOXS: 'Direxion', SRTY: 'Direxion', FAZ: 'Direxion',
+  // Cornerstone
+  CLM: 'Cornerstone', CRF: 'Cornerstone',
+};
+
+export function getFundFamily(symbol: string): FundFamily {
+  return FUND_FAMILY_MAP[symbol.toUpperCase()] ?? 'Other';
+}
+
+export interface FundFamilyConcentration {
+  family: FundFamily;
+  totalValue: number;
+  portfolioPercent: number;
+  symbols: string[];
+}
+
+/** Summarizes income-family concentration (excludes 'Other') */
+export function getFundFamilyConcentrations(
+  positions: EnrichedPosition[],
+  totalValue: number,
+): FundFamilyConcentration[] {
+  const map = new Map<FundFamily, FundFamilyConcentration>();
+
+  for (const pos of positions) {
+    const family = getFundFamily(pos.instrument.symbol);
+    if (family === 'Other') continue;
+    if (!map.has(family)) {
+      map.set(family, { family, totalValue: 0, portfolioPercent: 0, symbols: [] });
+    }
+    const entry = map.get(family)!;
+    entry.totalValue += pos.marketValue;
+    entry.symbols.push(pos.instrument.symbol);
+  }
+
+  for (const entry of map.values()) {
+    entry.portfolioPercent = totalValue > 0 ? (entry.totalValue / totalValue) * 100 : 0;
+  }
+
+  return [...map.values()].sort((a, b) => b.portfolioPercent - a.portfolioPercent);
+}
+
 // ─── Margin / risk rule checks ────────────────────────────────────────────────
 
 export interface RuleAlert {
@@ -175,16 +247,18 @@ export function checkMarginRules(
   const totalValue = equity + Math.abs(marginBalance);
   const marginPct = totalValue > 0 ? (Math.abs(marginBalance) / totalValue) * 100 : 0;
 
-  // Rule: never more than 30% margin (50% hard max)
+  // Three-tier margin rule (Vol 3): 20% warn → 30% critical → 50% MAX emergency
   if (marginPct > 50) {
-    alerts.push({ level: 'danger', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — ABOVE 50% MAX. Reduce immediately.` });
+    alerts.push({ level: 'danger', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — ABOVE 50% EMERGENCY MAX. Reduce immediately.` });
   } else if (marginPct > 30) {
-    alerts.push({ level: 'warn', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — approaching 30% target. Consider reducing.` });
+    alerts.push({ level: 'danger', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — above 30% target. Critical — reduce exposure.` });
+  } else if (marginPct > 20) {
+    alerts.push({ level: 'warn', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — approaching 30% limit. Monitor closely.` });
   } else {
-    alerts.push({ level: 'ok', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — within safe range.` });
+    alerts.push({ level: 'ok', rule: 'Margin Limit', detail: `Margin at ${marginPct.toFixed(1)}% — healthy range (below 20%).` });
   }
 
-  // Rule: no single position > 20% of portfolio (warn at 15%)
+  // Position concentration: warn at 15%, hard stop at 20%
   for (const pos of positions) {
     if (pos.portfolioPercent > 20) {
       alerts.push({
