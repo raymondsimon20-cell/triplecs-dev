@@ -30,24 +30,50 @@ import { TRIPLE_C_SYSTEM_PROMPT, buildUserMessage } from '@/lib/ai/system-prompt
 
 export const dynamic = 'force-dynamic';
 
-// Model selection by mode — haiku for quick checks, sonnet for deep analysis
+// Model selection by mode
 const MODEL_MAP: Record<string, string> = {
-  daily_pulse:  'claude-haiku-4-5-20251001',
-  what_to_sell: 'claude-haiku-4-5-20251001',
-  trade_plan:   'claude-sonnet-4-6',
-  rule_audit:   'claude-sonnet-4-6',
-  open_question:'claude-sonnet-4-6',
+  daily_pulse:   'claude-haiku-4-5-20251001',
+  what_to_sell:  'claude-haiku-4-5-20251001',
+  trade_plan:    'claude-sonnet-4-6',
+  rule_audit:    'claude-sonnet-4-6',
+  open_question: 'claude-sonnet-4-6',
 };
 
+// Higher token limits — large portfolios + full JSON can exceed 1024 easily
 const MAX_TOKENS_MAP: Record<string, number> = {
-  daily_pulse:   1024,
-  what_to_sell:  1024,
-  trade_plan:    2048,
-  rule_audit:    2048,
-  open_question: 2048,
+  daily_pulse:   2048,
+  what_to_sell:  2048,
+  trade_plan:    4096,
+  rule_audit:    4096,
+  open_question: 4096,
 };
 
 const VALID_MODES = new Set(Object.keys(MODEL_MAP));
+
+/**
+ * Extract JSON from model output using multiple strategies:
+ *  1. Content between <json>…</json> tags (preferred — what we ask for)
+ *  2. Content between ```json … ``` fences
+ *  3. First { … } block found anywhere in the text
+ *  4. Raw text as-is
+ */
+function extractJSON(text: string): string {
+  // Strategy 1: XML tag wrapper
+  const xmlMatch = text.match(/<json>([\s\S]*?)<\/json>/i);
+  if (xmlMatch) return xmlMatch[1].trim();
+
+  // Strategy 2: markdown code fence
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenceMatch) return fenceMatch[1].trim();
+
+  // Strategy 3: first { to last } (handles leading/trailing text)
+  const first = text.indexOf('{');
+  const last  = text.lastIndexOf('}');
+  if (first !== -1 && last > first) return text.slice(first, last + 1);
+
+  // Strategy 4: return as-is and let JSON.parse fail gracefully
+  return text.trim();
+}
 
 export async function POST(req: Request) {
   // Auth check
@@ -82,7 +108,6 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Missing portfolio snapshot' }, { status: 400 });
   }
 
-  // Check Anthropic API key
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey) {
     return NextResponse.json(
@@ -91,7 +116,7 @@ export async function POST(req: Request) {
     );
   }
 
-  // Merge strategy config into the snapshot so AI can use it
+  // Merge strategy config into the snapshot
   const enrichedSnapshot = {
     ...portfolio,
     strategy_config: config ?? {
@@ -106,72 +131,59 @@ export async function POST(req: Request) {
     timestamp: new Date().toISOString(),
   };
 
-  const userMessage = buildUserMessage(mode, enrichedSnapshot, question);
-  const model = MODEL_MAP[mode];
+  // Append a hard JSON-only instruction to the user message.
+  // Using <json> tags gives the model a clear container to write into,
+  // and our extractor pulls from those tags first.
+  const baseMessage = buildUserMessage(mode, enrichedSnapshot, question);
+  const userMessage =
+    baseMessage +
+    '\n\nIMPORTANT: Wrap your entire JSON response in <json> and </json> tags. ' +
+    'Do not include any text outside those tags. Example: <json>{ ... }</json>';
+
+  const model     = MODEL_MAP[mode];
   const maxTokens = MAX_TOKENS_MAP[mode];
 
   try {
     const client = new Anthropic({ apiKey });
 
-    // Prefill the assistant turn with "{" — this forces Claude to continue
-    // directly with JSON, eliminating markdown wrappers or preamble entirely.
     const message = await client.messages.create({
       model,
       max_tokens: maxTokens,
       system: TRIPLE_C_SYSTEM_PROMPT,
-      messages: [
-        { role: 'user', content: userMessage },
-        { role: 'assistant', content: '{' },   // ← prefill forces JSON output
-      ],
+      messages: [{ role: 'user', content: userMessage }],
     });
 
-    // The prefill "{" is not included in the response content, so we prepend it.
-    const rawText =
-      '{' +
-      message.content
-        .filter((block) => block.type === 'text')
-        .map((block) => (block as { type: 'text'; text: string }).text)
-        .join('');
+    // Collect full text response
+    const rawText = message.content
+      .filter((block) => block.type === 'text')
+      .map((block) => (block as { type: 'text'; text: string }).text)
+      .join('');
 
-    // Parse JSON — try progressively more aggressive extraction strategies
+    // Check for truncation — if stop_reason is max_tokens the JSON is incomplete
+    if (message.stop_reason === 'max_tokens') {
+      console.warn('AI response truncated at max_tokens — increase MAX_TOKENS_MAP for mode:', mode);
+    }
+
+    // Extract and parse JSON
+    const candidate = extractJSON(rawText);
     let analysis: Record<string, unknown>;
+
     try {
-      // Strategy 1: direct parse (should always work with prefill)
-      analysis = JSON.parse(rawText);
-    } catch {
-      try {
-        // Strategy 2: strip any stray markdown fences and retry
-        const stripped = rawText
-          .replace(/^```(?:json)?\s*/im, '')
-          .replace(/\s*```\s*$/im, '')
-          .trim();
-        analysis = JSON.parse(stripped);
-      } catch {
-        // Strategy 3: extract the first {...} block via regex
-        const match = rawText.match(/\{[\s\S]*\}/);
-        if (match) {
-          try {
-            analysis = JSON.parse(match[0]);
-          } catch {
-            // All strategies failed — return raw for debugging
-            return NextResponse.json({
-              mode,
-              raw: rawText,
-              parse_error: 'AI returned non-JSON response — displaying raw output',
-              model,
-              usage: message.usage,
-            });
-          }
-        } else {
-          return NextResponse.json({
-            mode,
-            raw: rawText,
-            parse_error: 'AI returned non-JSON response — displaying raw output',
-            model,
-            usage: message.usage,
-          });
-        }
-      }
+      analysis = JSON.parse(candidate);
+    } catch (parseErr) {
+      // Return raw so the UI can show it and we can debug from Netlify logs
+      console.error('JSON parse failed for mode:', mode);
+      console.error('stop_reason:', message.stop_reason);
+      console.error('raw response (first 2000 chars):', rawText.slice(0, 2000));
+      return NextResponse.json({
+        mode,
+        raw: rawText,
+        candidate_extracted: candidate.slice(0, 500),
+        parse_error: 'AI returned non-JSON response — displaying raw output',
+        stop_reason: message.stop_reason,
+        model,
+        usage: message.usage,
+      });
     }
 
     return NextResponse.json({
@@ -183,7 +195,6 @@ export async function POST(req: Request) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('AI Analysis API error:', msg);
 
-    // Surface Anthropic-specific errors clearly
     if (msg.includes('401') || msg.includes('authentication')) {
       return NextResponse.json(
         { error: 'Invalid ANTHROPIC_API_KEY — check your Netlify environment variables.' },
