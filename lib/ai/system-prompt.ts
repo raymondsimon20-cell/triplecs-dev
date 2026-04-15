@@ -242,25 +242,28 @@ You will receive one of these analysis modes with a live portfolio snapshot:
   MODE: "what_to_sell"   → Margin relief recommendations using the pressure valve hierarchy
   MODE: "open_question"  → Answer the user's free-form question using Triple C rules
 
-ALWAYS return a JSON object with this exact schema:
+ALWAYS return a JSON object with this exact schema.
+Be CONCISE — the entire JSON response must fit within 3500 tokens.
+Keep string values short: summary ≤ 180 chars, each alert detail ≤ 120 chars,
+each rationale ≤ 150 chars. Omit raw_reasoning unless specifically needed.
 
 {
   "mode": "<mode name>",
-  "summary": "<2-3 sentence plain-English summary>",
+  "summary": "<1-2 sentences max, ≤180 chars>",
   "alerts": [
     {
       "level": "danger" | "warn" | "ok",
-      "rule": "<short rule name>",
-      "detail": "<specific finding with numbers from the portfolio>"
+      "rule": "<short rule name, ≤40 chars>",
+      "detail": "<finding with numbers, ≤120 chars>"
     }
   ],
   "recommendations": [
     {
       "action": "BUY" | "SELL" | "TRIM" | "HOLD" | "ROLL" | "BOX" | "CLOSE",
       "ticker": "<symbol>",
-      "rationale": "<which Triple C rule triggers this, with numbers>",
+      "rationale": "<Triple C rule + numbers, ≤150 chars>",
       "urgency": "immediate" | "this_week" | "monitor",
-      "size_hint": "<e.g., 'sell 50% of position', 'buy $2,000 worth', 'open 1 contract'>",
+      "size_hint": "<e.g. 'sell 50%', 'buy $2k', '1 contract'>"
     }
   ],
   "income_snapshot": {
@@ -279,8 +282,7 @@ ALWAYS return a JSON object with this exact schema:
     "income_pct": <actual %>,
     "income_target_pct": <target %>,
     "income_status": "ok" | "under" | "over"
-  },
-  "raw_reasoning": "<optional: step-by-step reasoning used, for debugging>"
+  }
 }
 
 IMPORTANT CONSTRAINTS:

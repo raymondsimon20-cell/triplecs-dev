@@ -30,11 +30,11 @@ const MODEL_MAP: Record<string, string> = {
 };
 
 const MAX_TOKENS_MAP: Record<string, number> = {
-  daily_pulse:   2048,
-  what_to_sell:  2048,
-  trade_plan:    4096,
-  rule_audit:    4096,
-  open_question: 4096,
+  daily_pulse:   4096,
+  what_to_sell:  4096,
+  trade_plan:    6000,
+  rule_audit:    6000,
+  open_question: 6000,
 };
 
 const VALID_MODES = new Set(Object.keys(MODEL_MAP));
