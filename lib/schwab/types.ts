@@ -223,4 +223,21 @@ export interface SchwabTransaction {
     cost: number;
     price?: number;
   }[];
+  // ── Alternative field names Schwab may use ──
+  activityType?: string;
+  transactionType?: string;
+  transactionDescription?: string;
+  transactionDate?: string;
+  tradeDate?: string;
+  settlementDate?: string;
+  amount?: number;
+  totalAmount?: number;
+  symbol?: string;
+  transactionItems?: {
+    instrument?: { symbol?: string; description?: string; assetType?: string };
+    asset?: { symbol?: string; cusip?: string };
+    amount?: number;
+    cost?: number;
+    price?: number;
+  }[];
 }

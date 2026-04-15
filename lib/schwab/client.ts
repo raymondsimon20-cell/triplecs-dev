@@ -256,11 +256,27 @@ export async function getTransactions(
   types = 'DIVIDEND_OR_INTEREST',
 ): Promise<import('./types').SchwabTransaction[]> {
   const params = new URLSearchParams({ types, startDate, endDate });
-  const result = await schwabFetch<import('./types').SchwabTransaction[]>(
-    `${TRADER_BASE}/accounts/${accountHash}/transactions?${params}`,
-    tokens,
-  );
-  return Array.isArray(result) ? result : [];
+  const url = `${TRADER_BASE}/accounts/${accountHash}/transactions?${params}`;
+  console.log(`[getTransactions] URL: ${url}`);
+  const result = await schwabFetch<unknown>(url, tokens);
+
+  // Log raw response shape to debug field name mismatches
+  if (Array.isArray(result)) {
+    console.log(`[getTransactions] Got ${result.length} transactions`);
+    if (result.length > 0) {
+      const sample = result[0];
+      console.log(`[getTransactions] Sample keys: ${Object.keys(sample).join(', ')}`);
+      console.log(`[getTransactions] Sample: ${JSON.stringify(sample).slice(0, 500)}`);
+    }
+  } else if (result && typeof result === 'object') {
+    // Schwab may wrap transactions in an object
+    console.log(`[getTransactions] Non-array response keys: ${Object.keys(result as Record<string, unknown>).join(', ')}`);
+    console.log(`[getTransactions] Raw: ${JSON.stringify(result).slice(0, 500)}`);
+  } else {
+    console.log(`[getTransactions] Unexpected response type: ${typeof result}`, result);
+  }
+
+  return Array.isArray(result) ? (result as import('./types').SchwabTransaction[]) : [];
 }
 
 // ─── Token-aware client factory ───────────────────────────────────────────────
@@ -278,7 +294,7 @@ export async function createClient() {
     getAllAccounts: () => getAllAccounts(tokens),
     getAccount: (hash: string) => getAccount(tokens, hash),
     getQuotes: (symbols: string[]) => getQuotes(tokens, symbols),
-    getTransactions: (hash: string, start: string, end: string) =>
-      getTransactions(tokens, hash, start, end),
+    getTransactions: (hash: string, start: string, end: string, types?: string) =>
+      getTransactions(tokens, hash, start, end, types),
   };
 }
