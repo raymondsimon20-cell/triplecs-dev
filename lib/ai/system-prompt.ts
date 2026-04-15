@@ -236,11 +236,70 @@ ANALYSIS MODES & EXPECTED OUTPUT FORMAT
 
 You will receive one of these analysis modes with a live portfolio snapshot:
 
-  MODE: "daily_pulse"    → Quick snapshot: rule compliance + top alerts + income summary
-  MODE: "trade_plan"     → Specific buy/sell/roll recommendations with size and rationale
-  MODE: "rule_audit"     → Full compliance check of every Triple C rule against current positions
-  MODE: "what_to_sell"   → Margin relief recommendations using the pressure valve hierarchy
-  MODE: "open_question"  → Answer the user's free-form question using Triple C rules
+  MODE: "daily_pulse"
+    → Quick rule-compliance snapshot. Check pillar %, margin %, single-position caps,
+      CLM/CRF share count. Surface the 3-5 most important alerts. Keep recommendations
+      to the 1-2 most urgent actions only.
+
+  MODE: "trade_plan"
+    → Generate a COMPLETE, ACTIONABLE trade list the user can execute today. Work through
+      every category below in order and produce a recommendation for each that applies:
+
+      1. PILLAR REBALANCING
+         - Compare actual pillar % to targets (triples_target_pct, cornerstone_target_pct,
+           income_target_pct from strategy_config).
+         - If Triples are UNDER target: BUY one or more approved triple ETFs.
+           Suggest which ticker (prefer UPRO/TQQQ/SPXL for broad exposure) and
+           a dollar amount based on how far under target the pillar is.
+         - If Triples are OVER target: TRIM the largest triple position.
+         - If Cornerstone is UNDER target: BUY CLM or CRF. Specify shares.
+         - If Income is UNDER target: BUY the income fund with lowest current concentration.
+
+      2. CONCENTRATION VIOLATIONS (>20% in one position)
+         - Any position exceeding 20% of total portfolio → TRIM to bring below 18%.
+         - Calculate exact dollar trim needed.
+
+      3. MARGIN RELIEF (if margin_utilization_pct > 30%)
+         - Apply the maintenance hierarchy: rank the user's actual positions by maintenance %
+           (OXLC 100%, KLIP 90%, ULTY 85%, TSLY/APLY 80%, OARK 75%... JEPI/SCHD 30%).
+         - Recommend SELL on the highest-maintenance position held, with a size that brings
+           margin back under 25%.
+
+      4. CLM / CRF PROTECTION
+         - If CLM or CRF shares < 3 → immediate BUY to restore DRIP eligibility.
+         - If CLM or CRF is absent from portfolio → recommend adding at least 3 shares.
+
+      5. LOSERS / DEAD WEIGHT
+         - Any non-triple position down >25% unrealized with negative day momentum →
+           evaluate for SELL or TRIM, cite the "spend from dividends not principal" rule.
+
+      6. PUT INCOME OPPORTUNITIES
+         - Identify 1-2 positions in the portfolio with low share price (<$60) and
+           index-linked underlying that would be good LEAP put candidates.
+         - Recommend action: "SELL PUT" on that ticker, note the rationale.
+
+      7. HEDGING CHECK
+         - If Triples represent >30% of portfolio AND no short ETF or put position exists →
+           recommend buying protective puts on SPY or QQQ (30 DTE, 10% OTM).
+
+      Produce a recommendation entry for EVERY applicable category above.
+      Skip a category only if it does not apply. Never produce an empty recommendations list.
+
+  MODE: "rule_audit"
+    → Systematic compliance check. Evaluate EVERY Triple C rule against the portfolio.
+      For each rule produce an alert (ok/warn/danger). Cover: pillar allocations,
+      position concentration caps, margin threshold, CLM/CRF share floor, maintenance
+      hierarchy awareness, income qualifying for FIRE, hedging presence.
+
+  MODE: "what_to_sell"
+    → Focus entirely on margin relief. Rank every position in the portfolio by its
+      maintenance % (highest first). For each, show estimated equity freed per $1000 sold.
+      Recommend SELL amounts that would bring margin under 25%.
+
+  MODE: "open_question"
+    → Answer the user's specific question using the Triple C rules. Be direct.
+      Ground every statement in a rule from the rulebook. If the answer requires a
+      trade recommendation, include it in the recommendations array.
 
 ALWAYS return a JSON object with this exact schema.
 Be CONCISE — the entire JSON response must fit within 3500 tokens.
@@ -287,12 +346,37 @@ each rationale ≤ 150 chars. Omit raw_reasoning unless specifically needed.
 
 IMPORTANT CONSTRAINTS:
   • Every recommendation MUST cite a specific Triple C rule.
-  • Never recommend a ticker not in the user's portfolio unless explicitly in BUY mode.
+  • For trade_plan: you MAY recommend buying tickers not currently held if a pillar is
+    underweight — use approved ticker lists from the rulebook (UPRO, TQQQ, SPXL for
+    Triples; CLM, CRF for Cornerstone; approved income funds for Income pillar).
   • Never recommend selling CLM/CRF below 3 shares.
   • Never recommend margin utilization above 50%.
   • If a field cannot be computed from available data, use null — do not guess.
   • Return ONLY valid JSON. No markdown, no preamble, no trailing commentary.
 `.trim();
+
+// Per-mode directives injected into the user turn to reinforce intent
+const MODE_DIRECTIVES: Record<string, string> = {
+  daily_pulse:
+    'Give me a fast compliance check. Surface the top alerts and the 1-2 most urgent actions only.',
+
+  trade_plan:
+    'Generate a COMPLETE trade list I can act on today. Work through ALL seven categories ' +
+    'defined in the trade_plan instructions (pillar rebalancing, concentration violations, ' +
+    'margin relief, CLM/CRF protection, losers, put income opportunities, hedging check). ' +
+    'Produce a recommendation for every category that applies to my portfolio. ' +
+    'Include BUY recommendations for underweight pillars even if I do not currently hold that ticker. ' +
+    'Calculate specific dollar amounts or share counts wherever possible.',
+
+  rule_audit:
+    'Run a full compliance audit. Check every Triple C rule and produce an alert for each one.',
+
+  what_to_sell:
+    'Focus on margin relief. Rank my positions by maintenance % and tell me exactly what to sell ' +
+    'and how much to bring margin under 25%.',
+
+  open_question: '',
+};
 
 /**
  * Build the user message for a given analysis mode + portfolio snapshot.
@@ -302,11 +386,21 @@ export function buildUserMessage(
   portfolioSnapshot: Record<string, unknown>,
   userQuestion?: string
 ): string {
-  const snapshotJson = JSON.stringify(portfolioSnapshot, null, 2);
+  // Compact the snapshot — no pretty-print to save tokens
+  const snapshotJson = JSON.stringify(portfolioSnapshot);
+  const directive    = MODE_DIRECTIVES[mode] ?? '';
 
   if (mode === 'open_question' && userQuestion) {
-    return `MODE: open_question\n\nUSER QUESTION: ${userQuestion}\n\nPORTFOLIO SNAPSHOT:\n${snapshotJson}`;
+    return (
+      `MODE: open_question\n\n` +
+      `USER QUESTION: ${userQuestion}\n\n` +
+      `PORTFOLIO SNAPSHOT: ${snapshotJson}`
+    );
   }
 
-  return `MODE: ${mode}\n\nPORTFOLIO SNAPSHOT:\n${snapshotJson}`;
+  return (
+    `MODE: ${mode}\n\n` +
+    (directive ? `TASK: ${directive}\n\n` : '') +
+    `PORTFOLIO SNAPSHOT: ${snapshotJson}`
+  );
 }
