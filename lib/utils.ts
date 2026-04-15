@@ -57,15 +57,24 @@ export function clamp(value: number, min: number, max: number): number {
 /**
  * Default Triple C allocation targets (can be overridden via SettingsPanel).
  */
-export const DEFAULT_TARGETS = {
-  triplesPct: 10,       // % of portfolio
-  cornerstonePct: 15,   // % of portfolio
-  incomePct: 60,        // % of portfolio
-  hedgePct: 5,          // % of portfolio
-  marginLimitPct: 30,   // max margin as % of total value
-  marginWarnPct: 20,    // warn threshold
-  familyCapPct: 20,     // max single fund family concentration
-  fireNumber: 10000,    // monthly income FIRE target ($)
-} as const;
+export interface StrategyTargets {
+  triplesPct: number;       // % of portfolio
+  cornerstonePct: number;   // % of portfolio
+  incomePct: number;        // % of portfolio
+  hedgePct: number;         // % of portfolio
+  marginLimitPct: number;   // max margin as % of total value
+  marginWarnPct: number;    // warn threshold
+  familyCapPct: number;     // max single fund family concentration
+  fireNumber: number;       // monthly income FIRE target ($)
+}
 
-export type StrategyTargets = typeof DEFAULT_TARGETS;
+export const DEFAULT_TARGETS: StrategyTargets = {
+  triplesPct: 10,
+  cornerstonePct: 15,
+  incomePct: 60,
+  hedgePct: 5,
+  marginLimitPct: 30,
+  marginWarnPct: 20,
+  familyCapPct: 20,
+  fireNumber: 10000,
+};
