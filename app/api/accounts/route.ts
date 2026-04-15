@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
-import { createClient } from '@/lib/schwab/client';
-import { getCachedPortfolio, cachePortfolio } from '@/lib/storage';
+import { createClient, getAccountNumbers } from '@/lib/schwab/client';
+import { getCachedPortfolio, cachePortfolio, getTokens } from '@/lib/storage';
 import { enrichPositions, summarizeByPillar, checkMarginRules } from '@/lib/classify';
 import type { SchwabAccountWrapper } from '@/lib/schwab/types';
 
@@ -18,7 +18,17 @@ export async function GET(req: Request) {
   const accountHash = searchParams.get('hash');
 
   try {
-    const client = await createClient();
+    const client  = await createClient();
+    const tokens  = await getTokens();
+
+    // Build a map of accountNumber → hashValue so we can attach it to results
+    const accountNumMap: Record<string, string> = {};
+    if (tokens) {
+      const nums = await getAccountNumbers(tokens);
+      for (const { accountNumber, hashValue } of nums) {
+        accountNumMap[accountNumber] = hashValue;
+      }
+    }
 
     // Get all accounts or a specific one
     let accounts: SchwabAccountWrapper[];
@@ -87,6 +97,7 @@ export async function GET(req: Request) {
 
         const result = {
           accountNumber: acct.accountNumber,
+          accountHash:   accountNumMap[acct.accountNumber] ?? '',
           type: acct.type,
           totalValue,
           equity: acct.currentBalances.equity,

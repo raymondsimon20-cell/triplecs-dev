@@ -348,7 +348,10 @@ each rationale ≤ 150 chars. Omit raw_reasoning unless specifically needed.
       "ticker": "<symbol>",
       "rationale": "<Triple C rule + numbers, ≤150 chars>",
       "urgency": "immediate" | "this_week" | "monitor",
-      "size_hint": "<e.g. 'sell 50%', 'buy $2k', '1 contract'>"
+      "size_hint": "<human-readable e.g. 'sell 50%', 'buy $2k'>",
+      "dollar_amount": <number or null>,  // for BUY: dollar amount to spend
+      "sell_pct": <number 0-100 or null>, // for SELL/TRIM: % of position to sell
+      "sell_shares": <number or null>     // for SELL/TRIM: exact shares (use instead of sell_pct when known)
     }
   ],
   "income_snapshot": {
@@ -372,6 +375,10 @@ each rationale ≤ 150 chars. Omit raw_reasoning unless specifically needed.
 
 IMPORTANT CONSTRAINTS:
   • Every recommendation MUST cite a specific Triple C rule.
+  • Always populate dollar_amount for BUY actions (calculate from pillar gap or trim proceeds).
+  • Always populate sell_pct OR sell_shares for SELL/TRIM actions. Use sell_pct when the
+    trim is proportional (e.g. 50%), sell_shares when an exact count is needed (e.g. CLM shares).
+  • Set unused size fields to null.
   • For trade_plan: you MAY recommend buying tickers not currently held if a pillar is
     underweight — use approved ticker lists from the rulebook (UPRO, TQQQ, SPXL for
     Triples; CLM, CRF for Cornerstone; approved income funds for Income pillar).

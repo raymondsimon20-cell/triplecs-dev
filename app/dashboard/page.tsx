@@ -17,6 +17,7 @@ import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 
 interface AccountData {
   accountNumber: string;
+  accountHash: string;
   type: string;
   totalValue: number;
   equity: number;
@@ -292,6 +293,7 @@ export default function DashboardPage() {
           marginBalance={account.marginBalance}
           pillarSummary={account.pillarSummary}
           dividendsAnnual={dividendsTotal}
+          accountHash={account.accountHash}
         />
 
         {/* Phase 6 — Income & Dividend Dashboard */}
