@@ -7,6 +7,7 @@ import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
+import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -271,6 +272,12 @@ export default function DashboardPage() {
 
         {/* Phase 4 — Triple ETF Tactical Engine */}
         <TriplesTacticalPanel
+          positions={account.positions}
+          totalValue={account.totalValue}
+        />
+
+        {/* Phase 5 — Options & Put Strategy */}
+        <OptionsStrategyPanel
           positions={account.positions}
           totalValue={account.totalValue}
         />
