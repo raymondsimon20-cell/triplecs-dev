@@ -14,6 +14,7 @@ import {
   Copy, Check, ShoppingCart, X, Send,
 } from 'lucide-react';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
+import { PutChainInline } from '@/components/PutChainInline';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,7 @@ interface OrderRow {
   limitPrice?: number;
   rationale:   string;
   size_hint:   string;
+  aiMode:      string;
 }
 
 interface OrderResult {
@@ -460,6 +462,7 @@ export function AIAnalysisPanel({
           orderType:   'MARKET',
           rationale:   rec.rationale,
           size_hint:   rec.size_hint ?? '',
+          aiMode:      analysis.mode,
         };
       });
     setOrderRows(rows);
@@ -482,6 +485,8 @@ export function AIAnalysisPanel({
             instruction: r.instruction,
             quantity:    r.shares,
             orderType:   r.orderType,
+            rationale:   r.rationale,
+            aiMode:      r.aiMode,
           })),
         }),
       });
@@ -747,6 +752,12 @@ export function AIAnalysisPanel({
                           )}
 
                           <p className="text-xs text-[#7c82a0] leading-relaxed">{rec.rationale}</p>
+
+                          {/* Inline put chain — shown when rec involves put selling */}
+                          {(rec.action === 'SELL' || rec.action === 'BUY') &&
+                            rec.rationale?.toLowerCase().includes('put') && (
+                              <PutChainInline ticker={rec.ticker} />
+                            )}
                         </div>
                       );
                     })}

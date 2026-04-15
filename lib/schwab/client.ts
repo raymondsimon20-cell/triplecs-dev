@@ -110,6 +110,38 @@ export async function getQuotes(
   );
 }
 
+// ─── Options chain endpoint ───────────────────────────────────────────────────
+
+export interface OptionsChainParams {
+  contractType?: 'CALL' | 'PUT' | 'ALL';
+  strikeCount?: number;       // number of strikes above/below ATM
+  strategy?: 'SINGLE' | 'ANALYTICAL';
+  fromDate?: string;          // YYYY-MM-DD
+  toDate?: string;
+  expMonth?: string;          // ALL, JAN…DEC
+}
+
+export async function getOptionsChain(
+  tokens: SchwabTokens,
+  symbol: string,
+  opts: OptionsChainParams = {}
+): Promise<Record<string, unknown>> {
+  const params = new URLSearchParams({
+    symbol:                     symbol.toUpperCase(),
+    contractType:               opts.contractType ?? 'PUT',
+    strikeCount:                String(opts.strikeCount ?? 15),
+    includeUnderlyingQuote:     'true',
+    strategy:                   opts.strategy ?? 'SINGLE',
+    ...(opts.fromDate ? { fromDate: opts.fromDate } : {}),
+    ...(opts.toDate   ? { toDate:   opts.toDate   } : {}),
+    ...(opts.expMonth ? { expMonth: opts.expMonth } : {}),
+  });
+  return schwabFetch<Record<string, unknown>>(
+    `${MARKET_BASE}/chains?${params.toString()}`,
+    tokens
+  );
+}
+
 // ─── Transactions endpoint ────────────────────────────────────────────────────
 
 export async function getTransactions(

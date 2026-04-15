@@ -10,6 +10,7 @@ import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { DividendIncomePanel } from '@/components/DividendIncomePanel';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
+import { TradeHistoryPanel } from '@/components/TradeHistoryPanel';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import type { RuleAlert } from '@/lib/classify';
@@ -295,6 +296,9 @@ export default function DashboardPage() {
           dividendsAnnual={dividendsTotal}
           accountHash={account.accountHash}
         />
+
+        {/* Trade History — orders placed through this dashboard */}
+        <TradeHistoryPanel />
 
         {/* Phase 6 — Income & Dividend Dashboard */}
         <DividendIncomePanel

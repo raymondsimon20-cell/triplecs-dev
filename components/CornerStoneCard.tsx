@@ -10,7 +10,7 @@ interface CEFData {
   premiumDiscount: number;
   navUpdatedAt: string;
   priceUpdatedAt: string;
-  source: 'live' | 'manual' | 'unavailable';
+  source: 'cornerstone' | 'yahoo' | 'cornerstone+yahoo' | 'live' | 'manual' | 'unavailable';
 }
 
 type ROStage = 'none' | 'announced' | 'subscription_open' | 'subscription_closed' | 'complete';
@@ -253,6 +253,7 @@ function FundCard({
   onRefresh: () => void;
   onROUpdate: (updated: ROStatus) => void;
 }) {
+  const isLive = fund.source !== 'unavailable' && fund.source !== 'manual';
   const [showNavEntry, setShowNavEntry] = useState(fund.source === 'unavailable');
   const [showROForm, setShowROForm] = useState(false);
 
@@ -274,12 +275,17 @@ function FundCard({
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-bold text-white font-mono">{fund.ticker}</span>
           {hasNAV && hasPrice && <PremiumBadge pct={fund.premiumDiscount} />}
+          {isLive && (
+            <span className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
+              ● live
+            </span>
+          )}
         </div>
         <button
           onClick={() => setShowNavEntry((s) => !s)}
           className={`text-xs px-2 py-1 rounded transition-colors ${showNavEntry ? 'bg-blue-600 text-white' : 'text-[#4a5070] hover:text-white border border-[#3d4260]'}`}
         >
-          {showNavEntry ? 'Cancel' : 'Update NAV'}
+          {showNavEntry ? 'Cancel' : 'Override NAV'}
         </button>
       </div>
 
@@ -449,7 +455,12 @@ export function CornerStoneCard() {
     }
   };
 
-  useEffect(() => { fetchData(); }, []);
+  useEffect(() => {
+    fetchData();
+    // Auto-refresh every 15 minutes — matches server-side cache TTL
+    const interval = setInterval(() => fetchData(true), 15 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   const handleROUpdate = (updated: ROStatus) => {
     setROStatuses((prev) => ({ ...prev, [updated.ticker]: updated }));
