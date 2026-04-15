@@ -117,66 +117,98 @@ async function fetchCEFConnectNAV(ticker: string, debug: string[]): Promise<numb
 
 // ─── NAV Source 2: Cornerstone fund websites ──────────────────────────────────
 
-// NAV sub-pages confirmed from homepage nav menu: "Net Asset Value" link
-const FUND_NAV_PAGES: Record<Ticker, string[]> = {
-  CRF: [
-    'https://www.cornerstonetotalreturnfund.com/nav/',
-    'https://www.cornerstonetotalreturnfund.com/nav',
-    'https://www.cornerstonetotalreturnfund.com/net-asset-value/',
-    'https://www.cornerstonetotalreturnfund.com/net-asset-value',
-    'https://www.cornerstonetotalreturnfund.com/navdata/',
-    'https://www.cornerstonetotalreturnfund.com/',            // homepage fallback
-  ],
-  CLM: [
-    'https://www.cornerstonestrategicvaluefund.com/nav/',
-    'https://www.cornerstonestrategicvaluefund.com/nav',
-    'https://www.cornerstonestrategicvaluefund.com/net-asset-value/',
-    'https://www.cornerstonestrategicvaluefund.com/net-asset-value',
-    'https://www.cornerstonestrategicvaluefund.com/navdata/',
-    'https://www.cornerstonestrategicvaluefund.com/',         // homepage fallback
-  ],
+const FUND_BASES: Record<Ticker, string> = {
+  CRF: 'https://www.cornerstonetotalreturnfund.com',
+  CLM: 'https://www.cornerstonestrategicvaluefund.com',
 };
 
-async function fetchFundWebsiteNAV(ticker: Ticker, debug: string[]): Promise<number> {
-  for (const url of FUND_NAV_PAGES[ticker]) {
-    try {
-      const res = await fetchWithTimeout(url, {
-        headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], Accept: 'text/html,*/*' },
-      }, 12000);
-      if (!res.ok) { debug.push(`FundSite ${ticker} ${url}: HTTP ${res.status}`); continue; }
-      const html = await res.text();
+/** Extract CSV/JSON data URLs from a page's inline <script> blocks */
+function extractDataUrls(html: string, baseUrl: string): string[] {
+  const scripts = [...html.matchAll(/<script[^>]*>([\s\S]*?)<\/script>/gi)]
+    .map((m) => m[1])
+    .join('\n');
 
-      // Strip tags → plain text for easier parsing
-      const text = html.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+  const found = new Set<string>();
 
-      // NAV per share patterns — fund NAV pages typically show a table with labeled values
-      const nav = regexDollar(html,
-        /nav\s+per\s+share[^<$]{0,30}\$\s*([\d,]+\.[\d]{2})/i,
-        /net\s+asset\s+value\s+per\s+share[^<$]{0,30}\$\s*([\d,]+\.[\d]{2})/i,
-        /per\s+share[^<$]{0,30}\$\s*([\d,]+\.[\d]{2})/i,
-      ) || regexDollar(text as unknown as string,
-        /nav\s+per\s+share\s*[\$:]*\s*([\d,]+\.[\d]{2})/i,
-        /net\s+asset\s+value\s+per\s+share\s*[\$:]*\s*([\d,]+\.[\d]{2})/i,
-        /per\s+share[^$\d]{0,10}\$?([\d,]+\.[\d]{2})/i,
-      );
-
-      if (nav > 0) {
-        debug.push(`FundSite ${ticker} (${url}): NAV=$${nav}`);
-        return nav;
-      }
-
-      // Log a useful snippet around "per share" or a dollar amount for regex tuning
-      const perShareIdx = text.toLowerCase().indexOf('per share');
-      const dollarIdx = text.indexOf('$');
-      const snippetIdx = perShareIdx >= 0 ? Math.max(0, perShareIdx - 40) : Math.max(0, dollarIdx - 40);
-      debug.push(`FundSite ${ticker} (${url}): no NAV. Snippet: "${text.slice(snippetIdx, snippetIdx + 300)}"`);
-
-      // Only try all URL variants on the first (sub-page) attempts; skip remaining if homepage loaded fine
-      if (url.endsWith('/')) break; // homepage loaded, no point trying more
-    } catch (e) {
-      debug.push(`FundSite ${ticker} ${url}: ${e instanceof Error ? e.message : 'error'}`);
+  // CSV references (any path containing .csv)
+  for (const m of scripts.matchAll(/['"`]([^'"`\s]*\.csv[^'"`\s]*)/gi)) {
+    const raw = m[1];
+    found.add(raw.startsWith('http') ? raw : `${baseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`);
+  }
+  // wp-content/uploads paths (WordPress media)
+  for (const m of html.matchAll(/["'](\/wp-content\/uploads\/[^"'?\s]+)/gi)) {
+    const raw = m[1];
+    found.add(`${baseUrl}${raw}`);
+  }
+  // Any fetch/ajax/src URL containing nav/weekly/survey
+  for (const m of scripts.matchAll(/['"`]([^'"`\s]*(?:nav|weekly|survey)[^'"`\s]*)/gi)) {
+    const raw = m[1];
+    if (raw.startsWith('/') || raw.startsWith('http')) {
+      found.add(raw.startsWith('http') ? raw : `${baseUrl}${raw}`);
     }
   }
+  // JSON data-src or data-url attributes
+  for (const m of html.matchAll(/data-(?:src|url|file)=['"]([^'"]+)['"]/gi)) {
+    const raw = m[1];
+    found.add(raw.startsWith('http') ? raw : `${baseUrl}${raw.startsWith('/') ? '' : '/'}${raw}`);
+  }
+
+  return [...found];
+}
+
+async function fetchFundWebsiteNAV(ticker: Ticker, debug: string[]): Promise<number> {
+  const base = FUND_BASES[ticker];
+  const navPageUrl = `${base}/net-asset-value`;
+
+  // Step 1: Fetch the NAV page HTML to find embedded data URLs
+  let pageHtml = '';
+  try {
+    const res = await fetchWithTimeout(navPageUrl, {
+      headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], Accept: 'text/html,*/*' },
+    }, 12000);
+    if (res.ok) {
+      pageHtml = await res.text();
+      debug.push(`FundSite ${ticker}: NAV page loaded (${pageHtml.length} bytes)`);
+    } else {
+      debug.push(`FundSite ${ticker} navPage: HTTP ${res.status}`);
+    }
+  } catch (e) {
+    debug.push(`FundSite ${ticker} navPage: ${e instanceof Error ? e.message : 'error'}`);
+  }
+
+  // Step 2: Extract any data URLs the JS references on the page
+  const dataUrls = pageHtml ? extractDataUrls(pageHtml, base) : [];
+  debug.push(`FundSite ${ticker}: found ${dataUrls.length} data URL(s): ${dataUrls.slice(0, 5).join(', ')}`);
+
+  // Step 3: Try each discovered URL as a CSV
+  for (const url of dataUrls) {
+    try {
+      const res = await fetchWithTimeout(url, {
+        headers: { 'User-Agent': BROWSER_HEADERS['User-Agent'], Accept: 'text/csv,text/plain,*/*' },
+      }, 8000);
+      if (!res.ok) continue;
+      const text = await res.text();
+      const parsed = parseCornerStoneCSV(text);
+      const record = parsed?.[ticker];
+      if (record?.nav) {
+        debug.push(`FundSite ${ticker}: CSV from ${url} → NAV=$${record.nav}`);
+        return record.nav;
+      }
+      debug.push(`FundSite ${ticker}: fetched ${url} but no parseable NAV (${text.slice(0, 100)})`);
+    } catch { /* try next */ }
+  }
+
+  // Step 4: Log the raw page text near a dollar sign so we can see data shape
+  if (pageHtml) {
+    const text = pageHtml.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ');
+    const dollarIdx = text.indexOf('$');
+    if (dollarIdx >= 0) {
+      debug.push(`FundSite ${ticker} near first $: "${text.slice(Math.max(0, dollarIdx - 60), dollarIdx + 120)}"`);
+    } else {
+      debug.push(`FundSite ${ticker}: no $ found in page text`);
+    }
+  }
+
   return 0;
 }
 
