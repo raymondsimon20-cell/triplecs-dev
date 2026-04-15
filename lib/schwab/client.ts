@@ -143,6 +143,10 @@ export async function getAccount(
 /**
  * Fetch real-time quotes for a list of symbols.
  * Returns a map of symbol → quote data.
+ *
+ * Resilient: if the batch request fails (e.g. one bad symbol causes a 400),
+ * falls back to fetching symbols individually so one bad ticker doesn't
+ * break the entire dashboard.
  */
 export async function getQuotes(
   tokens: SchwabTokens,
@@ -150,16 +154,64 @@ export async function getQuotes(
 ): Promise<SchwabQuotesResponse> {
   if (symbols.length === 0) return {};
 
+  // Filter out obviously invalid symbols (empty, whitespace-only, too long)
+  const validSymbols = symbols.filter(
+    (s) => s && s.trim().length > 0 && s.trim().length <= 20
+  );
+  if (validSymbols.length === 0) return {};
+
   const params = new URLSearchParams({
-    symbols: symbols.join(','),
+    symbols: validSymbols.join(','),
     fields: 'quote,reference',
     indicative: 'false',
   });
 
-  return schwabFetch<SchwabQuotesResponse>(
-    `${MARKET_BASE}/quotes?${params.toString()}`,
-    tokens
-  );
+  try {
+    return await schwabFetch<SchwabQuotesResponse>(
+      `${MARKET_BASE}/quotes?${params.toString()}`,
+      tokens
+    );
+  } catch (err) {
+    // If batch fails (likely a bad symbol), fall back to individual fetches
+    console.warn('[getQuotes] Batch request failed, falling back to individual symbol fetches:', err);
+    const result: SchwabQuotesResponse = {};
+    const CHUNK_SIZE = 10; // fetch in small batches to limit API calls
+
+    for (let i = 0; i < validSymbols.length; i += CHUNK_SIZE) {
+      const chunk = validSymbols.slice(i, i + CHUNK_SIZE);
+      const chunkParams = new URLSearchParams({
+        symbols: chunk.join(','),
+        fields: 'quote,reference',
+        indicative: 'false',
+      });
+      try {
+        const chunkResult = await schwabFetch<SchwabQuotesResponse>(
+          `${MARKET_BASE}/quotes?${chunkParams.toString()}`,
+          tokens
+        );
+        Object.assign(result, chunkResult);
+      } catch (chunkErr) {
+        // If a chunk fails, try each symbol individually
+        for (const sym of chunk) {
+          try {
+            const singleParams = new URLSearchParams({
+              symbols: sym,
+              fields: 'quote,reference',
+              indicative: 'false',
+            });
+            const singleResult = await schwabFetch<SchwabQuotesResponse>(
+              `${MARKET_BASE}/quotes?${singleParams.toString()}`,
+              tokens
+            );
+            Object.assign(result, singleResult);
+          } catch {
+            console.warn(`[getQuotes] Skipping unresolvable symbol: ${sym}`);
+          }
+        }
+      }
+    }
+    return result;
+  }
 }
 
 // ─── Options chain endpoint ───────────────────────────────────────────────────

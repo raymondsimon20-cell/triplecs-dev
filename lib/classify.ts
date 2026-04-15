@@ -31,7 +31,7 @@ export const INCOME_SYMBOLS = new Set([
   'CONY', 'MSFO', 'NFLY', 'AMZY', 'GOOGY', 'DISO', 'SQY', 'SMCY',
   'YMAX', 'YMAG', 'ULTY',
   // Defiance
-  'QQQY', 'JEPY', 'IWMY', 'SPYY', 'DEFI', 'WDTE', 'BDTE', 'IDTE', 'QDTU',
+  'QQQY', 'JEPY', 'IWMY', 'DEFI', 'WDTE', 'BDTE', 'IDTE', 'QDTU',
   // Roundhill
   'XDTE', 'QDTE', 'RDTE', 'YBTC', 'WEEK', 'RDTE',
   // RexShares
@@ -194,7 +194,7 @@ const FUND_FAMILY_MAP: Record<string, FundFamily> = {
   SMCY: 'Yieldmax', YMAX: 'Yieldmax', YMAG: 'Yieldmax', ULTY: 'Yieldmax',
   KLIP: 'Yieldmax',
   // Defiance
-  QQQY: 'Defiance', JEPY: 'Defiance', IWMY: 'Defiance', SPYY: 'Defiance',
+  QQQY: 'Defiance', JEPY: 'Defiance', IWMY: 'Defiance',
   DEFI: 'Defiance', WDTE: 'Defiance', BDTE: 'Defiance', IDTE: 'Defiance', QDTU: 'Defiance',
   // Roundhill
   XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', YBTC: 'Roundhill', WEEK: 'Roundhill',

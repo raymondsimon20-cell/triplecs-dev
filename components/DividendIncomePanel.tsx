@@ -484,7 +484,7 @@ const MONTHLY_PAYERS = new Set([
   'CLM', 'CRF', 'OXLC', 'GOF', 'PTY', 'RIV', 'JEPI', 'JEPQ', 'QQQY', 'JEPY',
   'XDTE', 'QDTE', 'RDTE', 'TSLY', 'NVDY', 'CONY', 'YMAX', 'YMAG', 'ULTY',
   'FEPI', 'AIPI', 'WDTE', 'BDTE', 'IDTE', 'KLIP', 'DISO', 'SQY', 'AMZY', 'GOOGY',
-  'MSFO', 'APLY', 'SMCY', 'NFLY', 'OARK', 'JPMO', 'IWMY', 'SPYY', 'WEEK',
+  'MSFO', 'APLY', 'SMCY', 'NFLY', 'OARK', 'JPMO', 'IWMY', 'WEEK',
 ]);
 
 const QUARTERLY_PAYERS = new Set([

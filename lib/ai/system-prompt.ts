@@ -102,7 +102,7 @@ PILLAR 3 — CORE / INCOME
 
 FUND FAMILIES (income generators):
   Yieldmax    : TSLY, MSFO, APLY, NVDY, AMZY, GOOGY, NFLY, OARK, MSFO, AMZY, PLTY, etc.
-  Defiance    : QQQY, SPYY, IWMY, JEPY, etc.
+  Defiance    : QQQY, IWMY, JEPY, etc.
   Roundhill   : ULTY, XDTE, QDTE, RDTE, etc.
   RexShares   : FEPI, REZI, SOXY, etc.
 
@@ -166,8 +166,7 @@ When equity is tight and margin pressure must be relieved, sell in THIS order
    5    APLY      80%     $0.80
    6    OARK      75%     $0.75
    7    QQQY      65%     $0.65
-   8    SPYY      65%     $0.65
-   9    XDTE      60%     $0.60
+   8    XDTE      60%     $0.60
   10    NVDY      55%     $0.55
   11    FEPI      50%     $0.50
   12    GOF       40%     $0.40
@@ -314,9 +313,8 @@ INCOME — HIGH YIELD MONTHLY: YieldMax single-stock covered-call series:
 
 INCOME — HIGH YIELD MONTHLY: Index covered-call funds:
   QQQY   Nasdaq 100 (Defiance)        — ~60% annualized yield; index-based
-  SPYY   S&P 500 (Defiance)           — ~50% annualized yield; index-based
   IWMY   Russell 2000 (Defiance)      — ~70% annualized yield; small-cap
-  JEPY   S&P 500 (Defiance)           — alternative to SPYY
+  JEPY   S&P 500 (Defiance)           — Defiance S&P 500 covered-call income
   FEPI   Equity premium income (RexShares) — top 15 tech + covered calls
   AIPI   AI/tech premium income (RexShares) — AI-focused, high yield
   SPYI   S&P 500 enhanced income (Neos) — tax-efficient; good for taxable
@@ -373,7 +371,7 @@ THE 1/3 RULE — mandatory whenever income positions are trimmed or sold:
     the gross proceeds and immediately rotate into Triple ETFs (UPRO, TQQQ, SPXL,
     or another approved triple).
   • Preferred trim sources (most equity-efficient to sell): Defiance family (QQQY,
-    SPYY, IWMY), RexShares (FEPI, REZI), Roundhill (XDTE, QDTE, ULTY) — all carry
+    IWMY), RexShares (FEPI, REZI), Roundhill (XDTE, QDTE, ULTY) — all carry
     ~50-65% maintenance, so selling them preserves more equity than selling 30%
     maintenance names.
   • The remaining 2/3 of proceeds stays in cash, goes to margin paydown, or is

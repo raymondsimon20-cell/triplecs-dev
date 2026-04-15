@@ -40,7 +40,7 @@ const FREQ_MAP: Record<string, Frequency> = {
   FBY: 'monthly', GDXY: 'monthly', XOMO: 'monthly', TSMY: 'monthly',
 
   // Defiance
-  QQQY: 'monthly', SPYY: 'monthly', IWMY: 'monthly', JEPY: 'monthly',
+  QQQY: 'monthly', IWMY: 'monthly', JEPY: 'monthly',
   QDTY: 'monthly', SDTY: 'monthly',
 
   // RexShares / Neos

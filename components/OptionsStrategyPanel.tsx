@@ -145,7 +145,7 @@ function premiumQualityScore(pos: EnrichedPosition): number {
 /** Candidate tier for sell-put (Tier 1 = ideal, Tier 2 = good, Tier 3 = caution) */
 function candidateTier(symbol: string, price: number): { tier: 1|2|3; label: string; color: string } {
   const TIER1 = new Set(['TQQQ','UPRO','QQQY','XDTE','FEPI','JEPI','JEPQ','SPYI','AIPI','SPXL','KLIP']);
-  const TIER2 = new Set(['QQQ','NVDA','SPYY','IWMY','JEPY','QDVO','SPYG']);
+  const TIER2 = new Set(['QQQ','NVDA','IWMY','JEPY','QDVO','SPYG']);
   if (TIER1.has(symbol)) return { tier: 1, label: 'Tier 1', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/25' };
   if (TIER2.has(symbol) || (price > 60 && price < 200)) return { tier: 2, label: 'Tier 2', color: 'text-blue-400 bg-blue-500/10 border-blue-500/25' };
   return { tier: 3, label: 'Tier 3', color: 'text-orange-400 bg-orange-500/10 border-orange-500/25' };

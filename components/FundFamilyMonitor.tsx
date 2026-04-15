@@ -34,7 +34,7 @@ const FUND_FAMILIES: Record<string, string> = {
   FBY: 'YieldMax', FIAT: 'YieldMax', FIVY: 'YieldMax', TSMY: 'YieldMax',
 
   // Defiance ETFs
-  QQQY: 'Defiance', SPYY: 'Defiance', IWMY: 'Defiance', JEPY: 'Defiance',
+  QQQY: 'Defiance', IWMY: 'Defiance', JEPY: 'Defiance',
   QDTY: 'Defiance', SDTY: 'Defiance', DFNV: 'Defiance', IWMY2: 'Defiance',
 
   // Roundhill Investments
