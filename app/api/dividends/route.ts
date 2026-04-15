@@ -104,8 +104,8 @@ export async function GET(req: Request) {
             console.log(`[Dividends] ALL types returned ${txns.length} txns`);
             if (txns.length > 0) {
               // Log all unique type values to help debug
-              const uniqueTypes = [...new Set(txns.map((t: Record<string, unknown>) =>
-                (t.type ?? t.activityType ?? t.transactionType ?? 'NO_TYPE') as string
+              const uniqueTypes = [...new Set(txns.map(t =>
+                t.type ?? t.activityType ?? t.transactionType ?? 'NO_TYPE'
               ))];
               console.log(`[Dividends] Unique transaction types found: ${uniqueTypes.join(', ')}`);
             }
