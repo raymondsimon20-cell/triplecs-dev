@@ -25,10 +25,11 @@
 import { useState } from 'react';
 import {
   Shield, DollarSign, Layers, ChevronDown, ChevronUp,
-  AlertTriangle, CheckCircle, Clock, TrendingDown,
+  AlertTriangle, CheckCircle, Clock, TrendingDown, RefreshCw,
 } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { TRIPLES_SYMBOLS, INCOME_SYMBOLS, CORNERSTONE_SYMBOLS } from '@/lib/classify';
+import { PutChainInline } from '@/components/PutChainInline';
 
 // ─── OCC Option Symbol Parser ─────────────────────────────────────────────────
 
@@ -139,6 +140,36 @@ function premiumQualityScore(pos: EnrichedPosition): number {
   else if (iv > 15) score += 10;
 
   return Math.max(0, Math.min(100, score));
+}
+
+/** Candidate tier for sell-put (Tier 1 = ideal, Tier 2 = good, Tier 3 = caution) */
+function candidateTier(symbol: string, price: number): { tier: 1|2|3; label: string; color: string } {
+  const TIER1 = new Set(['TQQQ','UPRO','QQQY','XDTE','FEPI','JEPI','JEPQ','SPYI','AIPI','SPXL','KLIP']);
+  const TIER2 = new Set(['QQQ','NVDA','SPYY','IWMY','JEPY','QDVO','SPYG']);
+  if (TIER1.has(symbol)) return { tier: 1, label: 'Tier 1', color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/25' };
+  if (TIER2.has(symbol) || (price > 60 && price < 200)) return { tier: 2, label: 'Tier 2', color: 'text-blue-400 bg-blue-500/10 border-blue-500/25' };
+  return { tier: 3, label: 'Tier 3', color: 'text-orange-400 bg-orange-500/10 border-orange-500/25' };
+}
+
+/** Estimate approximate delta from % OTM (rough Black-Scholes heuristic) */
+function approxDelta(otmPct: number): number {
+  // Very rough: ATM ≈ 0.50; each 5% OTM ≈ -0.08 delta
+  return Math.max(0.05, Math.round((0.50 - otmPct / 100 * 1.6) * 100) / 100);
+}
+
+/** Signal for a sold put: close, roll, or hold */
+function soldPutSignal(dte: number, profitPct: number): {
+  label: string; color: string; bg: string; icon: 'close'|'roll'|'hold'|'manage';
+} {
+  if (profitPct >= 75)
+    return { label: 'Close (75%+)', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/25', icon: 'close' };
+  if (dte <= 14 && profitPct < 75)
+    return { label: 'Roll Now', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/25', icon: 'roll' };
+  if (dte <= 21 && profitPct >= 25)
+    return { label: 'Roll Soon', color: 'text-orange-400', bg: 'bg-orange-500/10 border-orange-500/25', icon: 'roll' };
+  if (profitPct < -30)
+    return { label: 'Manage', color: 'text-red-400', bg: 'bg-red-500/10 border-red-500/25', icon: 'manage' };
+  return { label: 'Hold', color: 'text-[#7c82a0]', bg: 'bg-[#22263a] border-[#3d4260]', icon: 'hold' };
 }
 
 // ─── Section 1: Put Protection Tracker ───────────────────────────────────────
@@ -303,37 +334,40 @@ function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPo
                   if (!parsed) return null;
                   const contracts = pos.shortQuantity;
                   const assignmentRisk = parsed.strike * 100 * contracts;
-                  // Sold puts: gain when premium decays. Cost is what we received; current value is what we'd pay to close.
-                  const gl = pos.gainLoss; // positive = winning (premium decaying)
+                  const gl = pos.gainLoss;
                   const glPct = pos.gainLossPercent;
-                  // Close signal: if we've made ~75% of the premium back
-                  const closeSignal = glPct >= 75;
+                  const sig = soldPutSignal(parsed.daysToExpiry, glPct);
+                  const dteColor = parsed.daysToExpiry <= 14 ? 'text-red-400' : parsed.daysToExpiry <= 21 ? 'text-orange-400' : 'text-[#7c82a0]';
                   return (
-                    <tr key={pos.instrument.symbol} className="hover:bg-[#22263a]/60">
+                    <tr key={pos.instrument.symbol} className={`hover:bg-[#22263a]/60 ${
+                      sig.icon === 'roll' ? 'bg-orange-500/5' :
+                      sig.icon === 'close' ? 'bg-emerald-500/5' :
+                      sig.icon === 'manage' ? 'bg-red-500/5' : ''
+                    }`}>
                       <td className="px-3 py-2">
                         <div className="font-mono font-semibold text-white">{parsed.underlying} Put</div>
-                        <div className="text-[10px] text-[#7c82a0]">Sold / Short</div>
+                        <div className="text-[10px] text-[#7c82a0]">Short · {contracts} contract{contracts !== 1 ? 's' : ''}</div>
                       </td>
                       <td className="px-3 py-2 text-right font-mono text-white">${parsed.strike.toFixed(0)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-[#7c82a0]">{parsed.daysToExpiry}d</td>
-                      <td className="px-3 py-2 text-right text-[#e8eaf0]">{contracts}</td>
+                      <td className={`px-3 py-2 text-right font-mono font-semibold ${dteColor}`}>
+                        {parsed.daysToExpiry}d
+                        {parsed.daysToExpiry <= 21 && <div className="text-[10px] opacity-70">⚠ gamma risk</div>}
+                      </td>
                       <td className="px-3 py-2 text-right font-mono text-orange-300">
                         {fmt$(assignmentRisk)}
                         <div className="text-[10px] opacity-70">if assigned</div>
                       </td>
                       <td className={`px-3 py-2 text-right font-mono font-semibold ${gl >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                         {fmt$(gl)}
-                        <div className="text-[10px] opacity-70">{glPct.toFixed(0)}% recovered</div>
+                        <div className="text-[10px] opacity-70">{glPct.toFixed(0)}% captured</div>
                       </td>
                       <td className="px-3 py-2 text-right">
-                        {closeSignal ? (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-emerald-500/10 border-emerald-500/25 text-emerald-400">
-                            Close (75%+)
-                          </span>
-                        ) : (
-                          <span className="px-2 py-0.5 rounded-full text-[10px] font-semibold border bg-[#22263a] border-[#3d4260] text-[#7c82a0]">
-                            Hold
-                          </span>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold border ${sig.bg} ${sig.color}`}>
+                          {sig.icon === 'roll' && <RefreshCw className="w-2.5 h-2.5" />}
+                          {sig.label}
+                        </span>
+                        {sig.icon === 'roll' && (
+                          <div className="text-[9px] text-orange-400/70 mt-0.5">→ Roll to 60–90 DTE</div>
                         )}
                       </td>
                     </tr>
@@ -346,82 +380,96 @@ function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPo
       )}
 
       {/* Sell-put candidates */}
-      <div className="space-y-2">
-        <h4 className="text-xs font-semibold text-white">
-          Sell-Put Candidates
-          <span className="ml-2 text-[#4a5070] font-normal">ranked by premium quality score</span>
-        </h4>
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <h4 className="text-xs font-semibold text-white">
+            Sell-Put Candidates
+            <span className="ml-2 text-[#4a5070] font-normal">from current holdings</span>
+          </h4>
+          <div className="flex items-center gap-2 text-[10px] text-[#4a5070]">
+            <span className="text-emerald-400">Tier 1</span> ideal ·
+            <span className="text-blue-400">Tier 2</span> good ·
+            <span className="text-orange-400">Tier 3</span> caution
+          </div>
+        </div>
 
         {candidates.length === 0 ? (
           <p className="text-xs text-[#4a5070] py-2">No suitable sell-put candidates in current positions.</p>
         ) : (
-          <div className="overflow-x-auto rounded-lg border border-[#2d3248]">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="bg-[#22263a] text-[#7c82a0] uppercase tracking-wide text-[10px]">
-                  <th className="text-left px-3 py-2">Symbol</th>
-                  <th className="text-right px-3 py-2">Current</th>
-                  <th className="text-right px-3 py-2">Strike (−10%)</th>
-                  <th className="text-right px-3 py-2">Assignment Risk</th>
-                  <th className="text-right px-3 py-2">IV</th>
-                  <th className="text-right px-3 py-2">Score</th>
-                  <th className="text-right px-3 py-2">Notes</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#2d3248]">
-                {candidates.map(({ pos, score, price }) => {
-                  const suggestedStrike = price * 0.90;
-                  const assignmentRisk = suggestedStrike * 100; // 1 contract = 100 shares
-                  const iv = pos.quote?.volatility ?? 0;
-                  const symbol = pos.instrument.symbol;
+          <div className="space-y-2">
+            {candidates.map(({ pos, score, price }) => {
+              const iv    = pos.quote?.volatility ?? 0;
+              const symbol = pos.instrument.symbol;
+              const isTriple = TRIPLES_SYMBOLS.has(symbol);
+              const isIncome = INCOME_SYMBOLS.has(symbol);
+              const tier  = candidateTier(symbol, price);
+              const scoreColor = score >= 70 ? 'text-emerald-400' : score >= 50 ? 'text-yellow-400' : 'text-orange-400';
 
-                  const isTriple = TRIPLES_SYMBOLS.has(symbol);
-                  const isIncome = INCOME_SYMBOLS.has(symbol);
-                  const isHighPrice = price > 200;
+              // Three strike scenarios
+              const strikes = [
+                { label: 'Conservative', otm: 15, delta: approxDelta(15) },
+                { label: 'Moderate',     otm: 10, delta: approxDelta(10) },
+                { label: 'Aggressive',   otm:  5, delta: approxDelta(5)  },
+              ];
 
-                  const scoreColor = score >= 70
-                    ? 'text-emerald-400'
-                    : score >= 50
-                    ? 'text-yellow-400'
-                    : 'text-orange-400';
+              return (
+                <div key={symbol} className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3 space-y-2.5">
+                  {/* Header row */}
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="font-mono font-semibold text-white text-sm">{symbol}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded border font-semibold ${tier.color}`}>{tier.label}</span>
+                    <span className="text-xs text-[#7c82a0]">
+                      {isTriple ? '3× Leveraged' : isIncome ? 'Income ETF' : 'Equity'} · ${price.toFixed(2)}
+                    </span>
+                    {iv > 0 && (
+                      <span className={`text-xs ml-auto ${iv > 40 ? 'text-emerald-400' : iv > 25 ? 'text-blue-400' : 'text-[#7c82a0]'}`}>
+                        IV {iv.toFixed(0)}% {iv > 40 ? '↑ rich' : iv > 25 ? 'ok' : '↓ thin'}
+                      </span>
+                    )}
+                    <span className={`text-xs font-bold ${scoreColor}`}>Score {score}</span>
+                  </div>
 
-                  return (
-                    <tr key={symbol} className="hover:bg-[#22263a]/60">
-                      <td className="px-3 py-2">
-                        <div className="font-mono font-semibold text-white">{symbol}</div>
-                        <div className="text-[10px] text-[#7c82a0]">
-                          {isTriple ? '3x Leveraged' : isIncome ? 'Income ETF' : 'Equity'}
+                  {/* Strike scenarios */}
+                  <div className="grid grid-cols-3 gap-2">
+                    {strikes.map(({ label, otm, delta }) => {
+                      const strike  = price * (1 - otm / 100);
+                      const assign  = strike * 100;
+                      const isMod   = otm === 10;
+                      return (
+                        <div key={label} className={`rounded p-2 space-y-0.5 text-[10px] ${isMod ? 'bg-violet-500/10 border border-violet-500/20' : 'bg-[#1a1d27]'}`}>
+                          <div className={`font-semibold ${isMod ? 'text-violet-300' : 'text-[#7c82a0]'}`}>{label}</div>
+                          <div className="text-white font-mono">${strike.toFixed(2)} strike</div>
+                          <div className="text-[#7c82a0]">−{otm}% OTM · Δ {delta.toFixed(2)}</div>
+                          <div className="text-[#4a5070]">~{(100 - delta * 100).toFixed(0)}% PoP</div>
+                          <div className={`font-mono ${assign > 20000 ? 'text-orange-400' : 'text-[#7c82a0]'}`}>
+                            ${(assign / 1000).toFixed(1)}k/contract
+                          </div>
                         </div>
-                      </td>
-                      <td className="px-3 py-2 text-right font-mono text-white">${price.toFixed(2)}</td>
-                      <td className="px-3 py-2 text-right font-mono text-blue-400">
-                        ${suggestedStrike.toFixed(2)}
-                      </td>
-                      <td className={`px-3 py-2 text-right font-mono ${isHighPrice ? 'text-red-400' : 'text-[#7c82a0]'}`}>
-                        {fmt$(assignmentRisk)}
-                        <div className="text-[10px] opacity-70">per contract</div>
-                      </td>
-                      <td className="px-3 py-2 text-right text-[#7c82a0]">
-                        {iv > 0 ? `${iv.toFixed(0)}%` : '—'}
-                      </td>
-                      <td className={`px-3 py-2 text-right font-bold ${scoreColor}`}>{score}</td>
-                      <td className="px-3 py-2 text-right text-[10px] text-[#4a5070]">
-                        {isHighPrice && <span className="text-red-400">⚠ High assign risk</span>}
-                        {isTriple && !isHighPrice && <span className="text-emerald-400">✓ Preferred</span>}
-                        {isIncome && !isTriple && <span className="text-blue-400">✓ Indexed</span>}
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                      );
+                    })}
+                  </div>
+
+                  {/* DTE recommendation */}
+                  <div className="text-[10px] text-[#4a5070] flex items-center gap-3">
+                    <span>Optimal DTE: <span className="text-white">60–90 days</span></span>
+                    <span>Max contracts: <span className="text-white">{price < 60 ? '3' : price < 150 ? '2' : '1'}</span></span>
+                    <span>Assignment: <span className={price > 200 ? 'text-orange-400' : 'text-white'}>
+                      {price < 60 ? 'manageable' : price < 150 ? 'moderate' : 'large — size carefully'}
+                    </span></span>
+                  </div>
+
+                  {/* Live chain link */}
+                  <PutChainInline ticker={symbol} />
+                </div>
+              );
+            })}
           </div>
         )}
 
-        <div className="text-[10px] text-[#4a5070] space-y-0.5">
-          <p>Score 70+: excellent candidate. 50-70: good. Below 50: caution.</p>
-          <p>Sell 1 LEAP put (1-2 years out) on your highest-scored name. Premium received lowers cost basis and knockdowns margin interest.</p>
+        <div className="text-[10px] text-[#4a5070] space-y-0.5 pt-1">
+          <p>PoP = estimated probability of expiring worthless (delta-based approximation). Actual PoP depends on IV and time.</p>
           <p>Vol 6: "I always sell puts on stocks I WANT to own anyway — assignment is the goal, not the risk."</p>
+          <p>Roll rule: when DTE &lt; 21 and profit between 25–75%, roll to 60–90 DTE rather than holding through gamma risk zone.</p>
         </div>
       </div>
     </div>

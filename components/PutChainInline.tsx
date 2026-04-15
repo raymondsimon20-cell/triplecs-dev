@@ -49,6 +49,18 @@ function isSweetSpot(p: PutContract): boolean {
   return p.dte >= 45 && p.dte <= 150 && p.otmPct >= 5 && p.otmPct <= 25 && !p.inTheMoney;
 }
 
+/** Delta sweet spot for put selling: −0.20 to −0.35 */
+function isDeltaSweetSpot(p: PutContract): boolean {
+  const abs = Math.abs(p.delta);
+  return abs >= 0.18 && abs <= 0.38;
+}
+
+/** Probability of profit ≈ 1 − |delta| (rough heuristic) */
+function probOfProfit(p: PutContract): number {
+  if (!p.delta) return 0;
+  return Math.round((1 - Math.abs(p.delta)) * 100);
+}
+
 export function PutChainInline({ ticker }: PutChainInlineProps) {
   const [open,    setOpen]    = useState(false);
   const [loading, setLoading] = useState(false);
@@ -138,8 +150,9 @@ export function PutChainInline({ ticker }: PutChainInlineProps) {
               </div>
 
               {/* Vol 6 reminder */}
-              <div className="px-4 py-2 text-[10px] text-[#4a5070] border-b border-[#2d3248]">
-                Vol 6 rules: LEAP puts (45–150 DTE) · Close at 75% profit (when mid = Close Target) · Sell on down days
+              <div className="px-4 py-2 text-[10px] text-[#4a5070] border-b border-[#2d3248] flex flex-wrap gap-x-4 gap-y-0.5">
+                <span>Vol 6: LEAP puts (45–150 DTE) · Close at 75% profit · Sell on down days</span>
+                <span className="text-violet-300">Δ sweet spot: −0.20 to −0.35 · ~65–80% PoP</span>
               </div>
 
               {/* Contracts by expiry */}
@@ -155,8 +168,8 @@ export function PutChainInline({ ticker }: PutChainInlineProps) {
                         <th className="text-left px-3 py-2 font-medium">Exp / DTE</th>
                         <th className="text-right px-2 py-2 font-medium">Strike</th>
                         <th className="text-right px-2 py-2 font-medium">OTM%</th>
-                        <th className="text-right px-2 py-2 font-medium">Bid</th>
-                        <th className="text-right px-2 py-2 font-medium">Ask</th>
+                        <th className="text-right px-2 py-2 font-medium">Delta</th>
+                        <th className="text-right px-2 py-2 font-medium">PoP</th>
                         <th className="text-right px-2 py-2 font-medium">Mid</th>
                         <th className="text-right px-2 py-2 font-medium">Close@75%</th>
                         <th className="text-right px-2 py-2 font-medium">Breakeven</th>
@@ -167,12 +180,16 @@ export function PutChainInline({ ticker }: PutChainInlineProps) {
                     <tbody>
                       {Object.entries(byExp).flatMap(([exp, contracts]) =>
                         contracts.map((p, i) => {
-                          const sweet = isSweetSpot(p);
+                          const sweet      = isSweetSpot(p);
+                          const deltaSweet = isDeltaSweetSpot(p);
+                          const pop        = probOfProfit(p);
+                          const ideal      = sweet && deltaSweet;
                           return (
                             <tr
                               key={p.symbol}
                               className={`border-b border-[#1a1d27] ${
-                                sweet ? 'bg-blue-500/5' : 'hover:bg-[#0f1117]'
+                                ideal  ? 'bg-violet-500/8' :
+                                sweet  ? 'bg-blue-500/5' : 'hover:bg-[#0f1117]'
                               }`}
                             >
                               {i === 0 ? (
@@ -188,8 +205,17 @@ export function PutChainInline({ ticker }: PutChainInlineProps) {
                               <td className={`text-right px-2 py-2 font-mono ${p.otmPct >= 5 && p.otmPct <= 25 ? 'text-blue-300' : 'text-[#7c82a0]'}`}>
                                 {fmtPct(p.otmPct)}
                               </td>
-                              <td className="text-right px-2 py-2 font-mono text-[#7c82a0]">${fmt2(p.bid)}</td>
-                              <td className="text-right px-2 py-2 font-mono text-[#7c82a0]">${fmt2(p.ask)}</td>
+                              <td className={`text-right px-2 py-2 font-mono ${
+                                deltaSweet ? 'text-violet-300 font-semibold' : 'text-[#7c82a0]'
+                              }`}>
+                                {p.delta ? p.delta.toFixed(2) : '—'}
+                                {ideal && <span className="ml-1 text-[9px] text-violet-400">★</span>}
+                              </td>
+                              <td className={`text-right px-2 py-2 font-mono ${
+                                pop >= 70 ? 'text-emerald-400' : pop >= 60 ? 'text-blue-400' : 'text-[#7c82a0]'
+                              }`}>
+                                {pop > 0 ? `${pop}%` : '—'}
+                              </td>
                               <td className="text-right px-2 py-2 font-mono text-emerald-400 font-semibold">${fmt2(p.mid)}</td>
                               <td className="text-right px-2 py-2 font-mono text-orange-400">${fmt2(p.closeTarget75)}</td>
                               <td className="text-right px-2 py-2 font-mono text-[#7c82a0]">${fmt2(p.breakeven)}</td>

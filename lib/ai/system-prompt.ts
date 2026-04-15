@@ -210,25 +210,74 @@ SELLING PUTS FOR INCOME (LEAP PUT STRATEGY)
 ════════════════════════════════════════════════════════
 
 CONCEPT: Sell cash-secured or margin-secured put options to generate premium income.
-If assigned, you acquire shares at a favorable cost basis.
+If assigned, you acquire shares at a favorable cost basis — this is the PLAN, not the risk.
 
-TARGET CRITERIA (all should be true for ideal candidates):
-  1. Low share price:      < $30–60/share preferred (assignment risk is manageable)
-  2. High implied vol (IV): elevated IV = fat premiums
-  3. Indexed underlying:   ETFs or stocks tied to major indexes (UPRO, TQQQ, QQQ, SPY, NVDA)
-  4. Want-to-own names:    only sell puts on positions you'd happily hold if assigned
-  5. Low maintenance:      prefer low-maintenance underlyings to minimize equity drag
+ENTRY PARAMETERS:
+  DTE target:    45–90 days optimal for theta decay vs gamma balance
+    - 60–90d: smooth theta decay; ideal for the Vol 6 LEAP approach
+    - 45–60d: faster decay but more gamma risk near expiry
+    - >90d:   very slow decay, massive premium — only use on high-conviction names
+  Delta target:  −0.20 to −0.30 for conservative (70–80% prob of expiring worthless)
+                 −0.30 to −0.40 for aggressive (60–70% probability)
+    - 0.25 delta = ~75% probability of profit — standard Triple C entry
+    - Use lower delta (0.15–0.20) when IV is already elevated or market is overbought
+  IV preference: Sell when IV is elevated (fear days, after a pullback) — premium is 2–3× richer
+    - IV rank > 50% is ideal: you're selling expensive vol, not cheap vol
+    - Never buy insurance when VIX > 30; never sell puts cheap when VIX < 15
+  Strike selection:
+    - Conservative: 10–15% OTM (≈ 0.20–0.25 delta) — higher probability, lower premium
+    - Moderate: 7–10% OTM (≈ 0.25–0.30 delta) — balanced
+    - Aggressive: 5% OTM (≈ 0.35–0.40 delta) — only on highest-conviction, want-to-own names
+  Position size: 1–3 contracts maximum per underlying to limit assignment obligation
+    - Assignment = strike × 100 × contracts — size so you CAN absorb assignment
+    - Example: TQQQ at $50 → 1 contract = $5,000 assignment obligation (manageable)
+
+CANDIDATE TIERS:
+  TIER 1 — IDEAL (low share price, indexed, low maintenance, want to own):
+    TQQQ  (~$40–80)    — Nasdaq 3× LEAP; assignment = +3× Nasdaq exposure (desirable)
+    UPRO  (~$70–100)   — S&P 500 3× LEAP; broadest index put candidate
+    QQQY  (~$15–25)    — very low price; indexed; assignment = income position; manageable
+    XDTE  (~$20–30)    — low price; weekly payer; assignment = weekly income stream
+    FEPI  (~$20–35)    — income ETF; want to own; premium + assignment both good outcomes
+    JEPI  (~$55–60)    — low maint (30%); institutional quality; want to own for income
+    JEPQ  (~$50–60)    — same profile as JEPI; Nasdaq tilt; good LEAP candidate
+    SPYI  (~$45–55)    — tax-efficient income ETF; good assignment outcome
+  TIER 2 — GOOD (moderate price or single-stock, use smaller size):
+    QQQ   (~$440–500)  — max 1 contract; large assignment but pure index; no binary risk
+    SPXL  (~$100–150)  — S&P 3× alternative; manageable with 1 contract
+    NVDA  (~$100–150)  — single stock; high IV = fat premium; 1 contract max; earnings risk
+  TIER 3 — CAUTION (high price or high binary risk):
+    SPY   (~$550+)     — $55,000+/contract; only 1 contract; very large assignment
+    TSLA              — single-stock binary; only if willing to own 100 shares at strike
+
+MANAGEMENT RULES:
+  • CLOSE at 75% profit: premium reaches 25% of original collected amount
+    Example: sold for $4.00 → close when ask = $1.00 (you've kept $3.00 = 75%)
+  • ROLL when DTE < 21 AND profit is 25–74%:
+    - Buy to close current put + sell to open new put at 60–90 DTE (same or lower strike)
+    - Execute as a single spread order to minimize slippage
+    - Rolling captures fresh premium while extending time; avoids gamma risk near expiry
+  • DO NOT roll into a loser: if put is deep ITM with unrealized loss > 50%,
+    close for loss rather than rolling — do not compound a bad trade
+  • Never roll into earnings: avoid expirations spanning major earnings dates
+  • Sell on DOWN days: premiums are 30–50% richer when market drops 1–2%; patience pays off
+  • Sell OTM for conservative income; ATM only on names you strongly want to own at that price
+
+ASSIGNMENT MANAGEMENT (if put is exercised):
+  • You BUY 100 shares per contract at strike — this is the original plan, not a failure
+  • Post-assignment options:
+    a) Hold as income position (if income ETF like FEPI, JEPI, XDTE) — collect dividends
+    b) Sell a covered call at or above your cost basis to recover premium further (wheel)
+    c) Close and redeploy if the thesis has materially changed
+  • Assigned on a Triple (TQQQ/UPRO): hold, count toward Triples pillar allocation
+  • The "wheel" (sell put → get assigned → sell covered call) = consistent income generation
+    on want-to-own positions; each leg further reduces effective cost basis
 
 AVOID:
-  • High share-price contracts: NVDA at $800 = $80,000 assignment obligation per contract — keep VERY small
-  • Single stocks with binary risk (earnings, FDA, etc.) unless willing to own at that price
-
-MANAGEMENT:
-  • LEAP puts (>90 DTE) preferred — move slower (lower gamma), fetch larger premiums, better cost basis
-  • Close at 75% profit (when remaining premium = 25% of original collected premium)
-  • Example: sell put for $4.00 → close when bid reaches $1.00 (75% earned = $3.00 captured)
-  • Sell on DOWN days / elevated volatility — premiums are higher on fear days
-  • Sell OTM for conservative income; ATM only if strongly want-to-own at that strike
+  • High share-price names where assignment = $50,000+ per contract (unless intentional)
+  • Single stocks with binary event risk (FDA, earnings, lawsuits) unless position-sized correctly
+  • Selling puts when VIX < 12 — insurance is cheap but premiums are too thin to be worth the risk
+  • Naked puts in excess of available margin — size so assignment is fully financeable
 
 ════════════════════════════════════════════════════════
 APPROVED FUND UNIVERSE — NEW POSITION SUGGESTIONS
