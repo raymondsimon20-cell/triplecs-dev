@@ -12,10 +12,14 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  // Schwab transactions API requires full ISO 8601 datetime strings, not bare YYYY-MM-DD dates
-  const endDate = new Date().toISOString();                                          // e.g. 2026-04-14T23:59:59.000Z
-  const startDate = searchParams.get('start') ??
-    new Date(Date.now() - 365 * 24 * 60 * 60 * 1000).toISOString();               // 12 months ago
+  // Schwab transactions API requires full ISO 8601 datetime strings
+  // Ensure the date range is valid — Schwab rejects dates too far in the past
+  const now = new Date();
+  const endDate = now.toISOString();
+  const defaultStart = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+  const startDate = searchParams.get('start') ?? defaultStart.toISOString();
+
+  console.log(`[Dividends API] Fetching from ${startDate} to ${endDate}`);
 
   try {
     const tokens = await getTokens();
@@ -28,15 +32,27 @@ export async function GET(req: Request) {
     const client = await createClient();
     const allDividends = await Promise.all(
       accountNums.map(async ({ hashValue }) => {
-        const txns = await client.getTransactions(hashValue, startDate, endDate);
-        return txns
-          .filter((t) => t.type === 'DIVIDEND_OR_INTEREST' && t.netAmount > 0)
-          .map((t) => ({
+        try {
+          const txns = await client.getTransactions(hashValue, startDate, endDate);
+          console.log(`[Dividends] Account ${hashValue.slice(0, 6)}… returned ${txns.length} transactions`);
+          // Filter for dividend/interest transactions with positive amounts
+          const divTxns = txns.filter((t) => {
+            const isDividend = t.type === 'DIVIDEND_OR_INTEREST'
+              || t.type === 'RECEIVE_AND_DELIVER'
+              || (t.description && /dividend|distribution|interest/i.test(t.description));
+            return isDividend && t.netAmount > 0;
+          });
+          console.log(`[Dividends] → ${divTxns.length} dividend/interest transactions found`);
+          return divTxns.map((t) => ({
             date: t.time.split('T')[0],
             description: t.description,
             amount: t.netAmount,
             symbol: t.transferItems?.[0]?.instrument?.symbol ?? 'UNKNOWN',
           }));
+        } catch (err) {
+          console.error(`[Dividends] Error fetching account ${hashValue.slice(0, 6)}…:`, err);
+          return [];
+        }
       })
     );
 

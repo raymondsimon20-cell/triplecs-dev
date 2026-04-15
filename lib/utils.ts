@@ -66,6 +66,7 @@ export interface StrategyTargets {
   marginWarnPct: number;    // warn threshold
   familyCapPct: number;     // max single fund family concentration
   fireNumber: number;       // monthly income FIRE target ($)
+  marginRatePct: number;    // margin interest rate % (e.g. 7.75 for 7.75%)
 }
 
 export const DEFAULT_TARGETS: StrategyTargets = {
@@ -77,4 +78,5 @@ export const DEFAULT_TARGETS: StrategyTargets = {
   marginWarnPct: 20,
   familyCapPct: 20,
   fireNumber: 10000,
+  marginRatePct: 7.75,
 };

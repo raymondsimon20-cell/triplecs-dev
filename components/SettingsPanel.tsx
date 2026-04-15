@@ -248,8 +248,16 @@ export function SettingsPanel() {
               {/* Margin thresholds */}
               <section className="space-y-4">
                 <h3 className="text-xs font-semibold text-[#7c82a0] uppercase tracking-wider">
-                  Margin Thresholds
+                  Margin Settings
                 </h3>
+                <SliderRow
+                  label="Interest rate"
+                  description="Your Schwab margin rate"
+                  value={draft.marginRatePct}
+                  min={0} max={15} step={0.25}
+                  suffix="%"
+                  onChange={(v) => set('marginRatePct', v)}
+                />
                 <SliderRow
                   label="Warn at"
                   description="Orange alert level"

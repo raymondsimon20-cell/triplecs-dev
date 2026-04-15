@@ -22,7 +22,7 @@ interface Props {
   totalValue: number;
   positions: EnrichedPosition[];
   dividendsAnnual: number;   // from /api/dividends
-  marginRate?: number;        // e.g. 0.05 for 5% (default 5% per Vol 3)
+  marginRate?: number;        // e.g. 0.0775 for 7.75% (decimal, from settings)
   familyCapPct?: number;      // fund family concentration cap (default 25%)
 }
 
@@ -358,7 +358,7 @@ export function MarginRiskPanel({
   totalValue,
   positions,
   dividendsAnnual,
-  marginRate = 0.05,
+  marginRate = 0.0775,
   familyCapPct = 25,
 }: Props) {
   const margin = Math.abs(marginBalance);

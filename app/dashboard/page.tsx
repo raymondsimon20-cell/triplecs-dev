@@ -23,7 +23,7 @@ import { PositionsTable } from '@/components/PositionsTable';
 import { PendingOrdersPanel, usePendingOrderSymbols } from '@/components/PendingOrdersPanel';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
-import { SettingsPanel } from '@/components/SettingsPanel';
+import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
 import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { fmt$, gainLossColor } from '@/lib/utils';
@@ -223,17 +223,37 @@ export default function DashboardPage() {
   });
 
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
+  const strategyTargets = useStrategyTargets();
 
   const fetchDividends = useCallback(async () => {
     try {
       const res = await fetch('/api/dividends');
-      if (res.ok) {
-        const data = await res.json() as { total?: number; monthly?: number };
-        setDividendsTotal(data.total ?? 0);
-        // Approximate monthly income from last 30-day window if available
-        setMonthlyIncome(data.monthly ?? (data.total ?? 0) / 12);
+      if (!res.ok) {
+        console.warn('[fetchDividends] API returned', res.status);
+        return;
       }
-    } catch { /* non-critical */ }
+      const data = await res.json() as {
+        dividends?: { amount: number; date: string; symbol: string }[];
+        total?: number;
+      };
+      const total = data.total ?? 0;
+      setDividendsTotal(total);
+
+      // Calculate monthly income from recent 30-day dividends if detailed data available
+      if (Array.isArray(data.dividends) && data.dividends.length > 0) {
+        const now = Date.now();
+        const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
+        const recentSum = data.dividends
+          .filter((d) => new Date(d.date).getTime() >= thirtyDaysAgo)
+          .reduce((s, d) => s + d.amount, 0);
+        // Annualize the 30-day window if we have recent data, otherwise use total/12
+        setMonthlyIncome(recentSum > 0 ? recentSum : total / 12);
+      } else {
+        setMonthlyIncome(total / 12);
+      }
+    } catch (err) {
+      console.warn('[fetchDividends] Error:', err);
+    }
   }, []);
 
   const fetchAccounts = useCallback(async (showRefreshing = false) => {
@@ -481,6 +501,8 @@ export default function DashboardPage() {
               totalValue={account.totalValue}
               positions={account.positions}
               dividendsAnnual={dividendsTotal}
+              marginRate={strategyTargets.marginRatePct / 100}
+              familyCapPct={strategyTargets.familyCapPct}
             />
           </div>
         </CollapsiblePanel>
