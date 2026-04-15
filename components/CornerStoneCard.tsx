@@ -10,7 +10,7 @@ interface CEFData {
   premiumDiscount: number;
   sharesOutstanding?: number;
   lastUpdated: string;
-  source: 'cornerstone' | 'yahoo' | 'manual' | 'unavailable';
+  source: 'cefconnect' | 'nasdaq' | 'manual' | 'unavailable';
 }
 
 function fmt$(n: number) {
