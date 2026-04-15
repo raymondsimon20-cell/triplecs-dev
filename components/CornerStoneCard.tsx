@@ -10,7 +10,7 @@ interface CEFData {
   premiumDiscount: number;
   sharesOutstanding?: number;
   lastUpdated: string;
-  source: 'cefconnect' | 'nasdaq' | 'manual' | 'unavailable';
+  source: 'cefconnect' | 'nasdaq' | 'cornerstone' | 'manual' | 'unavailable';
 }
 
 function fmt$(n: number) {
@@ -118,6 +118,9 @@ function FundCard({ fund, onRefresh }: { fund: CEFData; onRefresh: () => void })
           {hasNAV && hasPrice && <PremiumBadge pct={fund.premiumDiscount} />}
           {fund.source === 'cefconnect' && (
             <span className="text-xs text-emerald-600">● cefconnect</span>
+          )}
+          {fund.source === 'cornerstone' && (
+            <span className="text-xs text-emerald-600">● cornerstone.com</span>
           )}
           {fund.source === 'nasdaq' && (
             <span className="text-xs text-blue-500">● nasdaq</span>
