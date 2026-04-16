@@ -13,7 +13,8 @@
 
 import { useState } from 'react';
 import { ArrowRight, AlertCircle, CheckCircle, ArrowUp, ArrowDown, Copy, ExternalLink } from 'lucide-react';
-import type { EnrichedPosition, PillarSummary } from '@/lib/classify';
+import type { EnrichedPosition } from '@/lib/schwab/types';
+import type { PillarSummary } from '@/lib/classify';
 import type { StrategyTargets } from '@/lib/utils';
 import { fmt$ } from '@/lib/utils';
 
