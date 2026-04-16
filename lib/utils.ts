@@ -71,8 +71,8 @@ export interface StrategyTargets {
 
 export const DEFAULT_TARGETS: StrategyTargets = {
   triplesPct: 10,
-  cornerstonePct: 15,
-  incomePct: 60,
+  cornerstonePct: 20,
+  incomePct: 65,
   hedgePct: 5,
   marginLimitPct: 30,
   marginWarnPct: 20,
