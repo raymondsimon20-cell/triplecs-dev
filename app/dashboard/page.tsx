@@ -484,7 +484,7 @@ export default function DashboardPage() {
               <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
               <span className="text-xs text-[#4a5070]">{account.positions.length} positions</span>
             </div>
-            <PillarAllocationBar summaries={account.pillarSummary} />
+            <PillarAllocationBar summaries={account.pillarSummary} targets={strategyTargets} />
           </div>
         </div>
 
