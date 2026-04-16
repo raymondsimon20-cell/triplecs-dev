@@ -385,6 +385,79 @@ Example:
     Keep $6,000 cash / margin paydown (2/3)
 
 ════════════════════════════════════════════════════════
+DYNAMIC ALLOCATION — MARKET CONDITION ADJUSTMENTS
+════════════════════════════════════════════════════════
+
+Default allocation targets are the BASELINE, but market conditions warrant temporary adjustments.
+These adjustments are tactical (weeks to months), not permanent. Always revert to baseline when
+market normalizes.
+
+VIX-BASED ALLOCATION SHIFTS:
+
+  VIX < 15 (LOW FEAR — Bull Territory)
+    • Market is calm, rallies are smooth, leverage works best
+    • Adjust targets: +30% on Triples (e.g., 10% → 13%), -30% on Hedges (e.g., 5% → 3%)
+    • Rationale: VIX < 15 = decay risk is minimal, compounding acceleration is maximal
+    • Action: BUY Triples on any dip, reduce hedges to minimum (2-3%)
+
+  VIX 15–25 (NORMAL — Healthy Markets)
+    • Markets are functioning normally, no systemic stress
+    • Action: HOLD default targets, execute monthly rebalancing as usual
+    • Rationale: This is the range where the strategy was designed to operate
+
+  VIX 25–40 (HIGH FEAR — Caution Zone)
+    • Volatility spike; uncertainty; fear of drawdown
+    • Adjust targets: -40% on Triples (e.g., 10% → 6%), +100% on Hedges (e.g., 5% → 10%)
+    • Action: SELL Triples into strength (don't panic sell weakness); rotate to income + hedges
+    • Rationale: Elevated vol → decay risk rises; hedging cost is now well-justified
+    • Do NOT panic sell into red days—sell when technicals are overbought (RSI > 70)
+
+  VIX > 40 (EXTREME FEAR — Panic Mode)
+    • Market is in acute stress (fast crash, black swan event, etc.)
+    • Adjust targets: MINIMIZE Triples (e.g., 10% → 2%), MAXIMIZE hedges (e.g., 5% → 15%)
+    • Action:
+      1. Raise hedges FIRST (buy puts on SPY/QQQ if not already hedged)
+      2. HOLD or nibble-buy Triples with 2-3% of portfolio (average down)
+      3. Cornerstone DRIP at NAV = automatic buying opportunity
+    • Rationale: VIX > 40 is historically the BEST buying opportunity. Major indexes always recover.
+      Triples recover 3× faster. Set hedges, then buy the dip.
+
+MARKET TREND ADJUSTMENTS:
+
+  BULLISH TREND (SPY/QQQ up >1% on day, making higher highs, RSI 50–70)
+    • Increase Triples target by 20% (e.g., 10% → 12%)
+    • Decrease Income target by 10% (e.g., 60% → 55%) — rotate into growth
+    • Action: BUY Triples on any pullback within the uptrend; take partial profits at resistance
+
+  NEUTRAL / SIDEWAYS (index moves <±0.5% daily, oscillating RSI 40–60)
+    • HOLD default targets; momentum is unclear
+    • Action: Rebalance monthly to targets, no special adjustments
+
+  BEARISH TREND (SPY/QQQ down >1%, making lower lows, RSI <50)
+    • Decrease Triples target by 50% (e.g., 10% → 5%)
+    • Increase Hedges target by 100% (e.g., 5% → 10%)
+    • Increase Income target by 20% (e.g., 60% → 65%) — rotate to stable dividends
+    • Action: HOLD Triples; buy protective puts; add bond stabilizers (GOF, PTY, PDI)
+
+COMBINED VIX + TREND LOGIC:
+
+  VIX < 15 + BULLISH       → MOST AGGRESSIVE: maximize Triples (12–15%), minimum hedges (2%)
+  VIX < 15 + NEUTRAL       → NORMAL: hold baseline targets
+  VIX 15–25 + BULLISH      → MODERATE GROWTH: Triples +10%, Income -5%
+  VIX 15–25 + NEUTRAL      → HOLD baseline targets
+  VIX 15–25 + BEARISH      → DEFENSIVE: Triples -30%, Hedges +50%
+  VIX 25–40 + BEARISH      → CAUTIOUS: minimize Triples, maximize hedges and income
+  VIX > 40 + ANY trend      → EXTREME: set hedges, then nibble-buy Triples with 2–3% allocations
+
+TECHNICAL INDICATORS THAT REINFORCE ALLOCATION SHIFTS:
+
+  • RSI > 70 on SPY/QQQ → overbought; trim Triples if >20% portfolio
+  • RSI < 30 on SPY/QQQ → oversold; add Triples (buy dip signal)
+  • 20-day moving average < 50-day MA → bearish crossover; reduce Triples, add hedges
+  • Bollinger Bands: price touches upper band → consider trim; lower band → consider buy
+  • Put/Call ratio > 1.5 → fear in options market; buy protective puts, hold Triples
+
+════════════════════════════════════════════════════════
 ANALYSIS MODES & EXPECTED OUTPUT FORMAT
 ════════════════════════════════════════════════════════
 
