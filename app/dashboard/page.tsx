@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList, Eye,
+  List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList, Eye, BookOpen,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -28,7 +28,10 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
 import { WatchlistPanel } from '@/components/WatchlistPanel';
-import type { RuleAlert } from '@/lib/classify';
+import { StrategyGuide } from '@/components/StrategyGuide';
+import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
+import { SimplifiedTradeWorkflow } from '@/components/SimplifiedTradeWorkflow';
+import type { RuleAlert, PillarSummary } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { fmt$, gainLossColor } from '@/lib/utils';
 
@@ -139,6 +142,7 @@ function DataAge({ updated }: { updated: Date }) {
 
 const NAV_ITEMS = [
   { id: 'overview',     label: 'Overview',      icon: BarChart2   },
+  { id: 'market',       label: 'Market',        icon: TrendingUp  },
   { id: 'cornerstone',  label: 'Cornerstone',   icon: PieChart    },
   { id: 'margin',       label: 'Margin',        icon: Gauge       },
   { id: 'triples',      label: 'Triples',       icon: Zap         },
@@ -153,6 +157,7 @@ const NAV_ITEMS = [
   { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
   { id: 'positions',    label: 'Positions',     icon: List        },
+  { id: 'strategy',     label: 'Strategy Guide', icon: BookOpen   },
 ];
 
 function SectionNav() {
@@ -481,6 +486,19 @@ export default function DashboardPage() {
           </div>
         </div>
 
+        {/* ── Market Conditions & Recommendations ──────────────────────────── */}
+        <CollapsiblePanel
+          id="market"
+          title="Market Conditions & AI Recommendations"
+          icon={<TrendingUp className="w-4 h-4 text-cyan-400" />}
+          accentClass="border-cyan-500/40"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <MarketConditionsDashboard currentTargets={strategyTargets} />
+          </div>
+        </CollapsiblePanel>
+
         {/* ── Cornerstone ─────────────────────────────────────────────────── */}
         <CollapsiblePanel
           id="cornerstone"
@@ -616,7 +634,7 @@ export default function DashboardPage() {
           accentClass="border-yellow-500/30"
           defaultOpen={false}
         >
-          <div className="pt-4">
+          <div className="pt-4 space-y-4">
             <RebalanceCalculator
               positions={account.positions}
               totalValue={account.totalValue}
@@ -626,6 +644,15 @@ export default function DashboardPage() {
             />
           </div>
         </CollapsiblePanel>
+
+        {/* ── Simplified Trade Workflow ────────────────────────────────────── */}
+        <SimplifiedTradeWorkflow
+          pillars={account.pillarSummary}
+          positions={account.positions}
+          totalValue={account.totalValue}
+          currentTargets={strategyTargets}
+          marginData={{ equity: account.equity, marginBalance: account.marginBalance }}
+        />
 
         {/* ── Open Put Tracker ─────────────────────────────────────────────── */}
         <CollapsiblePanel
@@ -723,6 +750,19 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <PositionsTable positions={account.positions} pendingOrders={pendingOrders} />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Strategy Guide ───────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="strategy"
+          title="Triple C's Strategy Guide"
+          icon={<BookOpen className="w-4 h-4 text-blue-400" />}
+          accentClass="border-blue-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <StrategyGuide />
           </div>
         </CollapsiblePanel>
 
