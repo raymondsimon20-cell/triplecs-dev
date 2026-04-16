@@ -33,7 +33,7 @@ export function StrategyGuide() {
   const sections: GuideSection[] = [
     {
       id: 'overview',
-      title: 'What Are the Triple C's?',
+      title: "What Are the Triple C's?",
       icon: <BookOpen className="w-5 h-5" />,
       color: 'from-blue-600 to-blue-700',
       content: (
