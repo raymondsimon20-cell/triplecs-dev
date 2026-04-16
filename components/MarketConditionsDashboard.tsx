@@ -35,15 +35,20 @@ interface AllocationRecommendation {
   riskLevel: 'low' | 'medium' | 'high';
 }
 
+interface MarketConditionsDashboardProps {
+  currentTargets: StrategyTargets;
+  onTargetsChange?: (newTargets: StrategyTargets) => void;
+}
+
 export function MarketConditionsDashboard({
   currentTargets,
-}: {
-  currentTargets: StrategyTargets;
-}) {
+  onTargetsChange,
+}: MarketConditionsDashboardProps) {
   const [marketData, setMarketData] = useState<MarketData | null>(null);
   const [recommendation, setRecommendation] = useState<AllocationRecommendation | null>(null);
   const [loading, setLoading] = useState(true);
   const [lastFetchTime, setLastFetchTime] = useState<string>('');
+  const [showApplyButton, setShowApplyButton] = useState(false);
 
   useEffect(() => {
     const fetchMarketData = async () => {
@@ -84,6 +89,20 @@ export function MarketConditionsDashboard({
   }, []);
 
   if (!marketData) return null;
+
+  const applyRecommendation = () => {
+    if (!recommendation || !onTargetsChange) return;
+
+    const newTargets: StrategyTargets = {
+      ...currentTargets,
+      triplesPct: recommendation.suggestedChanges.triplesPct ?? currentTargets.triplesPct,
+      cornerstonePct: recommendation.suggestedChanges.cornerstonePct ?? currentTargets.cornerstonePct,
+      incomePct: recommendation.suggestedChanges.incomePct ?? currentTargets.incomePct,
+      hedgePct: recommendation.suggestedChanges.hedgePct ?? currentTargets.hedgePct,
+    };
+    onTargetsChange(newTargets);
+    setShowApplyButton(false);
+  };
 
   const getVIXColor = (vix: number) => {
     if (vix < 15) return 'text-green-400';
@@ -301,17 +320,27 @@ export function MarketConditionsDashboard({
           )}
 
           {/* Risk Level Indicator */}
-          <div className="flex items-center gap-2 text-xs">
-            <span className="text-gray-400">Risk Level:</span>
-            <span className={`px-2 py-1 rounded font-semibold ${
-              recommendation.riskLevel === 'low'
-                ? 'bg-green-900/40 text-green-300'
-                : recommendation.riskLevel === 'medium'
-                ? 'bg-yellow-900/40 text-yellow-300'
-                : 'bg-red-900/40 text-red-300'
-            }`}>
-              {recommendation.riskLevel.toUpperCase()}
-            </span>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-2 text-xs">
+              <span className="text-gray-400">Risk Level:</span>
+              <span className={`px-2 py-1 rounded font-semibold ${
+                recommendation.riskLevel === 'low'
+                  ? 'bg-green-900/40 text-green-300'
+                  : recommendation.riskLevel === 'medium'
+                  ? 'bg-yellow-900/40 text-yellow-300'
+                  : 'bg-red-900/40 text-red-300'
+              }`}>
+                {recommendation.riskLevel.toUpperCase()}
+              </span>
+            </div>
+            {onTargetsChange && (
+              <button
+                onClick={applyRecommendation}
+                className="text-xs px-3 py-1 rounded bg-purple-600 hover:bg-purple-700 text-white font-semibold transition-colors"
+              >
+                Apply to Settings
+              </button>
+            )}
           </div>
         </div>
       )}

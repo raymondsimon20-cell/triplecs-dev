@@ -31,8 +31,10 @@ import { WatchlistPanel } from '@/components/WatchlistPanel';
 import { StrategyGuide } from '@/components/StrategyGuide';
 import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
 import { SimplifiedTradeWorkflow } from '@/components/SimplifiedTradeWorkflow';
+import { updateStrategyTargets } from '@/components/SettingsPanel';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
+import type { StrategyTargets } from '@/lib/utils';
 import { fmt$, gainLossColor } from '@/lib/utils';
 
 interface AccountData {
@@ -495,7 +497,10 @@ export default function DashboardPage() {
           defaultOpen={true}
         >
           <div className="pt-4">
-            <MarketConditionsDashboard currentTargets={strategyTargets} />
+            <MarketConditionsDashboard
+              currentTargets={strategyTargets}
+              onTargetsChange={updateStrategyTargets}
+            />
           </div>
         </CollapsiblePanel>
 

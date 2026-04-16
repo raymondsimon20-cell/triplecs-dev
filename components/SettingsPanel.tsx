@@ -63,6 +63,12 @@ function broadcast(t: StrategyTargets) {
   _listeners.forEach((l) => l(t));
 }
 
+// ─── Public function to update targets programmatically ────────────────────────
+// Used by MarketConditionsDashboard to apply AI recommendations
+export function updateStrategyTargets(newTargets: StrategyTargets) {
+  broadcast(newTargets);
+}
+
 // ─── Slider row helper ────────────────────────────────────────────────────────
 
 function SliderRow({
