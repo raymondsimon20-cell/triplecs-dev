@@ -13,7 +13,7 @@
 
 import { useState } from 'react';
 import { ArrowRight, AlertCircle, CheckCircle, ArrowUp, ArrowDown, Copy, ExternalLink } from 'lucide-react';
-import type { EnrichedPosition } from '@/lib/schwab/types';
+import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import type { PillarSummary } from '@/lib/classify';
 import type { StrategyTargets } from '@/lib/utils';
 import { fmt$ } from '@/lib/utils';
@@ -58,7 +58,7 @@ export function SimplifiedTradeWorkflow({
 
   // Generate trade recommendations
   for (const [pillar, target] of Object.entries(targets)) {
-    const pillarData = pillarMap.get(pillar);
+    const pillarData = pillarMap.get(pillar as PillarType);
     const current = pillarData?.portfolioPercent || 0;
     const diff = current - target;
 
@@ -76,7 +76,7 @@ export function SimplifiedTradeWorkflow({
             ? `Currently at ${current.toFixed(1)}% (${diff.toFixed(1)}% over target)`
             : `Currently at ${current.toFixed(1)}% (${Math.abs(diff).toFixed(1)}% under target)`,
         suggestedSymbols: getSuggestedSymbols(
-          pillar,
+          pillar as PillarType,
           diff > 0 ? 'SELL' : 'BUY',
           positions
         ),
@@ -343,11 +343,11 @@ export function SimplifiedTradeWorkflow({
 }
 
 function getSuggestedSymbols(
-  pillar: string,
+  pillar: PillarType,
   action: 'BUY' | 'SELL',
   positions: EnrichedPosition[]
 ): string[] {
-  const pillarSymbols: Record<string, string[]> = {
+  const pillarSymbols: Record<PillarType, string[]> = {
     triples: ['UPRO', 'TQQQ', 'SPXL', 'UDOW'],
     cornerstone: ['CLM', 'CRF'],
     income: [
@@ -355,9 +355,10 @@ function getSuggestedSymbols(
       'QQQ', 'SPY', 'TLT', 'AGG', 'SCHD',
     ],
     hedge: ['SPXU', 'SQQQ', 'SDOW', 'UVXY', 'SH', 'PSQ'],
+    other: [],
   };
 
-  const symbols = pillarSymbols[pillar.toLowerCase()] || [];
+  const symbols = pillarSymbols[pillar] || [];
 
   if (action === 'SELL') {
     // Return symbols the user already owns in this pillar
@@ -370,7 +371,7 @@ function getSuggestedSymbols(
     // Return symbols the user doesn't own or owns least of
     const owned = new Set(
       positions
-        .filter((p) => p.pillar === pillar.toLowerCase())
+        .filter((p) => p.pillar === pillar)
         .map((p) => p.instrument.symbol.toUpperCase())
     );
 
