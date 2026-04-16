@@ -38,7 +38,7 @@ export const INCOME_SYMBOLS = new Set([
   'FEPI', 'AIPI',
   // Other high-dividend income
   'JEPI', 'JEPQ', 'DIVO', 'SCHD', 'BST', 'STK', 'BDJ', 'EOS',
-  'USA', 'GOF', 'PTY', 'RIV', 'OXLC', 'KLIP',
+  'USA', 'GOF', 'PTY', 'RIV', 'OXLC', 'KLIP', 'SPYI',
   // Bond funds
   'AGG', 'BND', 'TLT', 'IEF', 'SGOV', 'USFR',
 ]);
