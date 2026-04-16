@@ -1,6 +1,7 @@
 'use client';
 
 import type { PillarSummary } from '@/lib/classify';
+import type { StrategyTargets } from '@/lib/utils';
 
 const PILLAR_COLORS: Record<string, string> = {
   triples: '#f59e0b',
@@ -10,27 +11,54 @@ const PILLAR_COLORS: Record<string, string> = {
   other: '#6b7280',
 };
 
-// Strategy targets from the e-guides
-const PILLAR_TARGETS: Record<string, { min: number; max: number; label: string }> = {
-  triples:     { min: 10, max: 30, label: '10–30%' },
-  cornerstone: { min: 20, max: 30, label: '20–30%' },
-  income:      { min: 30, max: 55, label: '30–55%' },
-  hedge:       { min: 5,  max: 15, label: '5–15%'  },
-};
-
 interface Props {
   summaries: PillarSummary[];
+  targets?: StrategyTargets;
 }
 
-function statusColor(pct: number, pillar: string): string {
-  const target = PILLAR_TARGETS[pillar];
-  if (!target) return 'text-[#7c82a0]';
-  if (pct < target.min) return 'text-amber-400';
-  if (pct > target.max) return 'text-red-400';
+function getTargetLabel(pct: number, pillar: string, targets?: StrategyTargets): string {
+  if (!targets) return '';
+
+  const pillars: Record<string, keyof StrategyTargets> = {
+    triples: 'triplesPct',
+    cornerstone: 'cornerstonePct',
+    income: 'incomePct',
+    hedge: 'hedgePct',
+  };
+
+  const key = pillars[pillar];
+  if (!key) return '';
+
+  const targetPct = targets[key];
+  // Allow ±5% variance
+  const min = targetPct - 5;
+  const max = targetPct + 5;
+  return `${min}–${max}%`;
+}
+
+function statusColor(pct: number, pillar: string, targets?: StrategyTargets): string {
+  if (!targets) return 'text-[#7c82a0]';
+
+  const pillars: Record<string, keyof StrategyTargets> = {
+    triples: 'triplesPct',
+    cornerstone: 'cornerstonePct',
+    income: 'incomePct',
+    hedge: 'hedgePct',
+  };
+
+  const key = pillars[pillar];
+  if (!key) return 'text-[#7c82a0]';
+
+  const target = targets[key];
+  const min = target - 5;
+  const max = target + 5;
+
+  if (pct < min) return 'text-amber-400';
+  if (pct > max) return 'text-red-400';
   return 'text-emerald-400';
 }
 
-export function PillarAllocationBar({ summaries }: Props) {
+export function PillarAllocationBar({ summaries, targets }: Props) {
   return (
     <div className="space-y-3">
       {/* Stacked bar */}
@@ -50,8 +78,8 @@ export function PillarAllocationBar({ summaries }: Props) {
       {/* Legend with targets */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {summaries.map((s) => {
-          const target = PILLAR_TARGETS[s.pillar];
-          const color = statusColor(s.portfolioPercent, s.pillar);
+          const color = statusColor(s.portfolioPercent, s.pillar, targets);
+          const targetLabel = getTargetLabel(s.portfolioPercent, s.pillar, targets);
           return (
             <div key={s.pillar} className="flex items-start gap-2">
               <div
@@ -66,9 +94,9 @@ export function PillarAllocationBar({ summaries }: Props) {
                 <div className="text-xs text-[#7c82a0]">
                   ${s.totalValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                 </div>
-                {target && (
+                {targetLabel && (
                   <div className="text-xs text-[#4a5070] mt-0.5">
-                    Target: {target.label}
+                    Target: {targetLabel}
                   </div>
                 )}
               </div>
