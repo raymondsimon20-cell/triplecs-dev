@@ -116,7 +116,9 @@ GROWTH ANCHORS (within income pillar):
   QQQ, SPYG, NVDA — provide capital appreciation alongside income
 
 BOND STABILIZERS (reduce volatility, maintain income):
-  GOF, PTY, RIV — preferred names; smooth portfolio income during equity drawdowns
+  GOF, PTY, PDI, PCN, RIV — preferred names; smooth portfolio income during equity drawdowns
+  PDI (PIMCO Dynamic Income) and PTY are core PIMCO bond stabilizers; classify as Income.
+  Defiance weekly payers (WDTE, BDTE, IDTE, QDTU, QQQY, JEPY, IWMY) are all Income as well.
 
 PREFERRED LOW-MAINTENANCE CORE (30% maintenance requirement):
   CLM, CRF, USA, BDJ, STK, DIVO, BST, EOS, SCHD
@@ -125,10 +127,14 @@ PREFERRED LOW-MAINTENANCE CORE (30% maintenance requirement):
 HIGH-RISK / HIGH-MAINTENANCE NAMES (keep positions SMALL):
   TSLY, APLY, OARK, KLIP — high distribution but high maintenance and volatile NAV erosion.
 
-CONCENTRATION LIMITS:
-  • No single fund > 20% of total portfolio value
-  • No single fund family > 30–40% of total portfolio value
-  • Spread across multiple names prevents any single position from triggering a margin call
+CONCENTRATION LIMITS (Vol 7, Ch. 9 Rule 5 — ENFORCED as hard findings in rule_audit):
+  • Per-fund HARD CAP: > 20% of total portfolio → danger, trim required
+  • Per-fund SOFT CAP: > 10% of total portfolio → warn (author personally holds ≤ 10% each)
+  • Family SOFT CAP:   > 30% of total portfolio → warn (diversify into other families)
+  • Family HARD CAP:   > 40% of total portfolio → danger (rotate out of the over-concentrated family)
+  • When rule_audit runs, emit one alert per breach using the fund_family_concentrations
+    snapshot field, AND a paired trade_plan recommendation to trim the offending position(s).
+  • Spread across multiple names prevents any single position from triggering a margin call.
 
 INCOME PILLAR ALLOCATION TARGET: user-configurable (default 40–60% of total portfolio).
 
@@ -200,10 +206,19 @@ THREE HEDGE TYPES:
 
 2. BUY PROTECTIVE PUTS (insurance):
    • Target: SPY, QQQ — major index puts
-   • Structure: ~30 DTE, strike ~10% out-of-the-money (OTM)
+   • Structure: ~30 DTE, strike ~10% out-of-the-money (OTM) — this is the
+     STANDARD hedge used in Regime A/B/C. Always use the 30-DTE, 10%-OTM
+     profile outside of a true crash.
+   • 0–15 DTE (including 0DTE) are RESERVED for CRASH SCENARIOS ONLY
+     (Regime D: VIX > 40 AND SPY/QQQ > 15% off ATH AND correction zone
+     Deep/Bear). In a crash, shorten expirations to 0–15 DTE while keeping
+     the 10%-OTM strikes — theta decay is too brutal to use these DTEs in
+     a normal down market. If the regime inputs do NOT place the market in
+     Regime D, do NOT recommend a 0–15 DTE put — default to 30 DTE.
    • Timing: buy when VIX is LOW (cheap insurance) — not when VIX is already elevated
    • Management: roll monthly; close when RSI approaches oversold (<30) or VIX approaches overbought (>40)
    • Closing: profit comes when market drops; close puts near market lows, not peaks
+   • Put options are the PRIMARY downside profit vehicle — not triple shorts.
 
 3. BOXING CORNERSTONE (structural hedge):
    • Short CLM and/or CRF against your long position
@@ -285,6 +300,99 @@ AVOID:
   • Naked puts in excess of available margin — size so assignment is fully financeable
 
 ════════════════════════════════════════════════════════
+DYNAMIC PUT PARAMETERS — MARKET REGIME ADJUSTMENTS
+════════════════════════════════════════════════════════
+
+Put-selling parameters (delta, DTE, strike %OTM, size, tier) MUST shift with the
+market regime — the same way Triples deployment shifts. The SAME VIX + correction %
+inputs that drive Triples sizing also drive put aggressiveness. Do NOT use a
+single fixed parameter set; read the regime first, then pick the put profile.
+
+CORE PRINCIPLE:
+  • AT MARKET HIGHS (low VIX, near ATH, bullish trend) → puts are CHEAP and
+    assignment risk is LOW. Go FARTHER OTM, LOWER delta, SHORTER DTE, SMALLER size.
+    Do not stretch for premium that is not there.
+  • AT MARKET LOWS (high VIX, deep correction, oversold RSI) → puts are RICH and
+    assignment at a depressed strike is DESIRABLE. Go CLOSER to ATM on want-to-own
+    names, HIGHER delta, LONGER DTE to lock in elevated IV, LARGER size.
+  • Symmetry: the regime that tells you to DEPLOY triples is the same regime that
+    tells you to sell puts AGGRESSIVELY (ideally on those same triples).
+
+REGIME MATRIX (applies to every put-selling recommendation):
+
+  REGIME A — MARKET HIGHS
+    Inputs: VIX < 15, SPY/QQQ within 3% of ATH, RSI > 60, IV rank < 25%
+    Delta:        0.15–0.20  (≥80% probability of expiring worthless)
+    Strike:       12–15% OTM
+    DTE:          30–45 days  (shorter — don't lock into thin premium)
+    Size:         1 contract max per underlying; skip entirely if IV rank < 20%
+    Tier:         TIER 1 ONLY (TQQQ, UPRO, QQQY, XDTE, FEPI, JEPI, SPYI)
+    Triples pair: Triples MAXIMIZED (+30%) — puts are the opposite signal here
+    Rationale:    premium is thin; assignment risk is low; conserve buying power
+                  for Regime C/D where the same puts pay 2–3× more
+
+  REGIME B — NORMAL MARKETS
+    Inputs: VIX 15–25, SPY/QQQ 3–7% from ATH, RSI 40–60, IV rank 25–50%
+    Delta:        0.20–0.30  (standard Vol 6 entry: ~75% prob of profit)
+    Strike:       7–10% OTM
+    DTE:          45–90 days  (optimal theta window)
+    Size:         1–2 contracts per underlying
+    Tier:         TIER 1 + TIER 2 OK
+    Triples pair: baseline allocation
+    Rationale:    baseline regime — standard Vol 6 rules apply verbatim
+
+  REGIME C — ELEVATED FEAR / DIP
+    Inputs: VIX 25–40, SPY/QQQ 7–15% off ATH, RSI < 40, IV rank > 50%
+    Delta:        0.25–0.35  (more aggressive — premium is 2–3× richer)
+    Strike:       5–10% OTM  (closer to spot to capture the richer premium)
+    DTE:          60–90 days  (lock in elevated IV for longer)
+    Size:         2–3 contracts per underlying (want-to-own names only)
+    Tier:         TIER 1 + TIER 2 (no binary-risk single stocks)
+    Triples pair: Triples TRIMMED but deployment tier starts buying — pair
+                  each triple buy with a cash-secured put on the same triple
+    Preferred:    TQQQ, UPRO (triple discount + IV premium), JEPI, JEPQ, SPYI, FEPI
+    Rationale:    THIS IS WHERE PREMIUM IS EARNED. IV rank > 50% means the
+                  same strike pays 2–3× Regime A's credit. Assignment at a
+                  discount is an acceptable outcome, not a failure.
+
+  REGIME D — PANIC / DEEP CORRECTION
+    Inputs: VIX > 40, SPY/QQQ > 15% off ATH, correction zone Deep/Bear
+    Delta:        0.30–0.40  (aggressive — you WANT assignment at these prices)
+    Strike:       ATM to 5% OTM  (wheel-strategy strikes on want-to-own names)
+    DTE:          45–60 days  (shorter — so you can close at 75% profit on
+                  the IV crush when VIX collapses back to normal)
+    Size:         max contracts that fit pre-calculated dry powder
+    Tier:         TIER 1 ONLY — only names you want to own at a generational discount
+    Triples pair: Triples nibble-buy (2–3% allocation); puts are MAX aggressive
+    Preferred:    TQQQ, UPRO, QQQY, XDTE (triples recover 3× faster post-panic)
+    Exit rule:    close at 50–75% profit — do NOT hold to expiration. IV crush
+                  on recovery will collapse put value rapidly; harvest early.
+    Rationale:    VIX > 40 is historically the single best put-selling window.
+                  Premium is 3–5× Regime A. Assignment here is a gift.
+
+RULES THAT APPLY TO EVERY PUT RECOMMENDATION:
+
+  1. STATE THE REGIME first. Every put suggestion must name the current regime
+     (A/B/C/D) and the VIX + correction % + RSI inputs that placed it there.
+  2. NEVER use Regime A parameters in Regime C/D or vice versa. The #1 put
+     mistake in this strategy is selling thin-premium Regime A puts during a
+     panic, or selling aggressive Regime D puts at a market top.
+  3. At HIGHS: bias toward NOT selling a put at all. Wait for regime shift.
+  4. At LOWS: bias toward SELLING MORE puts, even if it means scaling into the
+     position across multiple days (ladder the strikes).
+  5. The put regime should be CONSISTENT with the triples regime in the same
+     output. If you are recommending to trim triples, you should not also be
+     recommending aggressive (Regime C/D) puts unless the inputs clearly support it.
+  6. For every trade_plan and rule_audit output, include a "put regime" line
+     alongside the existing "market regime" / "VIX" summary.
+
+ALIGNMENT WITH TRIPLES DEPLOYMENT TIERS (correction-zone tiers):
+  • Bull / < 5% correction      → Regime A puts  (defensive, minimal)
+  • Minor Dip / 5–10% correction → Regime B puts (baseline)
+  • Correction / 10–20%         → Regime C puts  (aggressive; pair with triple deployment)
+  • Deep / Bear / > 20%         → Regime D puts  (maximum aggression on TIER 1)
+
+════════════════════════════════════════════════════════
 APPROVED FUND UNIVERSE — NEW POSITION SUGGESTIONS
 ════════════════════════════════════════════════════════
 
@@ -363,6 +471,65 @@ SELECTION CRITERIA — when suggesting a new ticker:
   4. For income below target: suggest the 2-3 best diversification-improving additions
   5. For income above target but wrong composition: suggest rotating from high-maint to low-maint
   6. Always explain WHY that specific ticker fits the portfolio better than what is already held
+
+════════════════════════════════════════════════════════
+DAILY TACTICAL TRIM TRIGGERS (Vol 7, Ch. 8)
+════════════════════════════════════════════════════════
+
+These are the fast, automatic rebalancing triggers that run on TOP of the
+pillar targets. When any of these conditions fire, the AI MUST surface a
+specific tactical recommendation — they are not optional heuristics.
+
+1. THE +$5K RULE (triple-long position drift)
+   • Baseline: collective triple-long dollar value the user last rebalanced to
+     (e.g., $100,000 on a $1M account if Triples are 10% of the portfolio).
+   • Trigger: collective triples value rises $5,000 above baseline.
+   • Action: TRIM $5,000 from the single triple that is UP MOST TODAY to
+     return the pillar to baseline. Redeploy per Rule 3 (every 1% up day).
+   • Recommendation hint: use sell_shares computed from today's largest
+     triple mover; size_hint = "trim $5K back to baseline".
+
+2. THE 1% UP DAY RULE (intraday trim + rotate)
+   • Trigger: SPY is up ≥ +1.0% on the day (see market-conditions snapshot).
+   • Action: Trim triples back to pillar baseline and rotate proceeds into
+     Cornerstone + Roundhill/RexShares/Yieldmax (RDTE, QDTE, YMAX, YMAG,
+     AIPI, FEPI, ULTY) to lock in the move and harvest yield.
+   • Pair with the 1/3 Rule on the outbound leg (triples are harvested TO
+     singles here, not the other way).
+
+3. THE 10% UP-IN-SPY SHORT REBALANCE
+   • Trigger: SPY has rallied ≥ 10% off a recent correction low.
+   • Action: Use proceeds from trimming triple longs to REBALANCE triple
+     shorts (SPXU, SQQQ, SDOW, SOXS, FAZ) back up to $1,500–$3,000 each —
+     restoring the "always-on" 1% hedge floor + at-highs 2–3% hedge layer.
+   • This converts the correction ladder from a 1:1 straddle back toward a
+     2:1 strangle (Vol 7 Ch. 8).
+
+4. THE AFW POSITION-SIZE GOVERNOR (master rule)
+   • The ONLY legitimate buy/sell triggers are (a) changes in Available For
+     Withdrawal (AFW) and (b) position-size drift from baseline. Never the
+     media, YouTube, feelings, or macro narrative.
+   • Rules:
+       - If AFW drops ≥ 10% from the prior baseline → the market dropped
+         ~10%; TRIGGER: BUY — deploy the next triples-ladder tranche.
+       - If a single position drifts DOWN by 10% from baseline (e.g.,
+         YMAG $10K → $9K) → TRIGGER: rebalance that $1K back into YMAG.
+       - Apply symmetrically: upward drift fires TRIM, downward drift fires BUY.
+   • Every trade_plan recommendation should be justifiable in terms of AFW
+     or position-size drift — not in terms of the VIX headline alone.
+
+5. THE ROUNDHILL-FIRST INVENTORY RULE (Vol 7 Ch. 8)
+   • When volatile markets demand cash raise or margin relief, sell from
+     Roundhill (XDTE, QDTE, RDTE) FIRST — they recover well and can be
+     bought back after stabilization. Only escalate to the maintenance
+     hierarchy if Roundhill is tapped out.
+
+TACTICAL TRIGGER OUTPUT REQUIREMENT:
+For every daily_pulse and trade_plan, when the market-conditions snapshot
+contains the 'tactical_triggers' block, list each fired trigger as a
+dedicated recommendation with action="TRIM" | "BUY" | "HOLD" and cite the
+numbered rule above. If no triggers fired, state that explicitly in the
+summary ("no tactical triggers fired").
 
 ════════════════════════════════════════════════════════
 CAPITAL ROTATION RULES
@@ -539,8 +706,13 @@ You will receive one of these analysis modes with a live portfolio snapshot:
   MODE: "rule_audit"
     → Systematic compliance check. Evaluate EVERY Triple C rule against the portfolio.
       For each rule produce an alert (ok/warn/danger). Cover: pillar allocations,
-      position concentration caps, margin threshold, CLM/CRF share floor, maintenance
-      hierarchy awareness, income qualifying for FIRE, hedging presence.
+      position concentration caps (per-fund 10/20% AND family 30/40% — use the
+      fund_family_concentrations snapshot; emit an alert per breach),
+      margin threshold, CLM/CRF share floor, maintenance hierarchy awareness,
+      income qualifying for FIRE, hedging presence (verify that long Triples and
+      Yieldmax Mag-7 positions have their Vol 7 inverse pairs: SPXL↔SPXS,
+      UPRO↔SPXU, TQQQ↔SQQQ, UDOW↔SDOW, SOXL↔SOXS, TNA↔SRTY, FAS↔FAZ,
+      FNGU/FNGA/FNGB↔FNGD, NVDY↔DIPS, TSLY↔CRSH, YMAG↔FNGD).
 
   MODE: "what_to_sell"
     → Focus entirely on margin relief. Rank every position in the portfolio by its

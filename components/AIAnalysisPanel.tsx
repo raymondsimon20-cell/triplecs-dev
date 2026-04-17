@@ -14,6 +14,7 @@ import {
   Copy, Check, ShoppingCart, X, Send,
 } from 'lucide-react';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
+import { getFundFamilyConcentrations, getInverseHedge } from '@/lib/classify';
 import { PutChainInline } from '@/components/PutChainInline';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
@@ -365,12 +366,46 @@ export function AIAnalysisPanel({
     setAnalysis(null);
     setSelectedRecs(new Set());
 
+    // Vol 7 daily tactical triggers — best-effort; failures do not block analysis.
+    const triplesTotal = pillarSummary.find((p) => p.pillar === 'triples')?.totalValue ?? 0;
+    const afwEstimate = equity - Math.max(0, marginBalance);
+    let tactical_triggers: unknown = null;
+    try {
+      const ttRes = await fetch(
+        `/api/tactical-triggers?triples_value=${encodeURIComponent(triplesTotal)}&afw=${encodeURIComponent(afwEstimate)}`
+      );
+      if (ttRes.ok) tactical_triggers = await ttRes.json();
+    } catch { /* non-fatal */ }
+
+    // Fund-family concentrations for rule_audit per-family cap enforcement.
+    const family_concentrations = getFundFamilyConcentrations(positions, totalValue).map((f) => ({
+      family: f.family,
+      total_value: f.totalValue,
+      portfolio_pct: +f.portfolioPercent.toFixed(2),
+      symbols: f.symbols,
+    }));
+
+    // Hedge coverage — flag long positions that are missing their Vol 7 inverse pair.
+    const heldSymbols = new Set(positions.map((p) => p.instrument?.symbol?.toUpperCase()).filter(Boolean));
+    const hedge_coverage = positions
+      .map((p) => {
+        const sym = p.instrument?.symbol?.toUpperCase();
+        if (!sym) return null;
+        const inv = getInverseHedge(sym);
+        if (!inv) return null;
+        return { long: sym, inverse: inv, covered: heldSymbols.has(inv) };
+      })
+      .filter((x): x is { long: string; inverse: string; covered: boolean } => x !== null);
+
     const snapshot = {
       total_value: totalValue,
       equity,
       margin_balance: marginBalance,
       margin_utilization_pct: totalValue > 0 ? (marginBalance / totalValue) * 100 : 0,
       dividends_annual: dividendsAnnual,
+      tactical_triggers,
+      fund_family_concentrations: family_concentrations,
+      hedge_coverage,
       pillar_summary: pillarSummary.map((p) => ({
         pillar: p.pillar,
         label: p.label,

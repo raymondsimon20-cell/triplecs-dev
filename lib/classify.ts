@@ -10,7 +10,7 @@ import type { SchwabPosition, EnrichedPosition, PillarType, SchwabQuotesResponse
 /** Triple leveraged ETFs — index-tied, long, ~15-20% of portfolio */
 export const TRIPLES_SYMBOLS = new Set([
   'UPRO', 'TQQQ', 'SPXL', 'UDOW', 'TECL', 'SOXL',
-  'FNGU', 'LABU', 'TNA', 'FAS',
+  'FNGU', 'FNGA', 'FNGB', 'LABU', 'TNA', 'FAS', 'DFEN',
 ]);
 
 /** Cornerstone — CLM/CRF only. DRIP at NAV is the key mechanic. */
@@ -18,10 +18,14 @@ export const CORNERSTONE_SYMBOLS = new Set([
   'CLM', 'CRF',
 ]);
 
-/** Short / inverse ETFs and put hedges */
+/** Short / inverse ETFs and put hedges — includes Yieldmax inverse pairs (Vol 7 Ch. 11) */
 export const HEDGE_SYMBOLS = new Set([
   'SPXU', 'SQQQ', 'SDOW', 'FAZ', 'SRTY', 'SPXS',
   'SH', 'PSQ', 'DOG', 'UVXY', 'SOXS',
+  // FANG+ 3× inverse — pairs with FNGU/FNGA/FNGB and Yieldmax Mag 7 longs
+  'FNGD',
+  // Yieldmax inverse single-stock hedges (Vol 7): DIPS hedges NVDY, CRSH hedges TSLY
+  'DIPS', 'CRSH',
 ]);
 
 /** Income ETF families — Yieldmax, Defiance, Roundhill, RexShares, and known high-yielders */
@@ -38,7 +42,7 @@ export const INCOME_SYMBOLS = new Set([
   'FEPI', 'AIPI',
   // Other high-dividend income
   'JEPI', 'JEPQ', 'DIVO', 'SCHD', 'BST', 'STK', 'BDJ', 'EOS',
-  'USA', 'GOF', 'PTY', 'RIV', 'OXLC', 'KLIP', 'SPYI',
+  'USA', 'GOF', 'PTY', 'PDI', 'PCN', 'RIV', 'OXLC', 'KLIP', 'SPYI',
   // Bond funds
   'AGG', 'BND', 'TLT', 'IEF', 'SGOV', 'USFR',
 ]);
@@ -184,6 +188,7 @@ export type FundFamily =
   | 'ProShares'
   | 'Direxion'
   | 'Cornerstone'
+  | 'PIMCO'
   | 'Other';
 
 const FUND_FAMILY_MAP: Record<string, FundFamily> = {
@@ -204,14 +209,44 @@ const FUND_FAMILY_MAP: Record<string, FundFamily> = {
   UPRO: 'ProShares', TQQQ: 'ProShares', UDOW: 'ProShares',
   // Direxion (triple long + short)
   SPXL: 'Direxion', TECL: 'Direxion', SOXL: 'Direxion', LABU: 'Direxion',
-  TNA: 'Direxion', FAS: 'Direxion', FNGU: 'Direxion',
+  TNA: 'Direxion', FAS: 'Direxion', FNGU: 'Direxion', DFEN: 'Direxion',
   SPXS: 'Direxion', SOXS: 'Direxion', SRTY: 'Direxion', FAZ: 'Direxion',
+  FNGD: 'Direxion',
+  // MicroSectors / BMO (FANG+ family)
+  FNGA: 'ProShares', FNGB: 'ProShares',
+  // Yieldmax inverse (hedge rotation per Vol 7 Ch. 11)
+  DIPS: 'Yieldmax', CRSH: 'Yieldmax',
   // Cornerstone
   CLM: 'Cornerstone', CRF: 'Cornerstone',
+  // PIMCO closed-end income funds
+  PTY: 'PIMCO', PDI: 'PIMCO', PCN: 'PIMCO',
 };
 
 export function getFundFamily(symbol: string): FundFamily {
   return FUND_FAMILY_MAP[symbol.toUpperCase()] ?? 'Other';
+}
+
+// ─── Vol 7 long ↔ inverse pairing map ─────────────────────────────────────────
+// Used by hedge-coverage checks and the AI rulebook. Each long symbol maps to
+// the inverse hedge Vol 7 specifies for it.
+export const INVERSE_PAIR_MAP: Record<string, string> = {
+  // Triple longs → triple shorts
+  SPXL: 'SPXS', UPRO: 'SPXU',
+  TQQQ: 'SQQQ', UDOW: 'SDOW',
+  SOXL: 'SOXS', TNA:  'SRTY',
+  FAS:  'FAZ',
+  // FANG+ longs → FNGD
+  FNGU: 'FNGD', FNGA: 'FNGD', FNGB: 'FNGD',
+  // Yieldmax single-stock → Yieldmax inverse single-stock (Vol 7 Ch. 11)
+  NVDY: 'DIPS',
+  TSLY: 'CRSH',
+  // Yieldmax Mag 7 basket also hedged with FNGD (Vol 7 Ch. 11)
+  YMAG: 'FNGD',
+};
+
+/** Return the Vol 7–approved inverse hedge for a long symbol, or null. */
+export function getInverseHedge(symbol: string): string | null {
+  return INVERSE_PAIR_MAP[symbol.toUpperCase()] ?? null;
 }
 
 export interface FundFamilyConcentration {
@@ -287,6 +322,41 @@ export function checkMarginRules(
         level: 'warn',
         rule: 'Concentration Cap',
         detail: `${pos.instrument.symbol} is ${pos.portfolioPercent.toFixed(1)}% of portfolio — approaching 20% cap.`,
+      });
+    }
+  }
+
+  // Fund-family concentration (Vol 7, Ch. 9 Rule 5 + Ch. 11):
+  //   • any single income fund > 10% author-personal soft cap → warn
+  //   • any single income fund > 20% hard cap                  → danger
+  //   • any fund family > 30% soft cap → warn; > 40% → danger
+  const familyConc = getFundFamilyConcentrations(positions, totalValue);
+  for (const fam of familyConc) {
+    if (fam.family === 'Other') continue;
+    if (fam.portfolioPercent > 40) {
+      alerts.push({
+        level: 'danger',
+        rule: 'Family Concentration',
+        detail: `${fam.family} family is ${fam.portfolioPercent.toFixed(1)}% — exceeds 40% hard cap. Rotate into other families.`,
+      });
+    } else if (fam.portfolioPercent > 30) {
+      alerts.push({
+        level: 'warn',
+        rule: 'Family Concentration',
+        detail: `${fam.family} family is ${fam.portfolioPercent.toFixed(1)}% — above 30% soft cap. Diversify.`,
+      });
+    }
+  }
+
+  // Per-fund "personal 10%" rule (Vol 7, Ch. 9 Rule 5): surface income funds
+  // between 10–15% of portfolio since the main concentration loop only catches >15%.
+  for (const pos of positions) {
+    if (pos.pillar !== 'income') continue;
+    if (pos.portfolioPercent > 10 && pos.portfolioPercent <= 15) {
+      alerts.push({
+        level: 'warn',
+        rule: 'Per-Fund 10% Rule',
+        detail: `${pos.instrument.symbol} is ${pos.portfolioPercent.toFixed(1)}% — above the 10% per-fund personal soft cap. Consider trimming.`,
       });
     }
   }
