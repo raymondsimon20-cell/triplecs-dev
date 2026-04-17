@@ -25,6 +25,12 @@ interface MarketData {
   marketTrend: 'bullish' | 'neutral' | 'bearish';
   volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
   lastUpdated: string;
+  rsi14?: number | null;
+  ma20?: number | null;
+  ma50?: number | null;
+  maCross?: 'bullish' | 'bearish' | 'neutral' | null;
+  putCallRatio?: number | null;
+  dataSource?: 'live' | 'fallback';
 }
 
 interface AllocationRecommendation {
@@ -212,6 +218,68 @@ export function MarketConditionsDashboard({
           </div>
         </div>
       </div>
+
+      {/* Technical Confirmation Strip (Vol 7 Ch. 8) */}
+      {marketData && (marketData.rsi14 != null || marketData.maCross || marketData.putCallRatio != null) && (
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+          <div className="bg-[#1e2139] rounded p-3 border border-gray-800/50">
+            <p className="text-xs text-gray-400">RSI(14) — SPY</p>
+            <p className={`text-lg font-bold ${
+              marketData.rsi14 == null ? 'text-gray-500' :
+              marketData.rsi14 > 70 ? 'text-red-400' :
+              marketData.rsi14 < 30 ? 'text-green-400' :
+              'text-white'
+            }`}>
+              {marketData.rsi14 == null ? '—' : marketData.rsi14.toFixed(0)}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              {marketData.rsi14 == null ? 'awaiting data' :
+                marketData.rsi14 > 70 ? 'overbought — trim Triples' :
+                marketData.rsi14 < 30 ? 'oversold — buy signal' : 'neutral'}
+            </p>
+          </div>
+          <div className="bg-[#1e2139] rounded p-3 border border-gray-800/50">
+            <p className="text-xs text-gray-400">20/50 SMA Cross</p>
+            <p className={`text-lg font-bold ${
+              marketData.maCross === 'bullish' ? 'text-green-400' :
+              marketData.maCross === 'bearish' ? 'text-red-400' :
+              marketData.maCross === 'neutral' ? 'text-yellow-400' : 'text-gray-500'
+            }`}>
+              {marketData.maCross ? marketData.maCross.toUpperCase() : '—'}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              {marketData.ma20 != null && marketData.ma50 != null
+                ? `20d $${marketData.ma20.toFixed(1)} vs 50d $${marketData.ma50.toFixed(1)}`
+                : 'awaiting data'}
+            </p>
+          </div>
+          <div className="bg-[#1e2139] rounded p-3 border border-gray-800/50">
+            <p className="text-xs text-gray-400">Put/Call Proxy</p>
+            <p className={`text-lg font-bold ${
+              marketData.putCallRatio == null ? 'text-gray-500' :
+              marketData.putCallRatio > 1.2 ? 'text-red-400' :
+              marketData.putCallRatio < 0.9 ? 'text-green-400' :
+              'text-white'
+            }`}>
+              {marketData.putCallRatio == null ? '—' : marketData.putCallRatio.toFixed(2)}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              VIX / VIX3M term slope
+            </p>
+          </div>
+          <div className="bg-[#1e2139] rounded p-3 border border-gray-800/50">
+            <p className="text-xs text-gray-400">Data Source</p>
+            <p className={`text-lg font-bold ${
+              marketData.dataSource === 'live' ? 'text-emerald-400' : 'text-yellow-400'
+            }`}>
+              {marketData.dataSource === 'live' ? 'LIVE' : 'FALLBACK'}
+            </p>
+            <p className="text-[10px] text-gray-500 mt-0.5">
+              Yahoo Finance · 60s cache
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* AI Recommendation Card */}
       {recommendation && (

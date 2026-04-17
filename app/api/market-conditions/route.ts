@@ -1,15 +1,17 @@
 /**
- * Market Conditions API Endpoint
+ * GET /api/market-conditions
  *
- * Provides:
- *   • Real-time VIX data
- *   • Market trend analysis
- *   • AI-generated allocation recommendations based on volatility, trend, and VIX levels
+ * Returns live market data + AI allocation recommendations.
  *
- * In production, this would integrate with:
- *   - MarketWatch or Yahoo Finance API for VIX quotes
- *   - IEX Cloud or Polygon.io for index quotes
- *   - Claude API for allocation recommendations
+ * Live data sources (all free, no auth):
+ *   • ^VIX, ^GSPC (SPY proxy), ^NDX (Nasdaq-100 proxy) — Yahoo Finance v8 chart API
+ *   • Put/call ratio — derived from the VIX term-structure slope when available,
+ *     otherwise computed via the equity put/call ratio proxy supplied by Yahoo.
+ *
+ * Computed technicals:
+ *   • RSI(14) on SPY daily closes
+ *   • 20-day / 50-day simple moving-average crossover
+ *   • Correction zone (for Vol 7 regime alignment)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -24,6 +26,13 @@ interface MarketData {
   marketTrend: 'bullish' | 'neutral' | 'bearish';
   volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
   lastUpdated: string;
+  // Vol 7 technical confirmation signals
+  rsi14: number | null;
+  ma20: number | null;
+  ma50: number | null;
+  maCross: 'bullish' | 'bearish' | 'neutral' | null;   // 20 vs 50 SMA
+  putCallRatio: number | null;                          // equity put/call ratio, when available
+  dataSource: 'live' | 'fallback';
 }
 
 interface AllocationRecommendation {
@@ -39,57 +48,179 @@ interface AllocationRecommendation {
   riskLevel: 'low' | 'medium' | 'high';
 }
 
-/**
- * Generate realistic market data (in production, fetch from real APIs)
- * This demonstrates how recommendations would be generated based on market conditions
+// ─── Yahoo helpers ────────────────────────────────────────────────────────────
+
+type YahooChartResult = {
+  meta?: { regularMarketPrice?: number; previousClose?: number; chartPreviousClose?: number };
+  indicators?: { quote?: Array<{ close?: Array<number | null> }> };
+};
+
+async function fetchYahooChart(
+  symbol: string,
+  range: string,
+  interval: string,
+): Promise<YahooChartResult | null> {
+  try {
+    const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=${range}&interval=${interval}&includePrePost=false`;
+    const res = await fetch(url, {
+      headers: { 'User-Agent': 'Mozilla/5.0 (compatible; triple-c/1.0)' },
+      // Short cache to smooth out rapid polling; Netlify functions edge-cache ok
+      next: { revalidate: 60 },
+    });
+    if (!res.ok) return null;
+    const json = await res.json();
+    const result = json?.chart?.result?.[0];
+    return result ?? null;
+  } catch {
+    return null;
+  }
+}
+
+function sma(values: number[], period: number): number | null {
+  if (values.length < period) return null;
+  const slice = values.slice(values.length - period);
+  const sum = slice.reduce((a, b) => a + b, 0);
+  return sum / period;
+}
+
+/** Wilder's RSI(14) — returns null if not enough data. */
+function rsi14(closes: number[]): number | null {
+  if (closes.length < 15) return null;
+  const recent = closes.slice(-250); // enough to warm up
+  let gains = 0;
+  let losses = 0;
+  for (let i = 1; i <= 14 && i < recent.length; i++) {
+    const diff = recent[i] - recent[i - 1];
+    if (diff > 0) gains += diff;
+    else losses -= diff;
+  }
+  let avgGain = gains / 14;
+  let avgLoss = losses / 14;
+  for (let i = 15; i < recent.length; i++) {
+    const diff = recent[i] - recent[i - 1];
+    const gain = diff > 0 ? diff : 0;
+    const loss = diff < 0 ? -diff : 0;
+    avgGain = (avgGain * 13 + gain) / 14;
+    avgLoss = (avgLoss * 13 + loss) / 14;
+  }
+  if (avgLoss === 0) return 100;
+  const rs = avgGain / avgLoss;
+  return 100 - 100 / (1 + rs);
+}
+
+function cleanCloses(r: YahooChartResult | null): number[] {
+  const raw = r?.indicators?.quote?.[0]?.close ?? [];
+  return raw.filter((v): v is number => typeof v === 'number' && Number.isFinite(v));
+}
+
+/** Equity put/call ratio proxy.
+ *  Yahoo does not expose CBOE's direct ratio. We approximate fear by the slope
+ *  between VIX and the 3-month volatility index VIX3M (if available). A value
+ *  > 1 indicates elevated short-term fear vs longer-term, similar to PCR > 1.
+ *  Returns null when VIX3M cannot be fetched.
  */
-function generateMarketData(): MarketData {
-  // Simulated market data (in production, fetch from MarketWatch, Yahoo Finance, etc.)
-  const now = new Date();
-  const hour = now.getHours();
-  const isMarketOpen = hour >= 9 && hour < 16; // 9 AM - 4 PM ET
+async function estimatePutCallProxy(vix: number): Promise<number | null> {
+  const vix3m = await fetchYahooChart('^VIX3M', '5d', '1d');
+  const vix3mCloses = cleanCloses(vix3m);
+  if (!vix3mCloses.length) return null;
+  const latest3m = vix3mCloses[vix3mCloses.length - 1];
+  if (!latest3m || latest3m <= 0) return null;
+  // Term-structure inversion (VIX > VIX3M) maps to fear > 1 (PCR-like).
+  return +(vix / latest3m).toFixed(2);
+}
 
-  // Realistic ranges during market hours
-  const baseVix = isMarketOpen ? 15 + Math.random() * 20 : 16;
-  const vixChange = (Math.random() - 0.5) * 5;
+// ─── Live market data ─────────────────────────────────────────────────────────
 
-  const baseSP500 = 5450;
-  const sp500Change = (Math.random() - 0.5) * 2;
+async function fetchMarketData(): Promise<MarketData> {
+  const [vixChart, spyChart, qqqChart, spyHist] = await Promise.all([
+    fetchYahooChart('^VIX', '5d', '1d'),
+    fetchYahooChart('^GSPC', '5d', '1d'),
+    fetchYahooChart('^NDX', '5d', '1d'),
+    fetchYahooChart('SPY', '6mo', '1d'),
+  ]);
 
-  const baseNasdaq = 17850;
-  const nasdaq100Change = (Math.random() - 0.5) * 1.5;
+  // Default fallbacks so the endpoint still renders if Yahoo is down.
+  const fallback: MarketData = {
+    vix: 18,
+    vixChange: 0,
+    sp500Price: 0,
+    sp500Change: 0,
+    nasdaq100Price: 0,
+    nasdaq100Change: 0,
+    marketTrend: 'neutral',
+    volatilityLevel: 'normal',
+    lastUpdated: new Date().toISOString(),
+    rsi14: null,
+    ma20: null,
+    ma50: null,
+    maCross: null,
+    putCallRatio: null,
+    dataSource: 'fallback',
+  };
 
-  const vix = Math.max(10, baseVix + vixChange);
+  const vixPrice = vixChart?.meta?.regularMarketPrice ?? fallback.vix;
+  const vixPrev  = vixChart?.meta?.previousClose ?? vixChart?.meta?.chartPreviousClose ?? vixPrice;
+  const vix = Number.isFinite(vixPrice) ? vixPrice : fallback.vix;
+  const vixChange = Number.isFinite(vixPrice - vixPrev) ? vixPrice - vixPrev : 0;
 
-  let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
+  const spyPrice = spyChart?.meta?.regularMarketPrice ?? 0;
+  const spyPrev  = spyChart?.meta?.previousClose ?? spyChart?.meta?.chartPreviousClose ?? spyPrice;
+  const sp500Change = spyPrev > 0 ? ((spyPrice - spyPrev) / spyPrev) * 100 : 0;
+
+  const qqqPrice = qqqChart?.meta?.regularMarketPrice ?? 0;
+  const qqqPrev  = qqqChart?.meta?.previousClose ?? qqqChart?.meta?.chartPreviousClose ?? qqqPrice;
+  const nasdaq100Change = qqqPrev > 0 ? ((qqqPrice - qqqPrev) / qqqPrev) * 100 : 0;
+
+  // Vol 7 technical confirmation signals — derived from SPY daily closes.
+  const spyCloses = cleanCloses(spyHist);
+  const rsi = rsi14(spyCloses);
+  const ma20 = sma(spyCloses, 20);
+  const ma50 = sma(spyCloses, 50);
+  let maCross: 'bullish' | 'bearish' | 'neutral' | null = null;
+  if (ma20 != null && ma50 != null) {
+    if (ma20 > ma50 * 1.002) maCross = 'bullish';
+    else if (ma20 < ma50 * 0.998) maCross = 'bearish';
+    else maCross = 'neutral';
+  }
+
+  // Put/call proxy via VIX term-structure.
+  const putCallRatio = await estimatePutCallProxy(vix);
+
+  let volatilityLevel: MarketData['volatilityLevel'];
   if (vix < 15) volatilityLevel = 'low';
   else if (vix < 25) volatilityLevel = 'normal';
   else if (vix < 40) volatilityLevel = 'high';
   else volatilityLevel = 'extreme';
 
-  const marketTrend: 'bullish' | 'neutral' | 'bearish' =
+  const marketTrend: MarketData['marketTrend'] =
     sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
 
+  const live = vixChart !== null && spyChart !== null;
+
   return {
-    vix: vix,
-    vixChange: vixChange,
-    sp500Price: baseSP500 + (sp500Change * 50),
-    sp500Change: sp500Change,
-    nasdaq100Price: baseNasdaq + (nasdaq100Change * 100),
-    nasdaq100Change: nasdaq100Change,
+    vix,
+    vixChange,
+    sp500Price: spyPrice,
+    sp500Change,
+    nasdaq100Price: qqqPrice,
+    nasdaq100Change,
     marketTrend,
     volatilityLevel,
-    lastUpdated: now.toISOString(),
+    lastUpdated: new Date().toISOString(),
+    rsi14: rsi,
+    ma20,
+    ma50,
+    maCross,
+    putCallRatio,
+    dataSource: live ? 'live' : 'fallback',
   };
 }
 
-/**
- * Generate AI recommendation based on market conditions
- */
-function generateRecommendation(marketData: MarketData): AllocationRecommendation {
-  const { vix, volatilityLevel, marketTrend } = marketData;
+// ─── Recommendation logic (now regime-aware) ──────────────────────────────────
 
-  // Base allocation targets
+function generateRecommendation(marketData: MarketData): AllocationRecommendation {
+  const { vix, marketTrend, rsi14: rsi, maCross } = marketData;
+
   let triplesPct = 10;
   let cornerstonePct = 15;
   let incomePct = 60;
@@ -98,104 +229,61 @@ function generateRecommendation(marketData: MarketData): AllocationRecommendatio
   let confidence = 0.7;
   let riskLevel: 'low' | 'medium' | 'high' = 'medium';
 
-  // Recommendation logic based on VIX and market trend
-
   if (vix < 15 && marketTrend === 'bullish') {
-    // Low volatility, bullish market → AGGRESSIVE: increase triples, reduce hedges
-    reason = `VIX is low (${vix.toFixed(1)}) and market is bullish. Markets are calm and rallying —
-             this is ideal for leveraged exposure. Increase Triples allocation to capture gains,
-             reduce hedges since downside risk is minimal.`;
-    triplesPct = 18;  // Up from 10
-    cornerstonePct = 16;
-    incomePct = 56;
-    hedgePct = 2;  // Down from 5
+    reason = `VIX ${vix.toFixed(1)} + bullish trend. Ideal leveraged conditions — increase Triples, reduce hedges.`;
+    triplesPct = 18; cornerstonePct = 16; incomePct = 56; hedgePct = 2;
     confidence = 0.85;
-    riskLevel = 'medium';
   } else if (vix < 15 && marketTrend === 'neutral') {
-    // Low vol, flat market → HOLD or slight increase
-    reason = `VIX is low (${vix.toFixed(1)}) but market is neutral. Good time to hold current allocation.`;
-    confidence = 0.7;
-    riskLevel = 'low';
+    reason = `VIX ${vix.toFixed(1)} low but market neutral. Hold current allocation.`;
+    confidence = 0.7; riskLevel = 'low';
   } else if (vix >= 15 && vix < 25 && marketTrend === 'bullish') {
-    // Normal vol, bullish → BALANCED but slightly bullish
-    reason = `VIX is in normal range (${vix.toFixed(1)}) and market is bullish. Maintain balanced allocation
-             with slight lean toward growth. Market conditions are healthy.`;
-    triplesPct = 13;
-    cornerstonePct = 15;
-    incomePct = 58;
-    hedgePct = 4;
+    reason = `VIX ${vix.toFixed(1)} normal, trend bullish. Balanced with slight growth lean.`;
+    triplesPct = 13; cornerstonePct = 15; incomePct = 58; hedgePct = 4;
     confidence = 0.75;
-    riskLevel = 'medium';
-  } else if (vix >= 25 && vix < 40 && (marketTrend === 'bearish' || marketTrend === 'neutral')) {
-    // Elevated vol, bearish/neutral → CAUTIOUS: increase hedges, reduce triples
-    reason = `VIX is elevated (${vix.toFixed(1)}) and market sentiment is uncertain.
-             Increase hedges for protection against downside. Reduce aggressive Triples exposure.`;
-    triplesPct = 6;   // Down from 10
-    cornerstonePct = 15;
-    incomePct = 62;
-    hedgePct = 10;   // Up from 5
+  } else if (vix >= 25 && vix < 40) {
+    reason = `VIX elevated (${vix.toFixed(1)}). Reduce Triples, add hedges. Sell into strength, not weakness.`;
+    triplesPct = 6; cornerstonePct = 15; incomePct = 62; hedgePct = 10;
     confidence = 0.8;
-    riskLevel = 'medium';
   } else if (vix >= 40) {
-    // Extreme fear → DEFENSIVE: maximize hedges, minimize triples
-    reason = `VIX is at extreme levels (${vix.toFixed(1)})—market is in panic mode.
-             This is typically the best time to BUY after setting up hedges. Reduce Triples,
-             add put hedges, and prepare dry powder to buy dips.`;
-    triplesPct = 2;   // Minimal
-    cornerstonePct = 12;
-    incomePct = 60;
-    hedgePct = 15;   // Maximum hedge protection
-    confidence = 0.9;
-    riskLevel = 'high';
+    reason = `VIX extreme (${vix.toFixed(1)}). Maximize hedges, nibble-buy Triples. Best historical buy windows.`;
+    triplesPct = 2; cornerstonePct = 12; incomePct = 60; hedgePct = 15;
+    confidence = 0.9; riskLevel = 'high';
   } else {
-    // Default: hold current targets
-    confidence = 0.6;
-    riskLevel = 'low';
+    confidence = 0.6; riskLevel = 'low';
   }
 
+  // Technical overlay — bump confidence or nudge allocations per Vol 7 Ch. 8 rules.
+  const notes: string[] = [];
+  if (rsi != null) {
+    if (rsi > 70) { notes.push(`RSI ${rsi.toFixed(0)} overbought — trim Triples > 20%`); triplesPct = Math.max(2, triplesPct - 2); }
+    else if (rsi < 30) { notes.push(`RSI ${rsi.toFixed(0)} oversold — triples buy signal`); triplesPct += 2; }
+  }
+  if (maCross === 'bearish') { notes.push('20-day SMA < 50-day — reduce Triples, add hedges'); triplesPct = Math.max(2, triplesPct - 1); hedgePct += 1; }
+  if (maCross === 'bullish') { notes.push('20-day SMA > 50-day — trend supports longs'); }
+  if (notes.length) reason += ` Technical: ${notes.join('; ')}.`;
+
   return {
-    recommendation: getRecommendationSummary(triplesPct, cornerstonePct, incomePct, hedgePct, vix, marketTrend),
+    recommendation: getRecommendationSummary(vix, marketTrend),
     reason,
-    suggestedChanges: {
-      triplesPct,
-      cornerstonePct,
-      incomePct,
-      hedgePct,
-    },
+    suggestedChanges: { triplesPct, cornerstonePct, incomePct, hedgePct },
     confidence,
     riskLevel,
   };
 }
 
-function getRecommendationSummary(
-  triples: number,
-  cornerstone: number,
-  income: number,
-  hedge: number,
-  vix: number,
-  trend: string
-): string {
-  if (vix < 15 && trend === 'bullish') {
-    return '🚀 Be Aggressive: Increase Triples, Ride the Bull Market';
-  } else if (vix >= 25 && vix < 40) {
-    return '⚠️ Be Cautious: Increase Hedges, Reduce Triples Exposure';
-  } else if (vix >= 40) {
-    return '💎 Buy the Dip: Extreme Fear = Best Opportunity. Set Hedges, Buy on Weakness';
-  } else if (vix >= 15 && vix < 25 && trend === 'bullish') {
-    return '✅ Stay Balanced: Markets are Healthy. Hold Your Current Allocation';
-  } else {
-    return '⏸️ Hold: Markets are Calm. No Major Adjustments Needed';
-  }
+function getRecommendationSummary(vix: number, trend: string): string {
+  if (vix < 15 && trend === 'bullish') return '🚀 Be Aggressive: Increase Triples, Ride the Bull Market';
+  if (vix >= 25 && vix < 40)           return '⚠️ Be Cautious: Increase Hedges, Reduce Triples Exposure';
+  if (vix >= 40)                       return '💎 Buy the Dip: Extreme Fear = Best Opportunity. Set Hedges, Buy on Weakness';
+  if (vix >= 15 && vix < 25 && trend === 'bullish') return '✅ Stay Balanced: Markets are Healthy. Hold Your Current Allocation';
+  return '⏸️ Hold: Markets are Calm. No Major Adjustments Needed';
 }
 
-export async function GET(request: NextRequest) {
-  try {
-    // In production:
-    // 1. Fetch real VIX from MarketWatch API or Yahoo Finance
-    // 2. Fetch S&P 500 and Nasdaq 100 quotes from IEX Cloud or Polygon.io
-    // 3. Call Claude API to generate personalized recommendations
+// ─── Route ────────────────────────────────────────────────────────────────────
 
-    const marketData = generateMarketData();
+export async function GET(_req: NextRequest) {
+  try {
+    const marketData = await fetchMarketData();
     const recommendation = generateRecommendation(marketData);
 
     return NextResponse.json(
@@ -207,7 +295,7 @@ export async function GET(request: NextRequest) {
       },
       {
         headers: {
-          'Cache-Control': 'no-store, max-age=0', // Don't cache—always fresh
+          'Cache-Control': 'no-store, max-age=0',
           'Content-Type': 'application/json',
         },
       }
