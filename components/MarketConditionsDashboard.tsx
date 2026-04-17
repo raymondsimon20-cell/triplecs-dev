@@ -90,17 +90,31 @@ export function MarketConditionsDashboard({
 
   if (!marketData) return null;
 
+  const suggestedSum =
+    (recommendation?.suggestedChanges.triplesPct ?? 0) +
+    (recommendation?.suggestedChanges.cornerstonePct ?? 0) +
+    (recommendation?.suggestedChanges.incomePct ?? 0) +
+    (recommendation?.suggestedChanges.hedgePct ?? 0);
+
   const applyRecommendation = () => {
     if (!recommendation || !onTargetsChange) return;
 
-    const newTargets: StrategyTargets = {
-      ...currentTargets,
-      triplesPct: recommendation.suggestedChanges.triplesPct ?? currentTargets.triplesPct,
-      cornerstonePct: recommendation.suggestedChanges.cornerstonePct ?? currentTargets.cornerstonePct,
-      incomePct: recommendation.suggestedChanges.incomePct ?? currentTargets.incomePct,
-      hedgePct: recommendation.suggestedChanges.hedgePct ?? currentTargets.hedgePct,
-    };
-    onTargetsChange(newTargets);
+    let triples     = recommendation.suggestedChanges.triplesPct ?? currentTargets.triplesPct;
+    let cornerstone = recommendation.suggestedChanges.cornerstonePct ?? currentTargets.cornerstonePct;
+    let income      = recommendation.suggestedChanges.incomePct ?? currentTargets.incomePct;
+    let hedge       = recommendation.suggestedChanges.hedgePct ?? currentTargets.hedgePct;
+
+    // Guarantee the applied targets sum to exactly 100 — never apply a
+    // partial allocation to user settings even if the API drifts.
+    const sum = triples + cornerstone + income + hedge;
+    if (sum !== 100 && sum > 0) {
+      const s = (v: number) => Math.round((v / sum) * 100);
+      triples = s(triples); cornerstone = s(cornerstone); income = s(income); hedge = s(hedge);
+      const drift = 100 - (triples + cornerstone + income + hedge);
+      income += drift; // absorb rounding into the largest bucket (Income is typically largest)
+    }
+
+    onTargetsChange({ ...currentTargets, triplesPct: triples, cornerstonePct: cornerstone, incomePct: income, hedgePct: hedge });
     setShowApplyButton(false);
   };
 
@@ -245,7 +259,15 @@ export function MarketConditionsDashboard({
           {/* Suggested Changes */}
           {recommendation.suggestedChanges && (
             <div className="space-y-2 mb-3">
-              <p className="text-xs font-semibold text-gray-400">Suggested Adjustments:</p>
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold text-gray-400">Suggested Adjustments:</p>
+                <p className={`text-xs font-semibold ${
+                  suggestedSum === 100 ? 'text-emerald-400' : 'text-orange-400'
+                }`}>
+                  Total: {suggestedSum}%
+                  {suggestedSum !== 100 && ' (auto-normalized on apply)'}
+                </p>
+              </div>
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
                 {recommendation.suggestedChanges.triplesPct !== undefined && (
                   <div className="bg-[#1e2139] rounded p-2 border border-emerald-800/30">

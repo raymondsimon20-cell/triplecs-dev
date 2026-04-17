@@ -477,86 +477,240 @@ function MaintenanceHierarchySection({ positions }: { positions: EnrichedPositio
   );
 }
 
-// ─── Section 5: Dividend Calendar ────────────────────────────────────────────
+// ─── Section 5: Dividend Calendar (forward-looking) ──────────────────────────
+// Shows the next 12 months of ESTIMATED dividend payments per symbol, built
+// from current positions + each holding's yield / frequency — not from the
+// historical ledger. Historical totals are not forward-looking; this section
+// answers "when do I get paid next?" rather than "what did I get paid last year?"
 
-// Known payout frequencies (approximate)
+type PayFreq = 'weekly' | 'monthly' | 'quarterly' | 'annual';
+
 const MONTHLY_PAYERS = new Set([
   'CLM', 'CRF', 'OXLC', 'GOF', 'PTY', 'RIV', 'JEPI', 'JEPQ', 'QQQY', 'JEPY',
   'XDTE', 'QDTE', 'RDTE', 'TSLY', 'NVDY', 'CONY', 'YMAX', 'YMAG', 'ULTY',
   'FEPI', 'AIPI', 'WDTE', 'BDTE', 'IDTE', 'KLIP', 'DISO', 'SQY', 'AMZY', 'GOOGY',
-  'MSFO', 'APLY', 'SMCY', 'NFLY', 'OARK', 'JPMO', 'IWMY', 'WEEK',
+  'MSFO', 'APLY', 'SMCY', 'NFLY', 'OARK', 'JPMO', 'IWMY', 'WEEK', 'SPYI', 'QDVO',
 ]);
+
+const WEEKLY_PAYERS = new Set(['XDTE', 'QDTE', 'RDTE', 'WDTE', 'MDTE']);
 
 const QUARTERLY_PAYERS = new Set([
   'SCHD', 'DIVO', 'QQQ', 'SPY', 'VOO', 'VTI', 'VGT', 'SPYG', 'AGG', 'BND',
   'TLT', 'IEF', 'BST', 'STK', 'BDJ', 'EOS', 'USA',
 ]);
 
-function DividendCalendarSection({ positions, dividends }: { positions: EnrichedPosition[]; dividends: DividendRecord[] }) {
-  // Build calendar: for each held position, determine payer type
-  const held = positions
-    .filter((p) => !p.instrument.symbol.includes(' ') && (p.currentValue ?? 0) > 100)
-    .map((p) => p.instrument.symbol.toUpperCase());
+// Conservative fallback yields (%) for funds whose Schwab quote reports 0 yield
+// because payouts are classified as return-of-capital rather than qualified divs.
+const FALLBACK_YIELD_PCT: Record<string, number> = {
+  XDTE: 30, QDTE: 35, RDTE: 28,
+  TSLY: 55, NVDY: 50, CONY: 70, ULTY: 55, YMAX: 40, YMAG: 35,
+  QQQY: 50, IWMY: 55, JEPY: 35,
+  FEPI: 20, AIPI: 25, SPYI: 12, QDVO: 10,
+  JEPI: 7.5, JEPQ: 9.5,
+  CLM: 18, CRF: 18, OXLC: 18,
+  GOF: 14, PTY: 10, RIV: 12, KLIP: 35,
+  BST: 6, BDJ: 7, STK: 7, USA: 10, EOS: 8,
+  SCHD: 3.5, DIVO: 4.5,
+};
 
-  const bySymbol = groupBySymbol(dividends);
-  const symbolMap = Object.fromEntries(bySymbol.map((r) => [r.symbol, r.total / 12]));
+function getFreq(symbol: string): PayFreq {
+  if (WEEKLY_PAYERS.has(symbol)) return 'weekly';
+  if (MONTHLY_PAYERS.has(symbol)) return 'monthly';
+  if (QUARTERLY_PAYERS.has(symbol)) return 'quarterly';
+  return 'quarterly';
+}
 
-  const monthly = held.filter((s) => MONTHLY_PAYERS.has(s));
-  const quarterly = held.filter((s) => QUARTERLY_PAYERS.has(s));
-  const unknown = held.filter((s) => !MONTHLY_PAYERS.has(s) && !QUARTERLY_PAYERS.has(s));
+function estimateAnnualIncome(pos: EnrichedPosition): number {
+  const symbol = (pos.instrument?.symbol ?? '').toUpperCase();
+  // 1) Live quote yield
+  const qYield = pos.quote?.divYield;
+  if (qYield && qYield > 0 && pos.marketValue > 0) {
+    return pos.marketValue * (qYield / 100);
+  }
+  // 2) Live per-payment amount × frequency
+  const divAmt = pos.quote?.divAmount;
+  if (divAmt && divAmt > 0 && pos.longQuantity > 0) {
+    const freq = getFreq(symbol);
+    const perYear = freq === 'weekly' ? 52 : freq === 'monthly' ? 12 : freq === 'quarterly' ? 4 : 1;
+    return divAmt * perYear * pos.longQuantity;
+  }
+  // 3) Conservative fallback yield
+  const fb = FALLBACK_YIELD_PCT[symbol];
+  if (fb && fb > 0 && pos.marketValue > 0) {
+    return pos.marketValue * (fb / 100);
+  }
+  return 0;
+}
 
-  const monthlyIncome = monthly.reduce((sum, s) => sum + (symbolMap[s] ?? 0), 0);
-  const quarterlyMonthlyEquiv = quarterly.reduce((sum, s) => sum + (symbolMap[s] ?? 0), 0);
+const QUARTERLY_MONTHS = [2, 5, 8, 11]; // Mar, Jun, Sep, Dec
+
+function distributeAnnualToMonths(annual: number, freq: PayFreq): number[] {
+  const months = new Array(12).fill(0);
+  if (annual <= 0) return months;
+  switch (freq) {
+    case 'weekly':
+      for (let i = 0; i < 12; i++) months[i] = annual / 12; // even monthly equivalent
+      break;
+    case 'monthly':
+      for (let i = 0; i < 12; i++) months[i] = annual / 12;
+      break;
+    case 'quarterly':
+      for (const m of QUARTERLY_MONTHS) months[m] = annual / 4;
+      break;
+    case 'annual':
+      months[11] = annual;
+      break;
+  }
+  return months;
+}
+
+function DividendCalendarSection({ positions }: { positions: EnrichedPosition[]; dividends: DividendRecord[] }) {
+  // Build a forward-looking 12-month forecast from current holdings
+  const forecast: { symbol: string; freq: PayFreq; annual: number; months: number[] }[] = [];
+  const totalsByMonth = new Array(12).fill(0);
+
+  for (const p of positions) {
+    const symbol = (p.instrument?.symbol ?? '').toUpperCase();
+    if (!symbol || symbol.includes(' ') || p.instrument?.assetType === 'OPTION') continue;
+    if ((p.currentValue ?? 0) < 100) continue;
+
+    const annual = estimateAnnualIncome(p);
+    if (annual < 1) continue;
+    const freq = getFreq(symbol);
+    const months = distributeAnnualToMonths(annual, freq);
+    for (let i = 0; i < 12; i++) totalsByMonth[i] += months[i];
+    forecast.push({ symbol, freq, annual, months });
+  }
+
+  forecast.sort((a, b) => b.annual - a.annual);
+
+  const annualTotal = totalsByMonth.reduce((s, v) => s + v, 0);
+  const avgMonthly = annualTotal / 12;
+  const currentMo = new Date().getMonth();
+  const maxMonth = Math.max(...totalsByMonth, 1);
+
+  const MONTH_LABELS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+  const monthly = forecast.filter((f) => f.freq === 'monthly' || f.freq === 'weekly');
+  const quarterly = forecast.filter((f) => f.freq === 'quarterly');
 
   return (
     <div className="space-y-4 px-1">
+      <div className="text-xs text-[#7c82a0] bg-[#0f1117] rounded-lg p-3 border border-[#2d3248]">
+        <span className="text-emerald-400 font-semibold">Forward-looking estimate</span> — built from your
+        current holdings × per-ticker yield/frequency. Actual payments may vary; use this to plan the
+        next 12 months of income, not as a declared-dividend calendar.
+      </div>
+
+      {/* Monthly forecast bar chart */}
+      <div className="bg-[#0f1117] rounded-lg p-3 border border-[#2d3248] space-y-2">
+        <div className="flex items-center justify-between text-xs">
+          <span className="text-[#7c82a0] flex items-center gap-1">
+            <Calendar className="w-3 h-3" /> Next 12 months — estimated
+          </span>
+          <span className="text-emerald-400 font-semibold">
+            ~{fmt$(annualTotal, true)}/yr · {fmt$(avgMonthly, true)}/mo avg
+          </span>
+        </div>
+        <div className="space-y-1">
+          {totalsByMonth.map((v, i) => {
+            const pct = maxMonth > 0 ? (v / maxMonth) * 100 : 0;
+            const isCurrent = i === currentMo;
+            return (
+              <div key={i} className="flex items-center gap-2">
+                <span className={`text-xs w-8 text-right ${isCurrent ? 'text-white font-semibold' : 'text-[#7c82a0]'}`}>
+                  {MONTH_LABELS[i]}
+                </span>
+                <div className="flex-1 h-4 bg-[#1a1d27] rounded relative overflow-hidden">
+                  <div
+                    className={`h-full ${isCurrent ? 'bg-violet-500' : 'bg-emerald-500/60'}`}
+                    style={{ width: `${pct}%` }}
+                  />
+                </div>
+                <span className={`text-xs w-16 text-right font-mono ${isCurrent ? 'text-violet-300 font-semibold' : 'text-[#7c82a0]'}`}>
+                  {fmt$(v, true)}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* Frequency groupings */}
       <div className="grid grid-cols-2 gap-3">
         <div className="bg-[#0f1117] rounded-lg p-3">
           <div className="text-xs text-[#7c82a0] mb-2 flex items-center gap-1">
-            <Calendar className="w-3 h-3" /> Monthly Payers ({monthly.length})
+            <Calendar className="w-3 h-3" /> Monthly / Weekly payers ({monthly.length})
           </div>
           <div className="flex flex-wrap gap-1.5">
             {monthly.length === 0 ? (
               <span className="text-xs text-[#4a5070]">None held</span>
             ) : (
-              monthly.map((s) => (
-                <span key={s} className="bg-emerald-500/15 text-emerald-300 text-xs px-2 py-0.5 rounded font-mono">
-                  {s}
+              monthly.map((f) => (
+                <span key={f.symbol} className="bg-emerald-500/15 text-emerald-300 text-xs px-2 py-0.5 rounded font-mono">
+                  {f.symbol}
                 </span>
               ))
             )}
           </div>
-          <div className="mt-2 text-xs text-emerald-400 font-semibold">{fmt$(monthlyIncome, true)}/mo avg</div>
+          <div className="mt-2 text-xs text-emerald-400 font-semibold">
+            {fmt$(monthly.reduce((s, f) => s + f.annual / 12, 0), true)}/mo avg
+          </div>
         </div>
         <div className="bg-[#0f1117] rounded-lg p-3">
           <div className="text-xs text-[#7c82a0] mb-2 flex items-center gap-1">
-            <Calendar className="w-3 h-3" /> Quarterly Payers ({quarterly.length})
+            <Calendar className="w-3 h-3" /> Quarterly payers ({quarterly.length})
           </div>
           <div className="flex flex-wrap gap-1.5">
             {quarterly.length === 0 ? (
               <span className="text-xs text-[#4a5070]">None held</span>
             ) : (
-              quarterly.map((s) => (
-                <span key={s} className="bg-blue-500/15 text-blue-300 text-xs px-2 py-0.5 rounded font-mono">
-                  {s}
+              quarterly.map((f) => (
+                <span key={f.symbol} className="bg-blue-500/15 text-blue-300 text-xs px-2 py-0.5 rounded font-mono">
+                  {f.symbol}
                 </span>
               ))
             )}
           </div>
-          <div className="mt-2 text-xs text-blue-400 font-semibold">{fmt$(quarterlyMonthlyEquiv, true)}/mo avg</div>
+          <div className="mt-2 text-xs text-blue-400 font-semibold">
+            {fmt$(quarterly.reduce((s, f) => s + f.annual / 12, 0), true)}/mo avg
+          </div>
         </div>
       </div>
 
-      {unknown.length > 0 && (
-        <div className="bg-[#0f1117] rounded-lg p-3">
-          <div className="text-xs text-[#7c82a0] mb-2">Unknown Frequency ({unknown.length})</div>
-          <div className="flex flex-wrap gap-1.5">
-            {unknown.map((s) => (
-              <span key={s} className="bg-[#2d3248] text-[#7c82a0] text-xs px-2 py-0.5 rounded font-mono">
-                {s}
-              </span>
-            ))}
-          </div>
+      {/* Per-ticker forecast table */}
+      {forecast.length > 0 && (
+        <div className="bg-[#0f1117] rounded-lg p-3 border border-[#2d3248] overflow-x-auto">
+          <div className="text-xs text-[#7c82a0] mb-2">Estimated distributions per holding (next 12 months)</div>
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-[#2d3248] text-[#4a5070]">
+                <th className="text-left px-2 py-1.5 font-medium">Symbol</th>
+                <th className="text-left px-2 py-1.5 font-medium">Freq</th>
+                <th className="text-right px-2 py-1.5 font-medium">Est. / yr</th>
+                <th className="text-right px-2 py-1.5 font-medium">Est. / mo</th>
+              </tr>
+            </thead>
+            <tbody>
+              {forecast.map((f) => (
+                <tr key={f.symbol} className="border-b border-[#1a1d27] hover:bg-[#0f1117]">
+                  <td className="px-2 py-2 font-mono font-semibold text-white">{f.symbol}</td>
+                  <td className="px-2 py-2">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${
+                      f.freq === 'weekly'    ? 'bg-violet-500/20 text-violet-300' :
+                      f.freq === 'monthly'   ? 'bg-emerald-500/20 text-emerald-300' :
+                      f.freq === 'quarterly' ? 'bg-blue-500/20 text-blue-300' :
+                                               'bg-[#2d3248] text-[#7c82a0]'
+                    }`}>
+                      {f.freq}
+                    </span>
+                  </td>
+                  <td className="text-right px-2 py-2 font-mono text-emerald-400">{fmt$(f.annual, true)}</td>
+                  <td className="text-right px-2 py-2 font-mono text-[#7c82a0]">{fmt$(f.annual / 12, true)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
       )}
 
@@ -815,7 +969,7 @@ export function DividendIncomePanel({ positions, totalValue, marginBalance = 0 }
         <div>
           <SectionHeader
             icon={<Calendar className="w-4 h-4 text-blue-400" />}
-            title="Dividend Payment Calendar"
+            title="Dividend Payment Calendar (Forward-Looking)"
             open={openSections.calendar}
             onToggle={() => toggle('calendar')}
           />

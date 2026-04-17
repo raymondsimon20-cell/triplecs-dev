@@ -73,6 +73,11 @@ interface OrderRow {
   rationale:   string;
   size_hint:   string;
   aiMode:      string;
+  // Trading safety metadata
+  intendedDollars?: number;  // dollar_amount from AI, if provided
+  estimatedPrice?:  number;  // per-share price used to estimate shares
+  priceSource:      'position' | 'quote' | 'unknown';
+  warning?:         string;  // shown in review modal when user should double-check
 }
 
 interface OrderResult {
@@ -101,6 +106,11 @@ interface AIAnalysisPanelProps {
   pillarSummary: PillarSummary[];
   dividendsAnnual?: number;
   accountHash?: string;   // needed to place orders — passed from dashboard
+  /** When the portfolio snapshot was last pulled from Schwab. Used to warn the
+   *  user that AI analysis is based on cached data, not live-streaming prices. */
+  snapshotTakenAt?: Date | null;
+  /** Refresh the portfolio snapshot from the server before running analysis. */
+  onRefreshSnapshot?: () => void | Promise<void>;
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -164,8 +174,23 @@ function sanitizeRec(rec: Recommendation): Recommendation {
   };
 }
 
-/** Estimate shares from a recommendation + live positions */
-function estimateShares(rec: Recommendation, positions: EnrichedPosition[]): number {
+/**
+ * Estimate shares from a recommendation + live positions.
+ * Returns both the share count AND the metadata needed for the review UI to
+ * warn the user when a price had to be guessed (critical for BUY of tickers
+ * the user doesn't yet own — otherwise a $2,000 dollar_amount can become
+ * 2,000 shares at ~$1 default price, a six-figure trading error).
+ */
+function estimateSharesSafe(
+  rec: Recommendation,
+  positions: EnrichedPosition[],
+  quotePrice?: number,
+): {
+  shares: number;
+  estimatedPrice?: number;
+  priceSource: 'position' | 'quote' | 'unknown';
+  warning?: string;
+} {
   const safe = sanitizeRec(rec);
   const pos = positions.find(
     (p) => p.instrument?.symbol?.toUpperCase() === safe.ticker.toUpperCase()
@@ -173,20 +198,45 @@ function estimateShares(rec: Recommendation, positions: EnrichedPosition[]): num
   const maxShares = pos ? (pos.longQuantity || pos.shortQuantity || 999_999) : 999_999;
 
   if (safe.action === 'BUY' && safe.dollar_amount && safe.dollar_amount > 0) {
-    const price = pos ? (pos.marketValue / (pos.longQuantity || 1)) : 1;
-    if (price <= 0) return 1;
-    return Math.min(999_999, Math.max(1, Math.floor(safe.dollar_amount / price)));
+    let price = 0;
+    let source: 'position' | 'quote' | 'unknown' = 'unknown';
+
+    if (pos && pos.longQuantity > 0 && pos.marketValue > 0) {
+      price = pos.marketValue / pos.longQuantity;
+      source = 'position';
+    } else if (quotePrice && quotePrice > 0) {
+      price = quotePrice;
+      source = 'quote';
+    }
+
+    // Without a real price we MUST NOT convert dollars→shares. Returning 0
+    // forces the user to edit the field in the review modal.
+    if (price <= 0) {
+      return {
+        shares: 0,
+        priceSource: 'unknown',
+        warning: `No live price found for ${safe.ticker}. Enter share count manually — do NOT submit 0.`,
+      };
+    }
+
+    const shares = Math.min(999_999, Math.max(1, Math.floor(safe.dollar_amount / price)));
+    return { shares, estimatedPrice: price, priceSource: source };
   }
 
   if ((safe.action === 'SELL' || safe.action === 'TRIM') && pos) {
-    if (safe.sell_shares && safe.sell_shares > 0)
-      return Math.min(safe.sell_shares, maxShares);
-    if (safe.sell_pct && safe.sell_pct > 0)
-      return Math.min(maxShares, Math.max(1, Math.floor((safe.sell_pct / 100) * pos.longQuantity)));
-    return pos.longQuantity; // default: sell all
+    if (safe.sell_shares && safe.sell_shares > 0) {
+      return { shares: Math.min(safe.sell_shares, maxShares), priceSource: 'position' };
+    }
+    if (safe.sell_pct && safe.sell_pct > 0) {
+      return {
+        shares: Math.min(maxShares, Math.max(1, Math.floor((safe.sell_pct / 100) * pos.longQuantity))),
+        priceSource: 'position',
+      };
+    }
+    return { shares: pos.longQuantity, priceSource: 'position' }; // default: sell all
   }
 
-  return 1;
+  return { shares: 0, priceSource: 'unknown', warning: 'Could not determine quantity — enter manually.' };
 }
 
 // ─── Pillar Bar ─────────────────────────────────────────────────────────────────
@@ -270,7 +320,16 @@ function OrderReviewModal({
             ))
           ) : (
             /* Review rows */
-            rows.map((row, i) => (
+            rows.map((row, i) => {
+              const orderValue =
+                row.estimatedPrice != null ? row.shares * row.estimatedPrice : null;
+              const intended = row.intendedDollars ?? null;
+              const bigMismatch =
+                orderValue != null && intended != null && intended > 0
+                  ? Math.abs(orderValue - intended) / intended > 0.25
+                  : false;
+
+              return (
               <div key={i} className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3 space-y-2">
                 <div className="flex items-center gap-2">
                   <span className={`text-xs font-bold px-2 py-0.5 rounded border ${ACTION_COLORS[row.instruction]}`}>
@@ -283,21 +342,58 @@ function OrderReviewModal({
                   </button>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-3 flex-wrap">
                   <label className="text-xs text-[#7c82a0] whitespace-nowrap">Shares:</label>
                   <input
                     type="number"
-                    min={1}
+                    min={0}
                     value={row.shares}
-                    onChange={(e) => onChangeShares(i, Math.max(1, parseInt(e.target.value) || 1))}
-                    className="w-24 bg-[#1a1d27] border border-[#2d3248] rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-violet-500/50"
+                    onChange={(e) => onChangeShares(i, Math.max(0, parseInt(e.target.value) || 0))}
+                    className={`w-24 bg-[#1a1d27] border rounded px-2 py-1 text-sm text-white focus:outline-none focus:border-violet-500/50 ${
+                      row.shares === 0 ? 'border-red-500/60' : 'border-[#2d3248]'
+                    }`}
                   />
+                  {row.estimatedPrice != null && (
+                    <span className="text-xs text-[#7c82a0]">
+                      @ ~${row.estimatedPrice.toLocaleString('en-US', { maximumFractionDigits: 2 })}
+                      {row.priceSource === 'quote' ? ' (live quote)' : ' (from position)'}
+                    </span>
+                  )}
+                  {orderValue != null && (
+                    <span className="text-xs text-[#7c82a0]">
+                      ≈ ${orderValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}
+                    </span>
+                  )}
                   <span className="text-xs text-[#4a5070]">{row.size_hint}</span>
                 </div>
 
+                {intended != null && (
+                  <div className="text-[11px] text-violet-300 bg-violet-500/10 border border-violet-500/20 rounded px-2 py-1">
+                    AI intended dollar amount: <span className="font-semibold">${intended.toLocaleString()}</span>
+                    {' — '}verify the share count matches this dollar value before placing.
+                  </div>
+                )}
+
+                {(row.warning || row.priceSource === 'unknown') && (
+                  <div className="text-[11px] text-red-300 bg-red-500/10 border border-red-500/25 rounded px-2 py-1 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>{row.warning ?? `No live price available for ${row.ticker}. Enter shares manually.`}</span>
+                  </div>
+                )}
+
+                {bigMismatch && (
+                  <div className="text-[11px] text-orange-300 bg-orange-500/10 border border-orange-500/25 rounded px-2 py-1 flex items-start gap-1.5">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
+                    <span>
+                      Shares × est. price (~${orderValue?.toLocaleString('en-US', { maximumFractionDigits: 0 })}) differs from AI's intended ${intended?.toLocaleString()} by more than 25%.
+                    </span>
+                  </div>
+                )}
+
                 <p className="text-xs text-[#7c82a0]">{row.rationale}</p>
               </div>
-            ))
+              );
+            })
           )}
         </div>
 
@@ -314,8 +410,8 @@ function OrderReviewModal({
               </div>
               <button
                 onClick={onConfirm}
-                disabled={placing || rows.length === 0}
-                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
+                disabled={placing || rows.length === 0 || rows.some((r) => !r.shares || r.shares < 1)}
+                className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2 rounded-lg text-sm font-medium transition-colors"
               >
                 {placing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
                 {placing ? 'Placing…' : `Place ${rows.length} Order${rows.length !== 1 ? 's' : ''}`}
@@ -338,6 +434,8 @@ export function AIAnalysisPanel({
   pillarSummary,
   dividendsAnnual = 0,
   accountHash = '',
+  snapshotTakenAt = null,
+  onRefreshSnapshot,
 }: AIAnalysisPanelProps) {
   const [open,          setOpen]          = useState(false);
   const [mode,          setMode]          = useState<AnalysisMode>('daily_pulse');
@@ -470,25 +568,63 @@ export function AIAnalysisPanel({
     });
   }, []);
 
-  const openOrderModal = useCallback(() => {
+  const openOrderModal = useCallback(async () => {
     if (!analysis) return;
-    const rows: OrderRow[] = [...selectedRecs]
-      .sort((a, b) => a - b)
-      .map((idx) => {
-        const rec = analysis.recommendations[idx];
-        const instruction: 'BUY' | 'SELL' =
-          rec.action === 'BUY' ? 'BUY' : 'SELL';
-        return {
-          recIdx:      idx,
-          ticker:      rec.ticker,
-          instruction,
-          shares:      estimateShares(rec, positions),
-          orderType:   'MARKET',
-          rationale:   rec.rationale,
-          size_hint:   rec.size_hint ?? '',
-          aiMode:      analysis.mode,
-        };
-      });
+
+    const selectedIndices = [...selectedRecs].sort((a, b) => a - b);
+    const selectedRecList = selectedIndices.map((i) => analysis.recommendations[i]);
+
+    // For BUY recs where the user doesn't already hold the ticker, we need a
+    // live quote — otherwise dollar_amount → shares conversion is unsafe.
+    const ownedSymbols = new Set(
+      positions.map((p) => p.instrument?.symbol?.toUpperCase()).filter(Boolean) as string[]
+    );
+    const missingBuyTickers = [
+      ...new Set(
+        selectedRecList
+          .filter((r) => r.action === 'BUY' && r.dollar_amount && r.dollar_amount > 0)
+          .map((r) => r.ticker?.toUpperCase())
+          .filter((t): t is string => !!t && !ownedSymbols.has(t))
+      ),
+    ];
+
+    let quoteMap: Record<string, number> = {};
+    if (missingBuyTickers.length > 0) {
+      try {
+        const qs = missingBuyTickers.join(',');
+        const res = await fetch(`/api/quotes?symbols=${encodeURIComponent(qs)}`);
+        if (res.ok) {
+          const data = await res.json() as { quotes?: Record<string, { lastPrice: number }> };
+          quoteMap = Object.fromEntries(
+            Object.entries(data.quotes ?? {}).map(([sym, q]) => [sym.toUpperCase(), q.lastPrice])
+          );
+        }
+      } catch {
+        // Non-fatal — we'll show a warning in the modal for rows without a price.
+      }
+    }
+
+    const rows: OrderRow[] = selectedIndices.map((idx) => {
+      const rec = analysis.recommendations[idx];
+      const instruction: 'BUY' | 'SELL' = rec.action === 'BUY' ? 'BUY' : 'SELL';
+      const quotePrice = quoteMap[rec.ticker?.toUpperCase()];
+      const est = estimateSharesSafe(rec, positions, quotePrice);
+
+      return {
+        recIdx:          idx,
+        ticker:          rec.ticker,
+        instruction,
+        shares:          est.shares,
+        orderType:       'MARKET',
+        rationale:       rec.rationale,
+        size_hint:       rec.size_hint ?? '',
+        aiMode:          analysis.mode,
+        intendedDollars: rec.dollar_amount ?? undefined,
+        estimatedPrice:  est.estimatedPrice,
+        priceSource:     est.priceSource,
+        warning:         est.warning,
+      };
+    });
     setOrderRows(rows);
     setOrderResults([]);
     setShowModal(true);
@@ -536,6 +672,14 @@ export function AIAnalysisPanel({
 
   const selectedMode = MODES.find((m) => m.id === mode)!;
 
+  // Freshness: AI analysis operates on the client-side snapshot captured the
+  // last time /api/accounts ran. If that snapshot is older than ~2 minutes we
+  // warn the user before they act on AI recommendations.
+  const snapshotAgeMs = snapshotTakenAt ? Date.now() - snapshotTakenAt.getTime() : null;
+  const isStale = snapshotAgeMs != null && snapshotAgeMs > 120_000;
+  const snapshotLabel =
+    snapshotTakenAt ? snapshotTakenAt.toLocaleTimeString() : 'unknown';
+
   return (
     <>
       {/* Order review modal */}
@@ -567,6 +711,37 @@ export function AIAnalysisPanel({
 
         {open && (
           <div className="px-5 pb-5 space-y-5 border-t border-[#2d3248] pt-5">
+            {/* Data-freshness notice: AI analyzes a cached snapshot, not a
+                live Schwab stream. Show the snapshot timestamp and give the
+                user a one-click refresh before running analysis. */}
+            <div className={`flex items-start gap-2 text-xs rounded-lg border px-3 py-2 ${
+              isStale
+                ? 'bg-orange-500/10 border-orange-500/30 text-orange-300'
+                : 'bg-[#0f1117] border-[#2d3248] text-[#7c82a0]'
+            }`}>
+              <AlertTriangle className={`w-4 h-4 flex-shrink-0 mt-0.5 ${isStale ? 'text-orange-300' : 'text-[#4a5070]'}`} />
+              <div className="flex-1">
+                <div>
+                  AI analysis runs against the <span className="font-semibold">last-loaded portfolio snapshot</span> — not a live price feed.
+                  {' '}Snapshot: <span className="font-mono">{snapshotLabel}</span>
+                  {snapshotAgeMs != null && (
+                    <> ({Math.floor(snapshotAgeMs / 1000)}s ago)</>
+                  )}
+                </div>
+                <div className="opacity-80 mt-0.5">
+                  Verify every recommendation against live Schwab quotes before placing trades.
+                </div>
+              </div>
+              {onRefreshSnapshot && (
+                <button
+                  onClick={() => onRefreshSnapshot()}
+                  className="flex items-center gap-1 text-xs text-white bg-[#2d3248] hover:bg-[#3d4268] px-2 py-1 rounded transition-colors flex-shrink-0"
+                >
+                  <RefreshCw className="w-3 h-3" /> Refresh data
+                </button>
+              )}
+            </div>
+
             {/* Mode selector */}
             <div>
               <p className="text-xs text-[#7c82a0] mb-2">Analysis Mode</p>
