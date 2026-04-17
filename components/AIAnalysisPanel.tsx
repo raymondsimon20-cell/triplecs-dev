@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { PutChainInline } from '@/components/PutChainInline';
+import { forwardAnnualDividends, estimateAnnualDividend } from '@/lib/dividends/forward';
 
 // ─── Types ─────────────────────────────────────────────────────────────────────
 
@@ -370,7 +371,17 @@ export function AIAnalysisPanel({
       equity,
       margin_balance: marginBalance,
       margin_utilization_pct: totalValue > 0 ? (marginBalance / totalValue) * 100 : 0,
-      dividends_annual: dividendsAnnual,
+      // FORWARD-projected annual dividend income based on CURRENT holdings × their
+      // per-share annual distribution. This is what should be compared against the
+      // FIRE target — it reflects the income the portfolio will generate going forward,
+      // not what was paid during a (potentially very different) prior 12 months.
+      dividends_annual_forward: forwardAnnualDividends(positions),
+      // TRAILING 12-month realized dividends (from Schwab transaction history).
+      // Provided for context only — do NOT use for FIRE gap calculation.
+      dividends_annual_trailing: dividendsAnnual,
+      // Legacy alias kept for backward compatibility. Set to the FORWARD figure
+      // so older prompt paths also use the correct value.
+      dividends_annual: forwardAnnualDividends(positions),
       pillar_summary: pillarSummary.map((p) => ({
         pillar: p.pillar,
         label: p.label,
@@ -387,6 +398,9 @@ export function AIAnalysisPanel({
         day_pct: p.currentDayProfitLossPercentage,
         unrealized_gl: p.longOpenProfitLoss,
         pct_of_portfolio: totalValue > 0 ? +((p.marketValue / totalValue) * 100).toFixed(2) : 0,
+        // Per-position forward annual dividend estimate — lets the AI see which
+        // holdings drive projected income and identify gaps.
+        forward_annual_dividend: +estimateAnnualDividend(p).toFixed(2),
       })),
     };
 

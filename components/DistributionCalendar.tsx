@@ -17,148 +17,21 @@
 import { useState, useMemo } from 'react';
 import { Calendar, ChevronDown, ChevronUp, TrendingUp, DollarSign } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
+import {
+  type Frequency,
+  getFrequency,
+  estimateAnnualDividend,
+} from '@/lib/dividends/forward';
 
 interface Props {
   positions: EnrichedPosition[];
   totalValue: number;
 }
 
-// ─── Payment frequency map ────────────────────────────────────────────────────
-
-type Frequency = 'weekly' | 'monthly' | 'quarterly' | 'annual';
-
-const FREQ_MAP: Record<string, Frequency> = {
-  // Weekly payers (Roundhill)
-  XDTE: 'weekly', QDTE: 'weekly', RDTE: 'weekly', WDTE: 'weekly', MDTE: 'weekly',
-
-  // Monthly payers — YieldMax family
-  TSLY: 'monthly', NVDY: 'monthly', AMZY: 'monthly', GOOGY: 'monthly',
-  MSFO: 'monthly', CONY: 'monthly', JPMO: 'monthly', NFLXY: 'monthly',
-  AMDY: 'monthly', PYPLY: 'monthly', AIYY: 'monthly', OILY: 'monthly',
-  CVNY: 'monthly', MRNY: 'monthly', SNOY: 'monthly', BIOY: 'monthly',
-  DISO: 'monthly', ULTY: 'monthly', YMAX: 'monthly', YMAG: 'monthly',
-  FBY: 'monthly', GDXY: 'monthly', XOMO: 'monthly', TSMY: 'monthly',
-
-  // Defiance
-  QQQY: 'monthly', IWMY: 'monthly', JEPY: 'monthly',
-  QDTY: 'monthly', SDTY: 'monthly',
-
-  // RexShares / Neos
-  FEPI: 'monthly', AIPI: 'monthly', SPYI: 'monthly', QDVO: 'monthly',
-  JPEI: 'monthly', IWMI: 'monthly',
-
-  // JPMorgan
-  JEPI: 'monthly', JEPQ: 'monthly',
-
-  // Cornerstone CEFs (monthly managed distribution)
-  CLM: 'monthly', CRF: 'monthly',
-
-  // Other CEFs — monthly
-  OXLC: 'monthly', PDI: 'monthly', PDO: 'monthly', PTY: 'monthly',
-  PCN: 'monthly', PFL: 'monthly', PFN: 'monthly',
-  ETV: 'monthly', ETB: 'monthly', EOS: 'monthly', EOI: 'monthly',
-  BST: 'monthly', BDJ: 'monthly', ECAT: 'monthly',
-  RIV: 'monthly', OPP: 'monthly', GOF: 'monthly',
-  STK: 'monthly', USA: 'monthly', KLIP: 'monthly',
-
-  // Amplify
-  DIVO: 'quarterly',
-
-  // Global X covered-call (monthly)
-  QYLD: 'monthly', RYLD: 'monthly', XYLD: 'monthly',
-
-  // Quarterly — traditional ETFs / dividend stocks
-  SCHD: 'quarterly', VYM: 'quarterly', QQQ: 'quarterly',
-  SPY: 'quarterly', IVV: 'quarterly', VOO: 'quarterly', VTI: 'quarterly',
-  NVDA: 'quarterly', AAPL: 'quarterly', MSFT: 'quarterly',
-  SPYG: 'quarterly',
-
-  // 3× ETFs — no dividend
-  UPRO: 'annual', TQQQ: 'annual', SPXL: 'annual', UDOW: 'annual', SQQQ: 'annual',
-};
-
 // Months quarterly payers typically distribute (0-indexed)
 const QUARTERLY_MONTHS = [2, 5, 8, 11]; // Mar, Jun, Sep, Dec
 
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
-
-function getFrequency(symbol: string): Frequency {
-  return FREQ_MAP[symbol.toUpperCase()] ?? 'quarterly';
-}
-
-// ─── Approximate annual distribution yields (%) ──────────────────────────────
-// Schwab often reports divYield = 0 for covered-call ETFs and CEFs because
-// their payouts are classified as "distributions" or "return of capital"
-// rather than qualified dividends. This fallback table uses approximate
-// trailing 12-month yields so the calendar always has something to show.
-// These are conservative estimates — actual yields fluctuate.
-
-const FALLBACK_YIELDS: Record<string, number> = {
-  // Roundhill weekly payers (~25–60% trailing yields)
-  XDTE: 30, QDTE: 35, RDTE: 28, WDTE: 30, MDTE: 28,
-
-  // YieldMax single-stock (~20–80% trailing)
-  TSLY: 55, NVDY: 50, CONY: 70, MSFO: 30, AMZY: 45,
-  GOOGY: 25, JPMO: 15, NFLXY: 35, AMDY: 40, PYPLY: 30,
-  AIYY: 35, OILY: 35, CVNY: 30, MRNY: 40, SNOY: 25,
-  BIOY: 25, DISO: 30, ULTY: 55, YMAX: 40, YMAG: 35,
-  FBY: 35, GDXY: 25, XOMO: 30, TSMY: 30,
-
-  // Defiance (~30–60%)
-  QQQY: 50, IWMY: 55, JEPY: 35, QDTY: 30, SDTY: 30,
-
-  // RexShares / Neos (~10–30%)
-  FEPI: 20, AIPI: 25, SPYI: 12, QDVO: 10, JPEI: 12, IWMI: 15,
-
-  // JPMorgan (~7–10%)
-  JEPI: 7.5, JEPQ: 9.5,
-
-  // Cornerstone CEFs (~15–20% managed distribution)
-  CLM: 18, CRF: 18,
-
-  // Other CEFs (~8–15%)
-  OXLC: 18, PDI: 13, PDO: 12, PTY: 10, PCN: 9, PFL: 10, PFN: 10,
-  ETV: 8.5, ETB: 8, EOS: 8, EOI: 8,
-  BST: 6, BDJ: 7, ECAT: 9, RIV: 12, OPP: 12, GOF: 14,
-  STK: 7, USA: 10, KLIP: 35,
-
-  // Global X covered-call (~10–12%)
-  QYLD: 12, RYLD: 12, XYLD: 11,
-
-  // Amplify
-  DIVO: 4.5,
-
-  // Traditional dividend ETFs / stocks (~1–4%)
-  SCHD: 3.5, VYM: 3, QQQ: 0.6, SPY: 1.3, IVV: 1.3,
-  VOO: 1.3, VTI: 1.3, NVDA: 0.03, AAPL: 0.5, MSFT: 0.7, SPYG: 0.8,
-
-  // 3× ETFs (negligible)
-  UPRO: 0, TQQQ: 0, SPXL: 0, UDOW: 0, SQQQ: 0,
-};
-
-function estimateAnnualDividend(pos: EnrichedPosition): number {
-  const symbol = pos.instrument?.symbol?.toUpperCase() ?? '';
-
-  // 1) Prefer Schwab quote divYield if it's actually populated
-  if (pos.quote?.divYield && pos.quote.divYield > 0) {
-    return pos.marketValue * (pos.quote.divYield / 100);
-  }
-
-  // 2) Try divAmount × frequency as annual estimate
-  if (pos.quote?.divAmount && pos.quote.divAmount > 0) {
-    const freq = getFrequency(symbol);
-    const paymentsPerYear = freq === 'weekly' ? 52 : freq === 'monthly' ? 12 : freq === 'quarterly' ? 4 : 1;
-    return pos.quote.divAmount * paymentsPerYear * pos.longQuantity;
-  }
-
-  // 3) Fallback to known approximate yields
-  const fallbackYield = FALLBACK_YIELDS[symbol];
-  if (fallbackYield && fallbackYield > 0) {
-    return pos.marketValue * (fallbackYield / 100);
-  }
-
-  return 0;
-}
 
 function distributeToMonths(annualDiv: number, freq: Frequency): number[] {
   const months = new Array(12).fill(0);

@@ -151,6 +151,25 @@ FIRE INCOME MODEL ($10K/month target):
   $5,000/month → margin interest paydown
   Total: $10,000/month gross dividend income needed for financial freedom
 
+⚠️ CRITICAL — USE FORWARD PROJECTIONS FOR FIRE GAP ANALYSIS:
+  The portfolio snapshot includes TWO annual dividend figures:
+    • dividends_annual_forward  — projected FUTURE 12-month income from
+                                  CURRENT holdings × their per-share annual
+                                  distribution. THIS is the number to compare
+                                  against the FIRE target.
+    • dividends_annual_trailing — realized PAST 12-month dividend payments from
+                                  Schwab transaction history. Use for context
+                                  only (how the portfolio performed historically).
+  When calculating estimated_monthly_income and fire_progress_pct, ALWAYS use
+  dividends_annual_forward ÷ 12. Never base the FIRE gap on trailing dividends —
+  the portfolio composition may have changed significantly in the past year, so
+  trailing figures understate (or overstate) what the CURRENT portfolio will pay.
+  If trailing and forward diverge by more than 25%, flag it in alerts (likely
+  a portfolio restructure; the forward number is the forward-looking reality).
+
+  Each position in the snapshot also carries forward_annual_dividend so you can
+  identify which holdings drive income and which add no dividend contribution.
+
 QUALIFYING INCOME FOR BANK LOANS:
   • Dividends from: income funds (Yieldmax, Defiance, etc.), bond funds, CLM/CRF → QUALIFY
   • 3× ETF gains → do NOT qualify (capital gains, not recurring income)
@@ -580,8 +599,8 @@ each rationale ≤ 150 chars. Omit raw_reasoning unless specifically needed.
     }
   ],
   "income_snapshot": {
-    "estimated_monthly_income": <number or null>,
-    "fire_progress_pct": <0-100 or null>,
+    "estimated_monthly_income": <number or null>,  // ALWAYS = dividends_annual_forward ÷ 12
+    "fire_progress_pct": <0-100 or null>,          // ALWAYS vs forward projection, not trailing
     "margin_utilization_pct": <number or null>,
     "margin_status": "safe" | "warn" | "danger" | null
   },
