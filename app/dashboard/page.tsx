@@ -594,6 +594,8 @@ export default function DashboardPage() {
               pillarSummary={account.pillarSummary}
               dividendsAnnual={dividendsTotal}
               accountHash={account.accountHash}
+              snapshotTakenAt={lastUpdated}
+              onRefreshSnapshot={() => fetchAccounts(true)}
             />
           </div>
         </CollapsiblePanel>

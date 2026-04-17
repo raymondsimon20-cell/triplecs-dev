@@ -84,56 +84,95 @@ function generateMarketData(): MarketData {
 }
 
 /**
- * Generate AI recommendation based on market conditions
+ * Normalize four pillar percentages so they sum to exactly 100.
+ * Distributes rounding error to the largest bucket so each field stays an integer.
+ */
+function normalizeTargets(
+  triples: number,
+  cornerstone: number,
+  income: number,
+  hedge: number
+): { triplesPct: number; cornerstonePct: number; incomePct: number; hedgePct: number } {
+  const raw = { triples, cornerstone, income, hedge };
+  const sum = raw.triples + raw.cornerstone + raw.income + raw.hedge;
+
+  if (sum === 0) {
+    return { triplesPct: 10, cornerstonePct: 20, incomePct: 65, hedgePct: 5 };
+  }
+
+  const scaled = {
+    triples:     Math.round((raw.triples     / sum) * 100),
+    cornerstone: Math.round((raw.cornerstone / sum) * 100),
+    income:      Math.round((raw.income      / sum) * 100),
+    hedge:       Math.round((raw.hedge       / sum) * 100),
+  };
+
+  // Absorb rounding drift into the largest bucket (usually Income).
+  const drift = 100 - (scaled.triples + scaled.cornerstone + scaled.income + scaled.hedge);
+  const largest = Object.entries(scaled).sort((a, b) => b[1] - a[1])[0][0] as keyof typeof scaled;
+  scaled[largest] += drift;
+
+  return {
+    triplesPct:     scaled.triples,
+    cornerstonePct: scaled.cornerstone,
+    incomePct:      scaled.income,
+    hedgePct:       scaled.hedge,
+  };
+}
+
+/**
+ * Generate AI recommendation based on market conditions.
+ * All returned pillar targets sum to exactly 100%.
  */
 function generateRecommendation(marketData: MarketData): AllocationRecommendation {
-  const { vix, volatilityLevel, marketTrend } = marketData;
+  const { vix, marketTrend } = marketData;
 
-  // Base allocation targets
+  // Base allocation targets (sum = 100)
   let triplesPct = 10;
-  let cornerstonePct = 15;
-  let incomePct = 60;
+  let cornerstonePct = 20;
+  let incomePct = 65;
   let hedgePct = 5;
   let reason = '';
   let confidence = 0.7;
   let riskLevel: 'low' | 'medium' | 'high' = 'medium';
 
-  // Recommendation logic based on VIX and market trend
+  // Recommendation logic based on VIX and market trend.
+  // Each branch below must produce values that sum to 100.
 
   if (vix < 15 && marketTrend === 'bullish') {
     // Low volatility, bullish market → AGGRESSIVE: increase triples, reduce hedges
     reason = `VIX is low (${vix.toFixed(1)}) and market is bullish. Markets are calm and rallying —
              this is ideal for leveraged exposure. Increase Triples allocation to capture gains,
              reduce hedges since downside risk is minimal.`;
-    triplesPct = 18;  // Up from 10
-    cornerstonePct = 16;
-    incomePct = 56;
-    hedgePct = 2;  // Down from 5
+    triplesPct     = 20;
+    cornerstonePct = 18;
+    incomePct      = 60;
+    hedgePct       = 2;
     confidence = 0.85;
     riskLevel = 'medium';
   } else if (vix < 15 && marketTrend === 'neutral') {
-    // Low vol, flat market → HOLD or slight increase
+    // Low vol, flat market → HOLD
     reason = `VIX is low (${vix.toFixed(1)}) but market is neutral. Good time to hold current allocation.`;
     confidence = 0.7;
     riskLevel = 'low';
   } else if (vix >= 15 && vix < 25 && marketTrend === 'bullish') {
-    // Normal vol, bullish → BALANCED but slightly bullish
+    // Normal vol, bullish → BALANCED, slight growth lean
     reason = `VIX is in normal range (${vix.toFixed(1)}) and market is bullish. Maintain balanced allocation
              with slight lean toward growth. Market conditions are healthy.`;
-    triplesPct = 13;
-    cornerstonePct = 15;
-    incomePct = 58;
-    hedgePct = 4;
+    triplesPct     = 14;
+    cornerstonePct = 18;
+    incomePct      = 64;
+    hedgePct       = 4;
     confidence = 0.75;
     riskLevel = 'medium';
   } else if (vix >= 25 && vix < 40 && (marketTrend === 'bearish' || marketTrend === 'neutral')) {
     // Elevated vol, bearish/neutral → CAUTIOUS: increase hedges, reduce triples
     reason = `VIX is elevated (${vix.toFixed(1)}) and market sentiment is uncertain.
              Increase hedges for protection against downside. Reduce aggressive Triples exposure.`;
-    triplesPct = 6;   // Down from 10
-    cornerstonePct = 15;
-    incomePct = 62;
-    hedgePct = 10;   // Up from 5
+    triplesPct     = 5;
+    cornerstonePct = 18;
+    incomePct      = 67;
+    hedgePct       = 10;
     confidence = 0.8;
     riskLevel = 'medium';
   } else if (vix >= 40) {
@@ -141,10 +180,10 @@ function generateRecommendation(marketData: MarketData): AllocationRecommendatio
     reason = `VIX is at extreme levels (${vix.toFixed(1)})—market is in panic mode.
              This is typically the best time to BUY after setting up hedges. Reduce Triples,
              add put hedges, and prepare dry powder to buy dips.`;
-    triplesPct = 2;   // Minimal
-    cornerstonePct = 12;
-    incomePct = 60;
-    hedgePct = 15;   // Maximum hedge protection
+    triplesPct     = 3;
+    cornerstonePct = 15;
+    incomePct      = 67;
+    hedgePct       = 15;
     confidence = 0.9;
     riskLevel = 'high';
   } else {
@@ -153,15 +192,16 @@ function generateRecommendation(marketData: MarketData): AllocationRecommendatio
     riskLevel = 'low';
   }
 
+  // Safety net: guarantee the four values always sum to exactly 100.
+  const normalized = normalizeTargets(triplesPct, cornerstonePct, incomePct, hedgePct);
+
   return {
-    recommendation: getRecommendationSummary(triplesPct, cornerstonePct, incomePct, hedgePct, vix, marketTrend),
+    recommendation: getRecommendationSummary(
+      normalized.triplesPct, normalized.cornerstonePct, normalized.incomePct, normalized.hedgePct,
+      vix, marketTrend
+    ),
     reason,
-    suggestedChanges: {
-      triplesPct,
-      cornerstonePct,
-      incomePct,
-      hedgePct,
-    },
+    suggestedChanges: normalized,
     confidence,
     riskLevel,
   };
