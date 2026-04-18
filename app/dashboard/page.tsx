@@ -12,12 +12,11 @@ import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
-import { DividendIncomePanel } from '@/components/DividendIncomePanel';
+import { IncomeHub } from '@/components/IncomeHub';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHistoryPanel } from '@/components/TradeHistoryPanel';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
-import { DistributionCalendar } from '@/components/DistributionCalendar';
 import { YmagDripTracker } from '@/components/YmagDripTracker';
 import { HedgePairTracker } from '@/components/HedgePairTracker';
 import { MarginSimulator } from '@/components/MarginSimulator';
@@ -605,38 +604,12 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
-        {/* ── Income & Dividends ───────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="income"
-          title="Income & Dividend Dashboard"
-          icon={<DollarSign className="w-4 h-4 text-emerald-400" />}
-          accentClass="border-emerald-500/40"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <DividendIncomePanel
-              positions={account.positions}
-              totalValue={account.totalValue}
-              marginBalance={account.marginBalance}
-            />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Distribution Calendar ────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="calendar"
-          title="Distribution Calendar"
-          icon={<Calendar className="w-4 h-4 text-pink-400" />}
-          accentClass="border-pink-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <DistributionCalendar
-              positions={account.positions}
-              totalValue={account.totalValue}
-            />
-          </div>
-        </CollapsiblePanel>
+        {/* ── Income Hub (Historical + Projected + FIRE + Margin) ─────────── */}
+        <IncomeHub
+          positions={account.positions}
+          totalValue={account.totalValue}
+          marginBalance={account.marginBalance}
+        />
 
         {/* ── Rebalance Workflow ───────────────────────────────────────────── */}
         <div id="panel-rebalance" className="scroll-mt-20">
