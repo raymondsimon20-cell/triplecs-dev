@@ -74,6 +74,38 @@ const initRec = (): RecState => ({
   contracts: 1, placing: false, orderResult: null,
 });
 
+// Reads the streaming response from /api/option-plan and extracts __RESULT__ JSON
+async function fetchOptionPlan(body: Record<string, unknown>): Promise<OptionPlanResponse> {
+  const res = await fetch('/api/option-plan', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok || !res.body) {
+    const ct = res.headers.get('content-type') ?? '';
+    if (ct.includes('application/json')) {
+      const err = await res.json();
+      throw new Error(err.error ?? `HTTP ${res.status}`);
+    }
+    throw new Error(`Server error (HTTP ${res.status})`);
+  }
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let accumulated = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    accumulated += decoder.decode(value, { stream: true });
+    if (accumulated.includes('__DONE__')) break;
+  }
+  const idx = accumulated.lastIndexOf('__RESULT__');
+  if (idx === -1) throw new Error('No result received from server');
+  const resultStr = accumulated.slice(idx + '__RESULT__'.length).replace('__DONE__', '').trim();
+  const data = JSON.parse(resultStr) as OptionPlanResponse & { error?: string };
+  if (data.error) throw new Error(data.error);
+  return data;
+}
+
 // ─── OCC Option Symbol Parser ─────────────────────────────────────────────────
 
 interface ParsedOption {
@@ -372,13 +404,7 @@ function PutProtectionSection({
   const getAiRec = async (symbol: string) => {
     setBuyRec((prev) => ({ ...prev, [symbol]: { ...initRec(), loading: true } }));
     try {
-      const res = await fetch('/api/option-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ symbol, mode: 'buy_put', contracts: 1, vix, marketTrend }),
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      const data = await fetchOptionPlan({ symbol, mode: 'buy_put', contracts: 1, vix, marketTrend });
       setBuyRec((prev) => ({ ...prev, [symbol]: { ...initRec(), plan: data, contracts: 1 } }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'AI request failed';
@@ -608,19 +634,10 @@ function SellPutIncomeSection({
   const getAiRec = async (symbol: string, pos: EnrichedPosition) => {
     setAiRecs((prev) => ({ ...prev, [symbol]: { ...initRec(), loading: true } }));
     try {
-      const shares = pos.longQuantity;
-      const value  = pos.marketValue;
-      const pillar = pos.pillar ?? 'income';
-      const res = await fetch('/api/option-plan', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          symbol, mode: 'sell_put', contracts: 1, vix, marketTrend,
-          position: { shares, value, pillar },
-        }),
+      const data = await fetchOptionPlan({
+        symbol, mode: 'sell_put', contracts: 1, vix, marketTrend,
+        position: { shares: pos.longQuantity, value: pos.marketValue, pillar: pos.pillar ?? 'income' },
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
       setAiRecs((prev) => ({ ...prev, [symbol]: { ...initRec(), plan: data, contracts: data.contracts } }));
     } catch (e) {
       const msg = e instanceof Error ? e.message : 'AI request failed';

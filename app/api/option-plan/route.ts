@@ -341,69 +341,83 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
 </json>
 `.trim();
 
-  // ── 4. Call Claude ────────────────────────────────────────────────────────────
-  let plan: ClaudeOptionPlan;
+  // ── 4. Stream Claude → validate → return result ──────────────────────────────
+  // Streaming keeps bytes flowing so Netlify's 26s inactivity timeout never fires.
+  const encoder = new TextEncoder();
+  const occSet  = new Set(filtered.map((c) => c.symbol));
 
-  try {
-    const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model:      'claude-sonnet-4-6',
-      max_tokens: 1024,
-      system:     TRIPLE_C_SYSTEM_PROMPT,
-      messages:   [{ role: 'user', content: userMessage }],
-    });
+  const readable = new ReadableStream({
+    async start(controller) {
+      try {
+        const client = new Anthropic({ apiKey });
+        const stream = await client.messages.stream({
+          model:      'claude-sonnet-4-6',
+          max_tokens: 1024,
+          system:     TRIPLE_C_SYSTEM_PROMPT,
+          messages:   [{ role: 'user', content: userMessage }],
+        });
 
-    const rawText = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b as { type: 'text'; text: string }).text)
-      .join('');
+        let fullText = '';
+        for await (const event of stream) {
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'text_delta'
+          ) {
+            fullText += event.delta.text;
+            controller.enqueue(encoder.encode(event.delta.text));
+          }
+        }
 
-    plan = JSON.parse(extractJSON(rawText)) as ClaudeOptionPlan;
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: `AI plan failed: ${msg}` }, { status: 502 });
-  }
+        let plan: ClaudeOptionPlan;
+        try {
+          plan = JSON.parse(extractJSON(fullText)) as ClaudeOptionPlan;
+        } catch {
+          throw new Error('AI response was not valid JSON — try again');
+        }
 
-  // ── 5. Validate: occSymbol must exist in the live chain ───────────────────────
-  // This is the critical guard — we never let a computed or hallucinated symbol through.
-  const occSet = new Set(filtered.map((c) => c.symbol));
-  let validationPassed = occSet.has(plan.occSymbol);
-  let selectedContract = filtered.find((c) => c.symbol === plan.occSymbol) ?? null;
+        // Validate: occSymbol must exist in the live chain
+        let validationPassed = occSet.has(plan.occSymbol);
+        let selectedContract = filtered.find((c) => c.symbol === plan.occSymbol) ?? null;
 
-  if (!validationPassed || !selectedContract) {
-    // Fallback: use our own scoring to pick the best contract
-    selectedContract = scoreFallback(filtered, mode);
-    plan = {
-      occSymbol:        selectedContract.symbol,
-      instruction,
-      contracts:        Math.min(requestedContracts, 3),
-      limitPrice:       selectedContract.mid,
-      rationale:        `AI selection failed validation — using best scored contract: ${selectedContract.dte} DTE, ${selectedContract.otmPct.toFixed(1)}% OTM, Δ ${selectedContract.delta.toFixed(2)}`,
-      selectedContract: plan.selectedContract ?? selectedContract,
-    };
-    validationPassed = false;
-  }
+        if (!validationPassed || !selectedContract) {
+          selectedContract = scoreFallback(filtered, mode);
+          plan = {
+            occSymbol:        selectedContract.symbol,
+            instruction,
+            contracts:        Math.min(requestedContracts, 3),
+            limitPrice:       selectedContract.mid,
+            rationale:        `AI selection failed validation — using best scored contract: ${selectedContract.dte} DTE, ${selectedContract.otmPct.toFixed(1)}% OTM, Δ ${selectedContract.delta.toFixed(2)}`,
+            selectedContract: plan.selectedContract ?? selectedContract,
+          };
+          validationPassed = false;
+        }
 
-  // Clamp limitPrice between bid and ask of the actual selected contract
-  plan.limitPrice = Math.max(
-    selectedContract.bid,
-    Math.min(selectedContract.ask, plan.limitPrice),
-  );
-  // Round to 2 decimal places (options prices are in cents)
-  plan.limitPrice = +plan.limitPrice.toFixed(2);
-  // Clamp contracts
-  plan.contracts = Math.max(1, Math.min(3, Math.floor(plan.contracts)));
+        plan.limitPrice = +Math.max(selectedContract.bid, Math.min(selectedContract.ask, plan.limitPrice)).toFixed(2);
+        plan.contracts  = Math.max(1, Math.min(3, Math.floor(plan.contracts)));
 
-  return NextResponse.json({
-    occSymbol:        plan.occSymbol,
-    instruction:      plan.instruction,
-    contracts:        plan.contracts,
-    limitPrice:       plan.limitPrice,
-    rationale:        plan.rationale,
-    selectedContract: selectedContract,
-    validationPassed,
-    symbol:           symbol.toUpperCase(),
-    underlyingPrice,
-    mode,
+        const result = JSON.stringify({
+          occSymbol: plan.occSymbol, instruction: plan.instruction,
+          contracts: plan.contracts, limitPrice: plan.limitPrice,
+          rationale: plan.rationale, selectedContract,
+          validationPassed, symbol: symbol.toUpperCase(), underlyingPrice, mode,
+        });
+        controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
+        controller.enqueue(encoder.encode('\n__DONE__'));
+        controller.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        controller.enqueue(encoder.encode(`\n__RESULT__${JSON.stringify({ error: msg })}`));
+        controller.enqueue(encoder.encode('\n__DONE__'));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Accel-Buffering': 'no',
+      'Cache-Control': 'no-cache',
+    },
   });
 }

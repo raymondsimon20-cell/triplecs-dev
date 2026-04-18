@@ -28,14 +28,14 @@ interface ParsedPut {
   expiration:     string;   // YYYY-MM-DD
   dte:            number;
   strike:         number;
-  quantity:       number;   // contracts (short = negative)
-  avgCost:        number;   // premium received per contract (×100)
-  currentValue:   number;   // current market value of position
-  premiumReceived:number;   // original premium (avgCost × qty × 100)
-  currentPremium: number;   // current cost to close (per contract × 100)
+  quantity:       number;   // contracts short
+  avgCost:        number;   // premium received per share (×100 for per-contract)
+  currentValue:   number;   // cost to close (absolute value)
+  premiumReceived:number;   // original premium collected
+  currentPremium: number;   // current cost to close per contract
   profitPct:      number;   // % of premium captured (positive = profit)
-  closeTarget75:  number;   // close when position value = 25% of original
-  status:         'close_now' | 'profitable' | 'neutral' | 'losing' | 'expiry_warning';
+  closeTarget75:  number;   // close when cost-to-close ≤ 25% of original
+  status:         'close_now' | 'roll' | 'profitable' | 'neutral' | 'losing' | 'expiry_warning';
 }
 
 interface Props {
@@ -78,37 +78,40 @@ function fmt$(n: number) {
 
 function parsePositionToPut(pos: EnrichedPosition): ParsedPut | null {
   if (pos.instrument?.assetType !== 'OPTION') return null;
+  if (!(pos.shortQuantity > 0)) return null;  // Vol 6 tracker = short puts only
 
   const rawSymbol = pos.instrument?.symbol ?? '';
   const parsed    = parseOCC(rawSymbol);
   if (!parsed || parsed.isCall) return null;  // puts only
 
-  const quantity = pos.shortQuantity || -(pos.longQuantity || 0);  // short puts are positive shortQuantity
-  const absQty   = Math.abs(quantity) || 1;
+  const absQty = pos.shortQuantity || 1;
 
-  // avgCost for a short put is what you received (credit); Schwab stores as positive avgPrice
-  const avgCost   = pos.averagePrice ?? 0;   // per share (×100 for contract)
+  // avgCost = credit received per share when sold; ×100 for per-contract dollar value
+  const avgCost         = pos.averagePrice ?? 0;
   const premiumReceived = avgCost * absQty * 100;
 
-  // Current value: for short puts, marketValue is positive (cost to close)
-  const currentValue   = pos.marketValue ?? 0;
-  const currentPremium = currentValue / absQty;  // per contract
+  // Schwab returns marketValue as negative for short positions (liability).
+  // Math.abs() normalises it to cost-to-close regardless of sign convention.
+  const currentValue   = Math.abs(pos.marketValue ?? 0);
+  const currentPremium = currentValue / absQty;
 
-  // Profit = how much of the received premium we've kept
-  // When currentValue < premiumReceived, we've profited
+  // Profit = premium collected minus current cost to close
   const profitDollars = premiumReceived - currentValue;
   const profitPct     = premiumReceived > 0 ? (profitDollars / premiumReceived) * 100 : 0;
 
-  // Close target: when remaining premium = 25% of what we received
+  // Close target: when cost-to-close drops to 25% of original (= 75% profit captured)
   const closeTarget75 = premiumReceived * 0.25;
 
   const dte = calcDte(parsed.expiration);
 
   let status: ParsedPut['status'] = 'neutral';
-  if (profitPct >= 75)        status = 'close_now';
-  else if (profitPct >= 40)   status = 'profitable';
-  else if (profitPct < 0)     status = 'losing';
-  if (dte < 21 && status !== 'close_now') status = 'expiry_warning';
+  if (profitPct >= 75)                          status = 'close_now';
+  else if (profitPct >= 40)                     status = 'profitable';
+  else if (profitPct < 0)                       status = 'losing';
+  // DTE < 21: roll if still profitable (25-74%), expiry_warning if losing/neutral
+  if (dte < 21 && status !== 'close_now') {
+    status = (profitPct >= 25) ? 'roll' : 'expiry_warning';
+  }
 
   return {
     symbol:          rawSymbol,
@@ -129,6 +132,7 @@ function parsePositionToPut(pos: EnrichedPosition): ParsedPut | null {
 
 const STATUS_CONFIG = {
   close_now:      { label: 'Close Now ✓',    color: 'bg-emerald-500/20 text-emerald-300 border-emerald-500/30', icon: <CheckCircle className="w-3.5 h-3.5 text-emerald-400" /> },
+  roll:           { label: 'Roll Now →',     color: 'bg-violet-500/20 text-violet-300 border-violet-500/30',   icon: <AlertTriangle className="w-3.5 h-3.5 text-violet-400" /> },
   profitable:     { label: 'Profitable',      color: 'bg-blue-500/20 text-blue-300 border-blue-500/30',         icon: <TrendingDown className="w-3.5 h-3.5 text-blue-400" /> },
   neutral:        { label: 'Watching',        color: 'bg-[#2d3248] text-[#7c82a0] border-[#3d4260]',            icon: <Clock className="w-3.5 h-3.5 text-[#7c82a0]" /> },
   losing:         { label: 'Underwater',      color: 'bg-red-500/20 text-red-300 border-red-500/30',             icon: <AlertTriangle className="w-3.5 h-3.5 text-red-400" /> },
@@ -143,7 +147,7 @@ export function OpenPutTracker({ positions }: Props) {
     .filter((p): p is ParsedPut => p !== null)
     .sort((a, b) => {
       // Close-now first, then expiry warnings, then by DTE
-      const priority = { close_now: 0, expiry_warning: 1, losing: 2, profitable: 3, neutral: 4 };
+      const priority = { close_now: 0, roll: 1, expiry_warning: 2, losing: 3, profitable: 4, neutral: 5 };
       if (priority[a.status] !== priority[b.status]) return priority[a.status] - priority[b.status];
       return a.dte - b.dte;
     });
@@ -202,7 +206,7 @@ export function OpenPutTracker({ positions }: Props) {
 
               {/* Vol 6 reminder */}
               <div className="text-[10px] text-[#4a5070] bg-[#0f1117] border border-[#2d3248] rounded px-3 py-2">
-                Vol 6 rules: Close when value ≤ 25% of original premium (75% profit captured) · Target 45–150 DTE at entry · Sell on down days
+                Vol 6 rules: Close at 75% profit · Roll at DTE &lt;21 with 25–74% profit (buy-to-close + sell new 60–90 DTE) · Sell on down days
               </div>
 
               {/* Position table */}
