@@ -83,42 +83,60 @@ export async function GET(req: Request) {
 
     const allTxns: ExpenseTransaction[] = [];
 
-    await Promise.all(accountNums.map(async ({ hashValue }) => {
-      try {
-        const txns = await client.getTransactions(
-          hashValue,
-          start.toISOString(),
-          now.toISOString(),
-          'JOURNAL,OTHER,RECEIVE_AND_DELIVER,ELECTRONIC_FUND,WIRE_OUT,ACH_DISBURSEMENT,DISBURSEMENT,TRANSFER,DEBIT,ACH_DEBIT,CHECK',
-        );
+    // Schwab only accepts one type per request — fetch each separately and merge
+    const EXPENSE_TYPES = [
+      'JOURNAL',
+      'ELECTRONIC_FUND',
+      'ACH_DISBURSEMENT',
+      'CASH_DISBURSEMENT',
+      'WIRE_OUT',
+      'RECEIVE_AND_DELIVER',
+    ];
 
-        for (const t of txns) {
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const raw = t as any;
-          const amount: number = raw.netAmount ?? raw.amount ?? raw.totalAmount ?? 0;
-          if (amount >= 0) continue;   // only debits (negative = money leaving account)
+    const seen = new Set<string>(); // dedupe by transactionId
 
-          const desc: string  = raw.description ?? raw.transactionDescription ?? '';
-          const type: string  = raw.type ?? raw.activityType ?? '';
-          const dateStr: string = raw.time ?? raw.transactionDate ?? raw.tradeDate ?? '';
-          const date = dateStr ? dateStr.split('T')[0] : 'UNKNOWN';
+    await Promise.all(accountNums.flatMap(({ hashValue }) =>
+      EXPENSE_TYPES.map(async (txType) => {
+        try {
+          const txns = await client.getTransactions(
+            hashValue,
+            start.toISOString(),
+            now.toISOString(),
+            txType,
+          );
 
-          // Skip trade settlements — those are investments not expenses
-          if (/BUY|SELL|PURCHASE|REINVEST/.test(desc.toUpperCase())) continue;
-          if (type.toUpperCase() === 'TRADE') continue;
+          for (const t of txns) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const raw = t as any;
+            const txId: string = raw.transactionId ?? raw.id ?? '';
+            if (txId && seen.has(txId)) continue;
+            if (txId) seen.add(txId);
 
-          allTxns.push({
-            date,
-            description: desc || type || 'Unknown charge',
-            amount: Math.abs(amount),
-            category: categorise(desc, type),
-            rawType: type,
-          });
+            const amount: number = raw.netAmount ?? raw.amount ?? raw.totalAmount ?? 0;
+            if (amount >= 0) continue;   // only debits (negative = money leaving account)
+
+            const desc: string    = raw.description ?? raw.transactionDescription ?? '';
+            const type: string    = raw.type ?? raw.activityType ?? txType;
+            const dateStr: string = raw.time ?? raw.transactionDate ?? raw.tradeDate ?? '';
+            const date = dateStr ? dateStr.split('T')[0] : 'UNKNOWN';
+
+            // Skip trade settlements
+            if (/BUY|SELL|PURCHASE|REINVEST/.test(desc.toUpperCase())) continue;
+            if (type.toUpperCase() === 'TRADE') continue;
+
+            allTxns.push({
+              date,
+              description: desc || type || 'Unknown charge',
+              amount: Math.abs(amount),
+              category: categorise(desc, type),
+              rawType: type,
+            });
+          }
+        } catch (err) {
+          console.warn(`[Expenses] ${txType} fetch error for ${hashValue.slice(0, 6)}:`, err);
         }
-      } catch (err) {
-        console.warn(`[Expenses] Error fetching account ${hashValue.slice(0, 6)}:`, err);
-      }
-    }));
+      })
+    ));
 
     // Sort newest first
     allTxns.sort((a, b) => b.date.localeCompare(a.date));
