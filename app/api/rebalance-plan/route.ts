@@ -246,34 +246,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
 </json>
 `.trim();
 
-  // ── 4. Call Claude ─────────────────────────────────────────────────────────
-
-  let claudeOrders: RebalanceOrder[];
-  let summary: string;
-
-  try {
-    const client = new Anthropic({ apiKey });
-    const response = await client.messages.create({
-      model:      'claude-sonnet-4-6',
-      max_tokens: 2048,
-      system:     TRIPLE_C_SYSTEM_PROMPT,
-      messages:   [{ role: 'user', content: prompt }],
-    });
-
-    const rawText = response.content
-      .filter((b) => b.type === 'text')
-      .map((b) => (b as { type: 'text'; text: string }).text)
-      .join('');
-
-    const parsed = JSON.parse(extractJSON(rawText)) as { orders: RebalanceOrder[]; summary: string };
-    claudeOrders = parsed.orders ?? [];
-    summary      = parsed.summary ?? '';
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return NextResponse.json({ error: `AI plan failed: ${msg}` }, { status: 502 });
-  }
-
-  // ── 5. Validate and sanitise orders ───────────────────────────────────────
+  // ── 4. Pre-build validation maps (needed after Claude responds) ───────────
 
   const positionPriceMap = new Map(
     equityPositions.map((p) => [p.instrument.symbol, positionPrice(p)])
@@ -281,46 +254,93 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
   const positionShareMap = new Map(
     equityPositions.map((p) => [p.instrument.symbol, p.longQuantity])
   );
-
-  // Approved buy symbols not currently in portfolio
   const APPROVED_BUY_NEW = new Set([
     'TQQQ','UPRO','SPXL','SQQQ','SPXU','JEPI','JEPQ','SPYI','QQQY','XDTE','FEPI','AIPI',
   ]);
 
-  const validatedOrders: RebalanceOrder[] = claudeOrders
-    .filter((o) => {
-      if (!o.symbol || !o.instruction || !o.shares) return false;
-      if (!['BUY', 'SELL'].includes(o.instruction)) return false;
-      // SELL: must already hold shares
-      if (o.instruction === 'SELL' && !positionShareMap.has(o.symbol)) return false;
-      // SELL: can't sell Cornerstone
-      if (o.instruction === 'SELL' && ['CLM', 'CRF'].includes(o.symbol)) return false;
-      // BUY: must be in portfolio or approved list
-      if (o.instruction === 'BUY' && !positionPriceMap.has(o.symbol) && !APPROVED_BUY_NEW.has(o.symbol)) return false;
-      return true;
-    })
-    .map((o) => {
-      const price = positionPriceMap.get(o.symbol) ?? o.currentPrice ?? 1;
-      // Re-compute shares from estimatedValue to ensure whole numbers
-      const rawShares = o.shares;
-      const shares    = Math.max(1, Math.floor(rawShares));
-      // Cap sells at what we actually hold
-      const maxShares = o.instruction === 'SELL'
-        ? Math.floor(positionShareMap.get(o.symbol) ?? shares)
-        : shares;
-      const finalShares = Math.min(shares, maxShares);
-      return {
-        ...o,
-        shares:         finalShares,
-        currentPrice:   +price.toFixed(2),
-        estimatedValue: +(finalShares * price).toFixed(2),
-      };
-    })
-    .filter((o) => o.shares >= 1);
+  // ── 5. Stream Claude → client, validate, return result ────────────────────
+  // Streaming keeps bytes flowing so Netlify's inactivity timer never fires.
+  // The client reads until __DONE__ then extracts the JSON after __RESULT__.
 
-  return NextResponse.json({
-    orders:  validatedOrders,
-    summary,
-    drifts,
+  const encoder = new TextEncoder();
+
+  const readable = new ReadableStream({
+    async start(controller) {
+      try {
+        const client = new Anthropic({ apiKey });
+        const stream = await client.messages.stream({
+          model:      'claude-sonnet-4-6',
+          max_tokens: 2048,
+          system:     TRIPLE_C_SYSTEM_PROMPT,
+          messages:   [{ role: 'user', content: prompt }],
+        });
+
+        let fullText = '';
+        for await (const event of stream) {
+          if (
+            event.type === 'content_block_delta' &&
+            event.delta.type === 'text_delta'
+          ) {
+            fullText += event.delta.text;
+            controller.enqueue(encoder.encode(event.delta.text));
+          }
+        }
+
+        // Parse Claude's JSON response
+        let claudeOrders: RebalanceOrder[];
+        let summary: string;
+        try {
+          const parsed = JSON.parse(extractJSON(fullText)) as { orders: RebalanceOrder[]; summary: string };
+          claudeOrders = parsed.orders ?? [];
+          summary      = parsed.summary ?? '';
+        } catch {
+          throw new Error('AI response was not valid JSON — try again');
+        }
+
+        // Validate and sanitise orders
+        const validatedOrders: RebalanceOrder[] = claudeOrders
+          .filter((o) => {
+            if (!o.symbol || !o.instruction || !o.shares) return false;
+            if (!['BUY', 'SELL'].includes(o.instruction)) return false;
+            if (o.instruction === 'SELL' && !positionShareMap.has(o.symbol)) return false;
+            if (o.instruction === 'SELL' && ['CLM', 'CRF'].includes(o.symbol)) return false;
+            if (o.instruction === 'BUY' && !positionPriceMap.has(o.symbol) && !APPROVED_BUY_NEW.has(o.symbol)) return false;
+            return true;
+          })
+          .map((o) => {
+            const price     = positionPriceMap.get(o.symbol) ?? o.currentPrice ?? 1;
+            const shares    = Math.max(1, Math.floor(o.shares));
+            const maxShares = o.instruction === 'SELL'
+              ? Math.floor(positionShareMap.get(o.symbol) ?? shares)
+              : shares;
+            const finalShares = Math.min(shares, maxShares);
+            return {
+              ...o,
+              shares:         finalShares,
+              currentPrice:   +price.toFixed(2),
+              estimatedValue: +(finalShares * price).toFixed(2),
+            };
+          })
+          .filter((o) => o.shares >= 1);
+
+        const result = JSON.stringify({ orders: validatedOrders, summary, drifts });
+        controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
+        controller.enqueue(encoder.encode('\n__DONE__'));
+        controller.close();
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        controller.enqueue(encoder.encode(`\n__RESULT__${JSON.stringify({ error: msg })}`));
+        controller.enqueue(encoder.encode('\n__DONE__'));
+        controller.close();
+      }
+    },
+  });
+
+  return new Response(readable, {
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'X-Accel-Buffering': 'no',
+      'Cache-Control': 'no-cache',
+    },
   });
 }

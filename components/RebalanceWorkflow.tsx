@@ -253,7 +253,7 @@ export function RebalanceWorkflow({
         body: JSON.stringify({ totalValue, equity, positions, pillarSummary, targets }),
       });
 
-      if (!res.ok) {
+      if (!res.ok || !res.body) {
         const ct = res.headers.get('content-type') ?? '';
         if (ct.includes('application/json')) {
           const err = await res.json();
@@ -262,7 +262,23 @@ export function RebalanceWorkflow({
         throw new Error(`Server error (HTTP ${res.status})`);
       }
 
-      const data: PlanResponse = await res.json();
+      // Stream response — keeps Netlify connection alive during long Claude calls
+      const reader  = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        accumulated += decoder.decode(value, { stream: true });
+        if (accumulated.includes('__DONE__')) break;
+      }
+
+      // Validated result is sent after __RESULT__ sentinel
+      const resultIdx = accumulated.lastIndexOf('__RESULT__');
+      if (resultIdx === -1) throw new Error('No result received from server');
+      const resultStr = accumulated.slice(resultIdx + '__RESULT__'.length).replace('__DONE__', '').trim();
+      const data = JSON.parse(resultStr) as PlanResponse & { error?: string };
+      if (data.error) throw new Error(data.error);
 
       setDrifts(data.drifts ?? []);
       setSummary(data.summary ?? '');
