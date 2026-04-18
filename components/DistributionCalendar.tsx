@@ -44,10 +44,13 @@ const FREQ_MAP: Record<string, Frequency> = {
   APLY: 'monthly', OARK: 'monthly', DIPS: 'monthly', CRSH: 'monthly',
   KLIP: 'monthly', MSTY: 'monthly', PLTY: 'monthly',
   MSFO2: 'monthly', AMZY2: 'monthly',
+  FIAT: 'monthly', FIVY: 'monthly',
+  NFLY: 'monthly', SQY: 'monthly', SMCY: 'monthly',
 
   // Defiance
   QQQY: 'monthly', IWMY: 'monthly', JEPY: 'monthly',
   QDTY: 'monthly', SDTY: 'monthly', DFNV: 'monthly', IWMY2: 'monthly',
+  DEFI: 'monthly', BDTE: 'monthly', IDTE: 'monthly', QDTU: 'monthly', YBTC: 'monthly',
 
   // RexShares / Neos
   FEPI: 'monthly', AIPI: 'monthly', REXQ: 'monthly', REXS: 'monthly', SPYI2: 'monthly',
@@ -77,9 +80,22 @@ const FREQ_MAP: Record<string, Frequency> = {
   // Global X covered-call (monthly)
   QYLD: 'monthly', RYLD: 'monthly', XYLD: 'monthly', NVDL: 'monthly',
 
+  // Roundhill weekly additions
+  WEEK: 'weekly',
+
   // Vol 7 income additions
   IQQQ: 'monthly', SPYT: 'monthly', FNGA: 'monthly', FNGB: 'monthly',
   XPAY: 'monthly', MAGY: 'monthly',
+
+  // REITs
+  O: 'monthly',
+
+  // Bond funds (monthly distributions)
+  AGG: 'monthly', BND: 'monthly', TLT: 'monthly', IEF: 'monthly',
+  SGOV: 'monthly', USFR: 'monthly',
+
+  // Additional CEFs
+  CHW: 'monthly', CSQ: 'monthly', EXG: 'monthly',
 
   // Amplify
   DIVO: 'quarterly',
@@ -101,6 +117,7 @@ const FREQ_MAP: Record<string, Frequency> = {
   CURE: 'annual', HIBL: 'annual',
   SPXU: 'annual', SDOW: 'annual', SOXS: 'annual', FNGD: 'annual',
   FAZ: 'annual', SRTY: 'annual', SPXS: 'annual', UVXY: 'annual',
+  SH: 'annual', PSQ: 'annual', DOG: 'annual',
   GLD: 'annual', IAU: 'annual', AAAU: 'annual',
   TSLL: 'annual', BLOK: 'annual', MSTR: 'annual',
 };
@@ -134,9 +151,12 @@ const FALLBACK_YIELDS: Record<string, number> = {
   APLY: 35, OARK: 45, DIPS: 35, CRSH: 35,
   KLIP: 35, MSTY: 75, PLTY: 130,
   MSFO2: 30, AMZY2: 45,
+  FIAT: 30, FIVY: 30,
+  NFLY: 35, SQY: 35, SMCY: 35,
 
   // Defiance (~30–60%)
   QQQY: 50, IWMY: 55, JEPY: 35, QDTY: 30, SDTY: 30, DFNV: 30, IWMY2: 55,
+  DEFI: 35, BDTE: 30, IDTE: 30, QDTU: 30, YBTC: 40,
 
   // RexShares / Neos (~10–30%)
   FEPI: 20, AIPI: 25, REXQ: 18, REXS: 18, SPYI2: 12,
@@ -154,7 +174,8 @@ const FALLBACK_YIELDS: Record<string, number> = {
 
   // Other CEFs (~6–18%)
   OXLC: 18, OXSQ: 15,
-  PDI: 13, PDO: 12, PTY: 10, PCN: 9, PFL: 10, PFN: 10,
+  PDI: 13, PDO: 12, PTY: 10, PCN: 9, PFL: 10, PFN: 10, PHK: 9,
+  CHW: 9, CSQ: 8.5, EXG: 9,
   ETV: 8.5, ETB: 8, EOS: 8, EOI: 8, EVT: 7.5,
   BST: 6, BDJ: 7, ECAT: 9, BGY: 10, BCAT: 9, BUI: 7,
   RIV: 12, OPP: 12, GOF: 14,
@@ -163,13 +184,19 @@ const FALLBACK_YIELDS: Record<string, number> = {
   KMLM: 10, TPVG: 10, COWS: 5,
 
   // Global X covered-call / leveraged (~10–12%)
-  QYLD: 12, RYLD: 12, XYLD: 11, NVDL: 8,
+  QYLD: 12, RYLD: 12, XYLD: 11, NVDL: 8, TSLL: 0,
 
   // Vol 7 additions (estimated)
   IQQQ: 20, SPYT: 18, FNGA: 8, FNGB: 8, XPAY: 15, MAGY: 20,
 
   // Roundhill weekly
-  TOPW: 25, BRKW: 25,
+  TOPW: 25, BRKW: 25, WEEK: 25,
+
+  // REITs
+  O: 5,
+
+  // Bond funds
+  AGG: 4, BND: 3.5, TLT: 3.8, IEF: 3.5, SGOV: 5, USFR: 5,
 
   // Amplify
   DIVO: 4.5, BLOK: 0,
