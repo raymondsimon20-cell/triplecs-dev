@@ -15,6 +15,7 @@ import {
   DollarSign, TrendingUp, ChevronDown, ChevronUp,
   Flame, Target, BarChart2, Calendar, AlertTriangle,
   CheckCircle, RefreshCw, Gauge, Plus, Minus, ArrowRight,
+  Receipt, Trash2, Edit2, X,
 } from 'lucide-react';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 
@@ -51,7 +52,7 @@ interface Props {
   pillarSummary?: PillarSummary[];
 }
 
-type Tab = 'historical' | 'projected' | 'fire' | 'margin';
+type Tab = 'historical' | 'projected' | 'fire' | 'expenses' | 'margin';
 type Frequency = 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
 // ─── Distribution calendar data ───────────────────────────────────────────────
@@ -1031,6 +1032,254 @@ function MarginTab({
   );
 }
 
+// ─── Tab: Expenses ────────────────────────────────────────────────────────────
+
+const EXPENSES_KEY = 'triple-c-expenses';
+
+const EXPENSE_CATEGORIES = [
+  'Housing', 'Utilities', 'Food', 'Transport', 'Insurance',
+  'Subscriptions', 'Healthcare', 'Margin Interest', 'Entertainment', 'Other',
+] as const;
+type ExpenseCategory = typeof EXPENSE_CATEGORIES[number];
+
+interface Expense {
+  id: string;
+  name: string;
+  amount: number;
+  category: ExpenseCategory;
+  frequency: 'monthly' | 'annual';
+}
+
+const CATEGORY_COLORS: Record<ExpenseCategory, string> = {
+  'Housing':          'bg-blue-500/15 text-blue-300',
+  'Utilities':        'bg-yellow-500/15 text-yellow-300',
+  'Food':             'bg-emerald-500/15 text-emerald-300',
+  'Transport':        'bg-orange-500/15 text-orange-300',
+  'Insurance':        'bg-purple-500/15 text-purple-300',
+  'Subscriptions':    'bg-pink-500/15 text-pink-300',
+  'Healthcare':       'bg-red-500/15 text-red-300',
+  'Margin Interest':  'bg-rose-500/15 text-rose-300',
+  'Entertainment':    'bg-cyan-500/15 text-cyan-300',
+  'Other':            'bg-[#2d3248] text-[#7c82a0]',
+};
+
+function loadExpenses(): Expense[] {
+  try {
+    const raw = typeof window !== 'undefined' ? localStorage.getItem(EXPENSES_KEY) : null;
+    return raw ? JSON.parse(raw) : [];
+  } catch { return []; }
+}
+
+function saveExpenses(items: Expense[]) {
+  try { localStorage.setItem(EXPENSES_KEY, JSON.stringify(items)); } catch { /* ignore */ }
+}
+
+const EMPTY_FORM = { name: '', amount: '', category: 'Other' as ExpenseCategory, frequency: 'monthly' as 'monthly' | 'annual' };
+
+function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
+  const [expenses, setExpenses]   = useState<Expense[]>(() => loadExpenses());
+  const [editing, setEditing]     = useState<string | null>(null);
+  const [showForm, setShowForm]   = useState(false);
+  const [form, setForm]           = useState(EMPTY_FORM);
+
+  function persist(next: Expense[]) {
+    setExpenses(next);
+    saveExpenses(next);
+  }
+
+  function openAdd() {
+    setEditing(null);
+    setForm(EMPTY_FORM);
+    setShowForm(true);
+  }
+
+  function openEdit(e: Expense) {
+    setEditing(e.id);
+    setForm({ name: e.name, amount: String(e.amount), category: e.category, frequency: e.frequency });
+    setShowForm(true);
+  }
+
+  function submitForm() {
+    const amount = parseFloat(form.amount);
+    if (!form.name.trim() || isNaN(amount) || amount <= 0) return;
+    if (editing) {
+      persist(expenses.map((e) => e.id === editing ? { ...e, name: form.name.trim(), amount, category: form.category, frequency: form.frequency } : e));
+    } else {
+      persist([...expenses, { id: Date.now().toString(), name: form.name.trim(), amount, category: form.category, frequency: form.frequency }]);
+    }
+    setShowForm(false);
+    setEditing(null);
+  }
+
+  function remove(id: string) {
+    persist(expenses.filter((e) => e.id !== id));
+  }
+
+  const totalMonthly = expenses.reduce((s, e) => s + (e.frequency === 'monthly' ? e.amount : e.amount / 12), 0);
+  const surplus = monthlyIncome - totalMonthly;
+  const coveragePct = totalMonthly > 0 ? Math.min((monthlyIncome / totalMonthly) * 100, 999) : 100;
+
+  const byCategory = EXPENSE_CATEGORIES
+    .map((cat) => ({
+      cat,
+      total: expenses
+        .filter((e) => e.category === cat)
+        .reduce((s, e) => s + (e.frequency === 'monthly' ? e.amount : e.amount / 12), 0),
+    }))
+    .filter((c) => c.total > 0)
+    .sort((a, b) => b.total - a.total);
+
+  return (
+    <div className="space-y-5">
+      {/* Summary bar */}
+      <div className="grid grid-cols-3 gap-3">
+        <div className="bg-[#0f1117] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#7c82a0] mb-0.5">Monthly Expenses</div>
+          <div className="text-lg font-bold text-red-400">{fmt$(totalMonthly, true)}</div>
+        </div>
+        <div className="bg-[#0f1117] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#7c82a0] mb-0.5">Income / mo</div>
+          <div className="text-lg font-bold text-emerald-400">{monthlyIncome > 0 ? fmt$(monthlyIncome, true) : '–'}</div>
+          <div className="text-[10px] text-[#4a5070]">12-mo avg</div>
+        </div>
+        <div className="bg-[#0f1117] rounded-lg p-3 text-center">
+          <div className="text-xs text-[#7c82a0] mb-0.5">Surplus / Deficit</div>
+          <div className={`text-lg font-bold ${surplus >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {surplus >= 0 ? '+' : ''}{fmt$(surplus, true)}
+          </div>
+        </div>
+      </div>
+
+      {/* Coverage bar */}
+      {totalMonthly > 0 && monthlyIncome > 0 && (
+        <div className="space-y-1.5">
+          <div className="flex justify-between text-xs text-[#7c82a0]">
+            <span>Income covers expenses</span>
+            <span className={coveragePct >= 100 ? 'text-emerald-400' : 'text-red-400'}>{coveragePct.toFixed(0)}%</span>
+          </div>
+          <div className="w-full bg-[#2d3248] rounded-full h-2.5 overflow-hidden">
+            <div
+              className={`h-full rounded-full transition-all ${coveragePct >= 100 ? 'bg-emerald-500' : 'bg-red-500'}`}
+              style={{ width: `${Math.min(coveragePct, 100)}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {/* Category breakdown */}
+      {byCategory.length > 0 && (
+        <div className="space-y-1.5">
+          <p className="text-xs text-[#7c82a0]">By category (monthly equiv.)</p>
+          {byCategory.map(({ cat, total }) => (
+            <div key={cat} className="flex items-center gap-2 text-xs">
+              <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 w-28 text-center ${CATEGORY_COLORS[cat]}`}>{cat}</span>
+              <div className="flex-1 bg-[#2d3248] rounded-full h-2 overflow-hidden">
+                <div className="h-full bg-[#4a5070] rounded-full" style={{ width: `${totalMonthly > 0 ? (total / totalMonthly) * 100 : 0}%` }} />
+              </div>
+              <span className="text-[#7c82a0] w-14 text-right font-mono">{fmt$(total, true)}</span>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Add button */}
+      <div className="flex justify-between items-center">
+        <p className="text-xs text-[#4a5070]">{expenses.length} expense{expenses.length !== 1 ? 's' : ''}</p>
+        <button
+          onClick={openAdd}
+          className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg transition-colors"
+        >
+          <Plus className="w-3.5 h-3.5" />Add Expense
+        </button>
+      </div>
+
+      {/* Add / edit form */}
+      {showForm && (
+        <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-4 space-y-3">
+          <div className="flex justify-between items-center">
+            <span className="text-xs font-semibold text-white">{editing ? 'Edit Expense' : 'New Expense'}</span>
+            <button onClick={() => setShowForm(false)}><X className="w-4 h-4 text-[#7c82a0] hover:text-white" /></button>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="col-span-2 space-y-1">
+              <label className="text-xs text-[#7c82a0]">Name</label>
+              <input
+                type="text" value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })}
+                placeholder="e.g. Rent, Netflix, Car insurance"
+                className="w-full bg-[#1a1d27] border border-[#2d3248] rounded px-3 py-1.5 text-sm text-white placeholder-[#3d4260] focus:outline-none focus:border-emerald-500/50"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-[#7c82a0]">Amount ($)</label>
+              <input
+                type="number" min={0} step="0.01" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })}
+                placeholder="0.00"
+                className="w-full bg-[#1a1d27] border border-[#2d3248] rounded px-3 py-1.5 text-sm text-white placeholder-[#3d4260] focus:outline-none focus:border-emerald-500/50"
+              />
+            </div>
+            <div className="space-y-1">
+              <label className="text-xs text-[#7c82a0]">Frequency</label>
+              <select value={form.frequency} onChange={(e) => setForm({ ...form, frequency: e.target.value as 'monthly' | 'annual' })}
+                className="w-full bg-[#1a1d27] border border-[#2d3248] rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500/50">
+                <option value="monthly">Monthly</option>
+                <option value="annual">Annual</option>
+              </select>
+            </div>
+            <div className="col-span-2 space-y-1">
+              <label className="text-xs text-[#7c82a0]">Category</label>
+              <select value={form.category} onChange={(e) => setForm({ ...form, category: e.target.value as ExpenseCategory })}
+                className="w-full bg-[#1a1d27] border border-[#2d3248] rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-emerald-500/50">
+                {EXPENSE_CATEGORIES.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 pt-1">
+            <button onClick={submitForm} className="bg-emerald-600 hover:bg-emerald-700 text-white text-xs px-4 py-1.5 rounded-lg transition-colors">
+              {editing ? 'Save' : 'Add'}
+            </button>
+            <button onClick={() => setShowForm(false)} className="text-xs text-[#7c82a0] hover:text-white px-2">Cancel</button>
+          </div>
+        </div>
+      )}
+
+      {/* Expense list */}
+      {expenses.length > 0 && (
+        <div className="space-y-1.5">
+          {expenses.map((e) => {
+            const monthly = e.frequency === 'monthly' ? e.amount : e.amount / 12;
+            return (
+              <div key={e.id} className="flex items-center gap-3 bg-[#0f1117] rounded-lg px-3 py-2 text-xs group">
+                <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${CATEGORY_COLORS[e.category]}`}>{e.category}</span>
+                <span className="text-white flex-1 truncate">{e.name}</span>
+                <span className="text-[#7c82a0] flex-shrink-0 font-mono">{fmt$(monthly, true)}/mo</span>
+                {e.frequency === 'annual' && (
+                  <span className="text-[10px] text-[#4a5070] flex-shrink-0">{fmt$(e.amount, true)}/yr</span>
+                )}
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button onClick={() => openEdit(e)} className="p-1 text-[#7c82a0] hover:text-white transition-colors">
+                    <Edit2 className="w-3 h-3" />
+                  </button>
+                  <button onClick={() => remove(e.id)} className="p-1 text-[#7c82a0] hover:text-red-400 transition-colors">
+                    <Trash2 className="w-3 h-3" />
+                  </button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {expenses.length === 0 && !showForm && (
+        <div className="text-center py-6 text-xs text-[#4a5070]">
+          No expenses yet — add your monthly bills to track income vs expenses.
+        </div>
+      )}
+
+      <p className="text-[10px] text-[#4a5070]">Stored locally in your browser. Annual expenses are divided by 12 for monthly comparison.</p>
+    </div>
+  );
+}
+
 // ─── Main Component ───────────────────────────────────────────────────────────
 
 export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [] }: Props) {
@@ -1076,6 +1325,7 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
     { id: 'historical', label: 'Historical', icon: <BarChart2 className="w-3.5 h-3.5" /> },
     { id: 'projected',  label: 'Projected',  icon: <Calendar   className="w-3.5 h-3.5" /> },
     { id: 'fire',       label: 'FIRE',        icon: <Flame      className="w-3.5 h-3.5" /> },
+    { id: 'expenses',   label: 'Expenses',    icon: <Receipt    className="w-3.5 h-3.5" /> },
     { id: 'margin',     label: 'Margin',      icon: <Target     className="w-3.5 h-3.5" /> },
   ];
 
@@ -1151,6 +1401,8 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
               <ProjectedTab positions={positions} />
             ) : activeTab === 'fire' ? (
               <FireTab dividends={dividends} marginBalance={marginDebt} />
+            ) : activeTab === 'expenses' ? (
+              <ExpensesTab monthlyIncome={actualAnnual / 12} />
             ) : (
               <MarginTab dividends={dividends} marginBalance={marginDebt} totalValue={totalValue} equity={equity} positions={positions} pillarSummary={pillarSummary} />
             )}
