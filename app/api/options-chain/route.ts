@@ -69,7 +69,9 @@ export async function GET(req: Request) {
   }
 
   try {
-    const raw = await getOptionsChain(tokens, symbol, { contractType, strikeCount });
+    // Pass fromDate = today so Schwab never returns already-expired chains
+    const todayStr = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
+    const raw = await getOptionsChain(tokens, symbol, { contractType, strikeCount, fromDate: todayStr });
 
     const underlyingPrice: number =
       (raw.underlyingPrice as number) ??
@@ -88,6 +90,8 @@ export async function GET(req: Request) {
       for (const [strikeStr, contracts] of Object.entries(strikeMap)) {
         const c = contracts[0] as Record<string, unknown>;
         if (!c || c.nonStandard) continue;
+
+        if (dte <= 0) continue; // safety net: skip anything expiring today or already expired
 
         const strike = parseFloat(strikeStr);
         const bid    = (c.bid as number)  ?? 0;
