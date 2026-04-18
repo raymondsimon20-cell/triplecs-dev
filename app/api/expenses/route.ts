@@ -36,6 +36,7 @@ export interface DetectedExpense {
 const TRANSFER_TYPES = new Set([
   'WIRE_OUT', 'ACH_DISBURSEMENT', 'ELECTRONIC_FUND', 'DISBURSEMENT',
   'INTERNAL_TRANSFER', 'TRANSFER', 'MONEYLINK_TRANSFER',
+  'DEBIT', 'ACH_DEBIT', 'CHECK', 'AUTO_S1_DEBIT', 'DIRECT_DEBIT',
 ]);
 
 function isTransferOut(type: string): boolean {
@@ -45,14 +46,16 @@ function isTransferOut(type: string): boolean {
 function categorise(description: string, type: string): string {
   const d = description.toUpperCase();
   const t = type.toUpperCase();
-  if (isTransferOut(t))                                            return 'Transfer Out';
-  if (/WIRE OUT|ACH OUT|TRANSFER OUT|FUNDS TRANSFERRED/.test(d))  return 'Transfer Out';
-  if (/MARGIN INTEREST|INTEREST CHARGE|MARGIN FEE/.test(d))       return 'Margin Interest';
-  if (/ADVISORY FEE|MANAGEMENT FEE|ADVISORY CHARGE/.test(d))      return 'Advisory Fee';
-  if (/SERVICE CHARGE|ACCOUNT FEE|MAINTENANCE FEE/.test(d))       return 'Account Fee';
-  if (/WIRE FEE|TRANSFER FEE|ACH FEE/.test(d))                    return 'Transfer Fee';
-  if (/OPTION|CONTRACT FEE|EXERCISE FEE/.test(d))                 return 'Options Fee';
-  if (/TAX WITHHOLDING|BACKUP WITHHOLDING/.test(d))               return 'Tax Withholding';
+  if (isTransferOut(t))                                                        return 'Transfer Out';
+  if (/WIRE OUT|ACH OUT|TRANSFER OUT|FUNDS TRANSFERRED|TRANSFER FUNDS/.test(d)) return 'Transfer Out';
+  if (/DEPT EDUCATION|STUDENT LOAN|STUDENT L /.test(d))                        return 'Transfer Out';
+  if (/MORTGAGE|RENT PAYMENT|LEASE PAYMENT/.test(d))                           return 'Transfer Out';
+  if (/MARGIN INTEREST|INTEREST CHARGE|MARGIN FEE/.test(d))                    return 'Margin Interest';
+  if (/ADVISORY FEE|MANAGEMENT FEE|ADVISORY CHARGE/.test(d))                   return 'Advisory Fee';
+  if (/SERVICE CHARGE|ACCOUNT FEE|MAINTENANCE FEE/.test(d))                    return 'Account Fee';
+  if (/WIRE FEE|TRANSFER FEE|ACH FEE/.test(d))                                 return 'Transfer Fee';
+  if (/OPTION|CONTRACT FEE|EXERCISE FEE/.test(d))                              return 'Options Fee';
+  if (/TAX WITHHOLDING|BACKUP WITHHOLDING/.test(d))                             return 'Tax Withholding';
   return 'Other Charge';
 }
 
@@ -86,7 +89,7 @@ export async function GET(req: Request) {
           hashValue,
           start.toISOString(),
           now.toISOString(),
-          'JOURNAL,OTHER,RECEIVE_AND_DELIVER,ELECTRONIC_FUND,WIRE_OUT,ACH_DISBURSEMENT,DISBURSEMENT,TRANSFER',
+          'JOURNAL,OTHER,RECEIVE_AND_DELIVER,ELECTRONIC_FUND,WIRE_OUT,ACH_DISBURSEMENT,DISBURSEMENT,TRANSFER,DEBIT,ACH_DEBIT,CHECK',
         );
 
         for (const t of txns) {
