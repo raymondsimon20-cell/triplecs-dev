@@ -23,8 +23,8 @@ import { NextResponse } from 'next/server';
 import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
 import { getTokens } from '@/lib/storage';
-import { placeOrders, getOrders, cancelOrder } from '@/lib/schwab/orders';
-import type { OrderRequest } from '@/lib/schwab/orders';
+import { placeOrders, placeOptionOrders, getOrders, cancelOrder } from '@/lib/schwab/orders';
+import type { OrderRequest, OptionOrderRequest } from '@/lib/schwab/orders';
 
 export const dynamic = 'force-dynamic';
 
@@ -33,11 +33,18 @@ interface OrderWithMeta extends OrderRequest {
   aiMode?: string;
 }
 
+interface OptionOrderWithMeta extends OptionOrderRequest {
+  rationale?: string;
+  aiMode?: string;
+}
+
+const OPTION_INSTRUCTIONS = new Set(['BUY_TO_OPEN', 'BUY_TO_CLOSE', 'SELL_TO_OPEN', 'SELL_TO_CLOSE']);
+
 export interface TradeHistoryEntry {
   id:          string;
   timestamp:   string;
   symbol:      string;
-  instruction: 'BUY' | 'SELL';
+  instruction: 'BUY' | 'SELL' | 'BUY_TO_OPEN' | 'BUY_TO_CLOSE' | 'SELL_TO_OPEN' | 'SELL_TO_CLOSE';
   quantity:    number;
   orderType:   'MARKET' | 'LIMIT';
   price?:      number;
@@ -67,35 +74,54 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  let body: { accountHash: string; orders: OrderWithMeta[] };
+  let body: { accountHash: string; orders?: OrderWithMeta[]; optionOrders?: OptionOrderWithMeta[] };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
 
-  const { accountHash, orders } = body;
+  const { accountHash, orders = [], optionOrders = [] } = body;
 
   if (!accountHash || typeof accountHash !== 'string')
     return NextResponse.json({ error: 'Missing accountHash' }, { status: 400 });
-  if (!Array.isArray(orders) || orders.length === 0)
+  if (orders.length === 0 && optionOrders.length === 0)
     return NextResponse.json({ error: 'No orders provided' }, { status: 400 });
 
+  // Validate equity orders
   for (const order of orders) {
-    if (!order.symbol)                          return NextResponse.json({ error: `Missing symbol` }, { status: 400 });
+    if (!order.symbol)
+      return NextResponse.json({ error: 'Missing symbol' }, { status: 400 });
     if (!['BUY', 'SELL'].includes(order.instruction))
-                                                return NextResponse.json({ error: `Invalid instruction for ${order.symbol}` }, { status: 400 });
-    if (!order.quantity || order.quantity < 1)  return NextResponse.json({ error: `Invalid quantity for ${order.symbol}` }, { status: 400 });
+      return NextResponse.json({ error: `Invalid instruction for ${order.symbol}` }, { status: 400 });
+    if (!order.quantity || order.quantity < 1)
+      return NextResponse.json({ error: `Invalid quantity for ${order.symbol}` }, { status: 400 });
     if (order.orderType === 'LIMIT' && !order.price)
-                                                return NextResponse.json({ error: `LIMIT order ${order.symbol} missing price` }, { status: 400 });
+      return NextResponse.json({ error: `LIMIT order ${order.symbol} missing price` }, { status: 400 });
+  }
+
+  // Validate option orders
+  for (const opt of optionOrders) {
+    if (!opt.occSymbol?.trim())
+      return NextResponse.json({ error: 'Option order missing occSymbol' }, { status: 400 });
+    if (!OPTION_INSTRUCTIONS.has(opt.instruction))
+      return NextResponse.json({ error: `Invalid option instruction for ${opt.occSymbol}` }, { status: 400 });
+    if (!opt.contracts || opt.contracts < 1)
+      return NextResponse.json({ error: `Invalid contracts for ${opt.occSymbol}` }, { status: 400 });
+    if (!opt.limitPrice || opt.limitPrice <= 0)
+      return NextResponse.json({ error: `Missing or invalid limitPrice for ${opt.occSymbol}` }, { status: 400 });
   }
 
   const tokens = await getTokens();
   if (!tokens) return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
 
   try {
-    const results = await placeOrders(tokens, accountHash, orders);
+    const [equityResults, optionResults] = await Promise.all([
+      orders.length     > 0 ? placeOrders(tokens, accountHash, orders)             : Promise.resolve([]),
+      optionOrders.length > 0 ? placeOptionOrders(tokens, accountHash, optionOrders) : Promise.resolve([]),
+    ]);
 
-    // Persist to trade history
-    const historyEntries: TradeHistoryEntry[] = results.map((r, i) => ({
-      id:          `${Date.now()}-${i}`,
+    const now = Date.now();
+
+    const equityHistory: TradeHistoryEntry[] = equityResults.map((r, i) => ({
+      id:          `${now}-eq-${i}`,
       timestamp:   new Date().toISOString(),
       symbol:      r.symbol,
       instruction: orders[i].instruction,
@@ -108,13 +134,32 @@ export async function POST(req: Request) {
       rationale:   orders[i].rationale,
       aiMode:      orders[i].aiMode,
     }));
-    await saveTradeHistory(historyEntries);
 
+    const optionHistory: TradeHistoryEntry[] = optionResults.map((r, i) => ({
+      id:          `${now}-opt-${i}`,
+      timestamp:   new Date().toISOString(),
+      symbol:      r.symbol,
+      instruction: optionOrders[i].instruction as TradeHistoryEntry['instruction'],
+      quantity:    optionOrders[i].contracts,
+      orderType:   'LIMIT',
+      price:       optionOrders[i].limitPrice,
+      orderId:     r.orderId,
+      status:      r.status,
+      message:     r.message,
+      rationale:   optionOrders[i].rationale,
+      aiMode:      optionOrders[i].aiMode,
+    }));
+
+    await saveTradeHistory([...equityHistory, ...optionHistory]);
+
+    const allResults = [...equityResults, ...optionResults];
     return NextResponse.json({
-      results,
-      success: results.every((r) => r.status === 'placed'),
-      placed:  results.filter((r) => r.status === 'placed').length,
-      failed:  results.filter((r) => r.status === 'error').length,
+      results:       allResults,
+      equityResults,
+      optionResults,
+      success: allResults.every((r) => r.status === 'placed'),
+      placed:  allResults.filter((r) => r.status === 'placed').length,
+      failed:  allResults.filter((r) => r.status === 'error').length,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
