@@ -5,6 +5,7 @@ import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList, Eye, BookOpen,
+  ClipboardCheck,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -32,6 +33,7 @@ import { StrategyGuide } from '@/components/StrategyGuide';
 import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
 import { SimplifiedTradeWorkflow } from '@/components/SimplifiedTradeWorkflow';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
+import { DailyReviewWizard } from '@/components/DailyReviewWizard';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import type { StrategyTargets } from '@/lib/utils';
@@ -226,6 +228,7 @@ export default function DashboardPage() {
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
   // Estimated monthly income from dividend data (for FIRE pill)
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
+  const [wizardOpen, setWizardOpen] = useState(false);
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
   const strategyTargets = useStrategyTargets();
   const fireTarget = strategyTargets.fireNumber;
@@ -367,6 +370,15 @@ export default function DashboardPage() {
               selectedIndex={selectedIdx}
               onSelect={setSelectedIdx}
             />
+
+            <button
+              onClick={() => setWizardOpen(true)}
+              className="flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 px-3 py-1.5 rounded-lg transition-colors"
+              title="Start daily portfolio review"
+            >
+              <ClipboardCheck className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Daily Review</span>
+            </button>
 
             <SettingsPanel />
             <ThemeToggle />
@@ -782,6 +794,14 @@ export default function DashboardPage() {
         pendingOrderCount={pendingOrders.size}
         marginWarnPct={strategyTargets.marginWarnPct}
         marginLimitPct={strategyTargets.marginLimitPct}
+      />
+
+      <DailyReviewWizard
+        isOpen={wizardOpen}
+        onClose={() => setWizardOpen(false)}
+        account={account}
+        strategyTargets={strategyTargets}
+        pendingOrderCount={pendingOrders.size}
       />
     </div>
   );
