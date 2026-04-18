@@ -14,13 +14,13 @@ import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { IncomeHub } from '@/components/IncomeHub';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
-import { TradeHistoryPanel } from '@/components/TradeHistoryPanel';
+import { TradeHub } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
 import { YmagDripTracker } from '@/components/YmagDripTracker';
 import { HedgePairTracker } from '@/components/HedgePairTracker';
 import { PositionsTable } from '@/components/PositionsTable';
-import { PendingOrdersPanel, usePendingOrderSymbols } from '@/components/PendingOrdersPanel';
+import { usePendingOrderSymbols } from '@/components/TradeHub';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
@@ -153,11 +153,10 @@ const NAV_ITEMS = [
   { id: 'ai',           label: 'AI Analysis',   icon: Brain       },
   { id: 'income',       label: 'Income',        icon: DollarSign  },
   { id: 'rebalance',    label: 'Rebalance',     icon: Calculator  },
-  { id: 'puts',         label: 'Open Puts',     icon: History     },
+  { id: 'puts',         label: 'Open Puts',     icon: ClipboardCheck },
   { id: 'families',     label: 'Fund Families', icon: List        },
-  { id: 'history',      label: 'Trade History', icon: History     },
-  { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
+  { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'positions',    label: 'Positions',     icon: List        },
   { id: 'strategy',     label: 'Strategy Guide', icon: BookOpen   },
 ];
@@ -682,19 +681,6 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
-        {/* ── Trade History ────────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="history"
-          title="Trade History"
-          icon={<History className="w-4 h-4 text-slate-400" />}
-          accentClass="border-slate-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <TradeHistoryPanel />
-          </div>
-        </CollapsiblePanel>
-
         {/* ── Watchlist ─────────────────────────────────────────────────────── */}
         <CollapsiblePanel
           id="watchlist"
@@ -708,18 +694,11 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
-        {/* ── Pending Orders ───────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="orders"
-          title="Pending Orders"
-          icon={<ClipboardList className="w-4 h-4 text-yellow-400" />}
-          accentClass="border-yellow-500/30"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <PendingOrdersPanel accountHash={account.accountHash} />
-          </div>
-        </CollapsiblePanel>
+        {/* ── Orders & Trade History ───────────────────────────────────────── */}
+        <div id="panel-orders" className="scroll-mt-20">
+          <div id="panel-history" />
+          <TradeHub accountHash={account.accountHash} />
+        </div>
 
         {/* ── Positions table ──────────────────────────────────────────────── */}
         <CollapsiblePanel
