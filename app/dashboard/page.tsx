@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList, Eye, BookOpen,
+  List, Calculator, PieChart, Gauge, History, ClipboardList, Eye, BookOpen,
   ClipboardCheck,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
@@ -152,11 +152,9 @@ const NAV_ITEMS = [
   { id: 'options',      label: 'Options',       icon: Shield      },
   { id: 'ai',           label: 'AI Analysis',   icon: Brain       },
   { id: 'income',       label: 'Income',        icon: DollarSign  },
-  { id: 'calendar',     label: 'Calendar',      icon: Calendar    },
   { id: 'rebalance',    label: 'Rebalance',     icon: Calculator  },
   { id: 'puts',         label: 'Open Puts',     icon: History     },
   { id: 'families',     label: 'Fund Families', icon: List        },
-  { id: 'simulator',    label: 'Simulator',     icon: Gauge       },
   { id: 'history',      label: 'Trade History', icon: History     },
   { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
