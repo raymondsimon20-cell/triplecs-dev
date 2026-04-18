@@ -605,11 +605,14 @@ export default function DashboardPage() {
         </CollapsiblePanel>
 
         {/* ── Income Hub (Historical + Projected + FIRE + Margin) ─────────── */}
-        <IncomeHub
-          positions={account.positions}
-          totalValue={account.totalValue}
-          marginBalance={account.marginBalance}
-        />
+        <div id="panel-income" className="scroll-mt-20">
+          <div id="panel-calendar" />
+          <IncomeHub
+            positions={account.positions}
+            totalValue={account.totalValue}
+            marginBalance={account.marginBalance}
+          />
+        </div>
 
         {/* ── Rebalance Workflow ───────────────────────────────────────────── */}
         <div id="panel-rebalance" className="scroll-mt-20">
