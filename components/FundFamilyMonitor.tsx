@@ -6,9 +6,9 @@
  * Tracks concentration by fund family (YieldMax, Defiance, Roundhill, etc.)
  * and flags families approaching or exceeding the recommended cap.
  *
- * Rules from Triple C strategy:
- *   - No single fund family > 20% of total portfolio (hard cap)
- *   - Warn at 15% concentration
+ * Rules from Triple C Vol 7 strategy:
+ *   - No single fund family > 40% of total portfolio (hard cap)
+ *   - Warn at 30% concentration
  *   - Cornerstone (CLM/CRF) is its own pillar — no family cap applies
  */
 
@@ -32,6 +32,8 @@ const FUND_FAMILIES: Record<string, string> = {
   DISO: 'YieldMax', ULTY: 'YieldMax', YMAX: 'YieldMax', YMAG: 'YieldMax',
   MSFO2: 'YieldMax', GDXY: 'YieldMax', XOMO: 'YieldMax', AMZY2: 'YieldMax',
   FBY: 'YieldMax', FIAT: 'YieldMax', FIVY: 'YieldMax', TSMY: 'YieldMax',
+  APLY: 'YieldMax', OARK: 'YieldMax', DIPS: 'YieldMax', CRSH: 'YieldMax',
+  KLIP: 'YieldMax',
 
   // Defiance ETFs
   QQQY: 'Defiance', IWMY: 'Defiance', JEPY: 'Defiance',
@@ -85,7 +87,7 @@ const FUND_FAMILIES: Record<string, string> = {
   OXLC: 'Oxford Lane', OXSQ: 'Oxford Lane',
 
   // KraneShares
-  KLIP: 'KraneShares', KMLM: 'KraneShares',
+  KMLM: 'KraneShares',
 
   // RiverNorth
   RIV: 'RiverNorth', OPP: 'RiverNorth',
@@ -116,8 +118,8 @@ const FUND_FAMILIES: Record<string, string> = {
 // Families exempt from cap warnings (index funds, individual stocks, etc.)
 const EXEMPT_FAMILIES = new Set(['Cornerstone', 'Individual', 'Schwab', 'Vanguard', 'iShares']);
 
-const WARN_PCT  = 15;
-const MAX_PCT   = 20;
+const WARN_PCT  = 30;
+const MAX_PCT   = 40;
 
 interface FamilyData {
   name:       string;

@@ -18,6 +18,8 @@ import { TradeHistoryPanel } from '@/components/TradeHistoryPanel';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
 import { DistributionCalendar } from '@/components/DistributionCalendar';
+import { YmagDripTracker } from '@/components/YmagDripTracker';
+import { HedgePairTracker } from '@/components/HedgePairTracker';
 import { MarginSimulator } from '@/components/MarginSimulator';
 import { PositionsTable } from '@/components/PositionsTable';
 import { PendingOrdersPanel, usePendingOrderSymbols } from '@/components/PendingOrdersPanel';
@@ -675,6 +677,32 @@ export default function DashboardPage() {
               positions={account.positions}
               totalValue={account.totalValue}
             />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── YMAG DRIP Tracker ────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="ymag"
+          title="YMAG DRIP Tracker"
+          icon={<RefreshCw className="w-4 h-4 text-violet-400" />}
+          accentClass="border-violet-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <YmagDripTracker positions={account.positions} />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Hedge Pair Tracker ────────────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="hedgepairs"
+          title="Hedge Pair Tracker"
+          icon={<Shield className="w-4 h-4 text-blue-400" />}
+          accentClass="border-blue-500/30"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <HedgePairTracker positions={account.positions} />
           </div>
         </CollapsiblePanel>
 

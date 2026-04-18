@@ -38,6 +38,8 @@ const FREQ_MAP: Record<string, Frequency> = {
   CVNY: 'monthly', MRNY: 'monthly', SNOY: 'monthly', BIOY: 'monthly',
   DISO: 'monthly', ULTY: 'monthly', YMAX: 'monthly', YMAG: 'monthly',
   FBY: 'monthly', GDXY: 'monthly', XOMO: 'monthly', TSMY: 'monthly',
+  APLY: 'monthly', OARK: 'monthly', DIPS: 'monthly', CRSH: 'monthly',
+  KLIP: 'monthly',
 
   // Defiance
   QQQY: 'monthly', IWMY: 'monthly', JEPY: 'monthly',
@@ -59,7 +61,7 @@ const FREQ_MAP: Record<string, Frequency> = {
   ETV: 'monthly', ETB: 'monthly', EOS: 'monthly', EOI: 'monthly',
   BST: 'monthly', BDJ: 'monthly', ECAT: 'monthly',
   RIV: 'monthly', OPP: 'monthly', GOF: 'monthly',
-  STK: 'monthly', USA: 'monthly', KLIP: 'monthly',
+  STK: 'monthly', USA: 'monthly',
 
   // Amplify
   DIVO: 'quarterly',
@@ -103,6 +105,7 @@ const FALLBACK_YIELDS: Record<string, number> = {
   AIYY: 35, OILY: 35, CVNY: 30, MRNY: 40, SNOY: 25,
   BIOY: 25, DISO: 30, ULTY: 55, YMAX: 40, YMAG: 35,
   FBY: 35, GDXY: 25, XOMO: 30, TSMY: 30,
+  APLY: 35, OARK: 45, DIPS: 35, CRSH: 35,
 
   // Defiance (~30–60%)
   QQQY: 50, IWMY: 55, JEPY: 35, QDTY: 30, SDTY: 30,
