@@ -14,7 +14,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Plus, X, Loader2, RefreshCw, Target, TrendingUp, TrendingDown,
-  Bell, BellRing, Eye, Edit2, Check,
+  Bell, BellRing, Eye, Edit2, Check, BookOpen,
 } from 'lucide-react';
 import { fmt$, gainLossColor } from '@/lib/utils';
 import { useToast } from './ToastProvider';
@@ -251,6 +251,7 @@ export function WatchlistPanel() {
   const [items, setItems] = useState<WatchlistItemWithQuote[]>([]);
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
+  const [seeding, setSeeding] = useState(false);
   const toast = useToast();
   const prevHits = useRef<Set<string>>(new Set());
 
@@ -287,6 +288,21 @@ export function WatchlistPanel() {
     const interval = setInterval(fetchWatchlist, 60_000);
     return () => clearInterval(interval);
   }, [fetchWatchlist]);
+
+  async function handleSeedUniverse() {
+    setSeeding(true);
+    try {
+      const res = await fetch('/api/watchlist/seed', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) { toast.show(data.error ?? 'Seed failed', 'danger'); return; }
+      toast.show(`Fund universe loaded — ${data.added} added, ${data.skipped} already present`, 'success');
+      await fetchWatchlist();
+    } catch {
+      toast.show('Failed to load fund universe', 'danger');
+    } finally {
+      setSeeding(false);
+    }
+  }
 
   async function handleRemove(symbol: string) {
     try {
@@ -329,6 +345,15 @@ export function WatchlistPanel() {
           )}
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={handleSeedUniverse}
+            disabled={seeding}
+            className="flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors bg-[#22263a] text-[#7c82a0] hover:text-white disabled:opacity-40"
+            title="Load all Triple C fund universe symbols"
+          >
+            {seeding ? <Loader2 className="w-3 h-3 animate-spin" /> : <BookOpen className="w-3 h-3" />}
+            Fund Universe
+          </button>
           <button
             onClick={() => setShowAdd(!showAdd)}
             className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors
