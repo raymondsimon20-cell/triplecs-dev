@@ -2,9 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import {
-  TrendingUp, BarChart2, Zap, Gauge, ClipboardList,
+  TrendingUp, BarChart2, Gauge, ClipboardList,
   CheckCircle, AlertTriangle, AlertCircle, X, ChevronRight,
-  Scissors, ExternalLink, RefreshCw,
+  ExternalLink, RefreshCw,
 } from 'lucide-react';
 import type { PillarType } from '@/lib/schwab/types';
 import type { StrategyTargets } from '@/lib/utils';
@@ -63,14 +63,13 @@ type StepStatus = 'ok' | 'warn' | 'danger';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-const TOTAL_STEPS = 5;
+const TOTAL_STEPS = 4;
 
 const STEP_META = [
   { id: 1, label: 'Market',  Icon: TrendingUp   },
   { id: 2, label: 'Pillars', Icon: BarChart2     },
-  { id: 3, label: 'Trim',    Icon: Zap           },
-  { id: 4, label: 'Margin',  Icon: Gauge         },
-  { id: 5, label: 'Orders',  Icon: ClipboardList },
+  { id: 3, label: 'Margin',  Icon: Gauge         },
+  { id: 4, label: 'Orders',  Icon: ClipboardList },
 ];
 
 const STATUS_ICON: Record<StepStatus, React.ReactNode> = {
@@ -336,93 +335,7 @@ function StepPillars({
   );
 }
 
-// Step 3 — Triples Trim
-function StepTrim({
-  pillarSummary, strategyTargets, totalValue, marketData, onScrollTo, onNext,
-}: {
-  pillarSummary: PillarSummary[];
-  strategyTargets: StrategyTargets;
-  totalValue: number;
-  marketData: MarketData | null;
-  onScrollTo: (id: string) => void;
-  onNext: (status: StepStatus) => void;
-}) {
-  const triplesActual = pillarPct(pillarSummary, 'triples');
-  const triplesTarget = strategyTargets.triplesPct;
-  const triplesDrift = drift(triplesActual, triplesTarget);
-  const triplesValue = pillarSummary.find((s) => s.pillar === 'triples')?.totalValue ?? 0;
-  const sp500Up = (marketData?.sp500Change ?? 0) >= 1.0;
-  const aboveFive = triplesDrift >= 5;
-
-  // Trim signal: market up 1%+ and triples above target, OR triples > target+5% regardless
-  const trimSignal = (sp500Up && triplesDrift > 0) || aboveFive;
-  const trimAmount = triplesDrift > 0 ? (triplesDrift / 100) * totalValue : 0;
-
-  const status: StepStatus = aboveFive ? 'danger' : trimSignal ? 'warn' : 'ok';
-
-  return (
-    <StepCard>
-      <StatusBadge status={status} />
-
-      <div className="bg-[#0f1117] rounded-xl border border-[#2d3248] divide-y divide-[#2d3248]/50">
-        <MetricRow
-          label="Triples Allocation"
-          value={`${triplesActual.toFixed(1)}%`}
-          sub={`Target: ${triplesTarget}%`}
-          colorClass={triplesDrift > 2 ? 'text-yellow-400' : 'text-white'}
-        />
-        <MetricRow
-          label="Drift from Target"
-          value={`${triplesDrift >= 0 ? '+' : ''}${triplesDrift.toFixed(1)}%`}
-          colorClass={triplesDrift > 0 ? 'text-yellow-400' : triplesDrift < 0 ? 'text-blue-400' : 'text-white'}
-        />
-        {marketData && (
-          <MetricRow
-            label="S&P 500 Today"
-            value={`${marketData.sp500Change >= 0 ? '+' : ''}${marketData.sp500Change.toFixed(2)}%`}
-            sub={sp500Up ? 'Trim signal day' : 'No trim signal'}
-            colorClass={gainLossColor(marketData.sp500Change)}
-          />
-        )}
-        {trimSignal && trimAmount > 0 && (
-          <MetricRow
-            label="Suggested Trim"
-            value={fmt$(trimAmount)}
-            sub="To bring triples back to target"
-            colorClass="text-yellow-400"
-          />
-        )}
-      </div>
-
-      {trimSignal && (
-        <p className="text-xs text-[#7c82a0] px-1">
-          {aboveFive
-            ? `Triples are ${triplesDrift.toFixed(1)}% above target — trim back to ${triplesTarget}% per Vol 7 rules.`
-            : `Market is up ${marketData?.sp500Change.toFixed(2)}% today and triples are above target — consider trimming and redeploying into income.`}
-        </p>
-      )}
-
-      <div className="flex gap-2 pt-1">
-        {trimSignal && (
-          <button
-            onClick={() => { onScrollTo('triples'); onNext(status); }}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-          >
-            <Scissors className="w-3.5 h-3.5" /> Go to Triples
-          </button>
-        )}
-        <button
-          onClick={() => onNext(status)}
-          className={`flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg transition-colors ${trimSignal ? 'px-4 text-[#7c82a0] hover:text-white hover:bg-white/5' : 'flex-1 bg-[#1a1d27] hover:bg-[#2d3248] text-white border border-[#2d3248]'}`}
-        >
-          {trimSignal ? 'Skip' : 'No Trim Needed'} <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
-    </StepCard>
-  );
-}
-
-// Step 4 — Margin Health
+// Step 3 — Margin Health
 function StepMargin({
   equity, marginBalance, totalValue, marginAlerts, strategyTargets, onScrollTo, onNext,
 }: {
@@ -504,7 +417,7 @@ function StepMargin({
   );
 }
 
-// Step 5 — Pending Orders
+// Step 4 — Pending Orders
 function StepOrders({
   pendingOrderCount, onScrollTo, onNext,
 }: {
@@ -561,9 +474,8 @@ function StepSummary({
   const stepLabels: Record<number, string> = {
     1: 'Market Pulse',
     2: 'Pillar Drift',
-    3: 'Triples Trim',
-    4: 'Margin Health',
-    5: 'Pending Orders',
+    3: 'Margin Health',
+    4: 'Pending Orders',
   };
 
   const allClear = Object.values(statuses).every((s) => s === 'ok');
@@ -662,9 +574,8 @@ export function DailyReviewWizard({
   const stepTitles: Record<number, string> = {
     1: 'Market Pulse',
     2: 'Pillar Drift',
-    3: 'Triples Trim',
-    4: 'Margin Health',
-    5: 'Pending Orders',
+    3: 'Margin Health',
+    4: 'Pending Orders',
   };
 
   return (
@@ -735,16 +646,6 @@ export function DailyReviewWizard({
             />
           )}
           {step === 3 && (
-            <StepTrim
-              pillarSummary={account.pillarSummary}
-              strategyTargets={strategyTargets}
-              totalValue={account.totalValue}
-              marketData={marketData}
-              onScrollTo={handleScrollTo}
-              onNext={advance}
-            />
-          )}
-          {step === 4 && (
             <StepMargin
               equity={account.equity}
               marginBalance={account.marginBalance}
@@ -755,7 +656,7 @@ export function DailyReviewWizard({
               onNext={advance}
             />
           )}
-          {step === 5 && (
+          {step === 4 && (
             <StepOrders
               pendingOrderCount={pendingOrderCount}
               onScrollTo={handleScrollTo}

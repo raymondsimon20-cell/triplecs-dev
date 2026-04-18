@@ -637,15 +637,17 @@ export default function DashboardPage() {
         </CollapsiblePanel>
 
         {/* ── Rebalance Workflow ───────────────────────────────────────────── */}
-        <RebalanceWorkflow
-          positions={account.positions}
-          pillarSummary={account.pillarSummary}
-          totalValue={account.totalValue}
-          equity={account.equity}
-          marginBalance={account.marginBalance}
-          accountHash={account.accountHash}
-          strategyTargets={strategyTargets}
-        />
+        <div id="panel-rebalance" className="scroll-mt-20">
+          <RebalanceWorkflow
+            positions={account.positions}
+            pillarSummary={account.pillarSummary}
+            totalValue={account.totalValue}
+            equity={account.equity}
+            marginBalance={account.marginBalance}
+            accountHash={account.accountHash}
+            strategyTargets={strategyTargets}
+          />
+        </div>
 
         {/* ── Open Put Tracker ─────────────────────────────────────────────── */}
         <CollapsiblePanel
