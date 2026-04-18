@@ -5,6 +5,7 @@ import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, Calculator, PieChart, Calendar, Gauge, History, ClipboardList, Eye, BookOpen,
+  Sun, LayoutGrid,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -31,6 +32,7 @@ import { WatchlistPanel } from '@/components/WatchlistPanel';
 import { StrategyGuide } from '@/components/StrategyGuide';
 import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
 import { SimplifiedTradeWorkflow } from '@/components/SimplifiedTradeWorkflow';
+import { DailyFlow } from '@/components/DailyFlow';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
@@ -140,6 +142,47 @@ function DataAge({ updated }: { updated: Date }) {
   );
 }
 
+// ─── View mode toggle ────────────────────────────────────────────────────────
+
+function ViewModeToggle({
+  mode, onChange,
+}: { mode: 'today' | 'dashboard'; onChange: (m: 'today' | 'dashboard') => void }) {
+  return (
+    <div
+      role="tablist"
+      aria-label="View mode"
+      className="hidden sm:inline-flex items-center bg-[#0f1117] border border-[#2d3248] rounded-lg p-0.5"
+    >
+      <button
+        role="tab"
+        aria-selected={mode === 'today'}
+        onClick={() => onChange('today')}
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+          mode === 'today'
+            ? 'bg-blue-600/20 text-blue-300 shadow-sm'
+            : 'text-[#7c82a0] hover:text-white'
+        }`}
+      >
+        <Sun className="w-3.5 h-3.5" />
+        Today
+      </button>
+      <button
+        role="tab"
+        aria-selected={mode === 'dashboard'}
+        onClick={() => onChange('dashboard')}
+        className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-medium transition-colors ${
+          mode === 'dashboard'
+            ? 'bg-blue-600/20 text-blue-300 shadow-sm'
+            : 'text-[#7c82a0] hover:text-white'
+        }`}
+      >
+        <LayoutGrid className="w-3.5 h-3.5" />
+        Dashboard
+      </button>
+    </div>
+  );
+}
+
 // ─── Section jump nav ─────────────────────────────────────────────────────────
 
 const NAV_ITEMS = [
@@ -236,6 +279,30 @@ export default function DashboardPage() {
 
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
   const strategyTargets = useStrategyTargets();
+
+  // View mode: 'today' = curated daily flow, 'dashboard' = full detail
+  const [viewMode, setViewMode] = useState<'today' | 'dashboard'>(() => {
+    if (typeof window === 'undefined') return 'today';
+    try {
+      const stored = localStorage.getItem('triplec_view_mode');
+      return stored === 'dashboard' ? 'dashboard' : 'today';
+    } catch { return 'today'; }
+  });
+
+  function switchView(next: 'today' | 'dashboard') {
+    setViewMode(next);
+    try { localStorage.setItem('triplec_view_mode', next); } catch { /* ignore */ }
+  }
+
+  // Jump from Today view → Dashboard view and scroll to the target section
+  const jumpToSection = useCallback((sectionId: string) => {
+    switchView('dashboard');
+    // Wait for dashboard render + any panel expand animations
+    setTimeout(() => {
+      const el = document.getElementById(`panel-${sectionId}`);
+      if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 100);
+  }, []);
 
   const fetchDividends = useCallback(async () => {
     try {
@@ -369,6 +436,8 @@ export default function DashboardPage() {
 
           {/* Right controls */}
           <div className="flex items-center gap-2 sm:gap-3">
+            <ViewModeToggle mode={viewMode} onChange={switchView} />
+
             <AccountSwitcher
               accounts={accounts}
               selectedIndex={selectedIdx}
@@ -415,8 +484,8 @@ export default function DashboardPage() {
         </div>
       </header>
 
-      {/* ── Section nav ───────────────────────────────────────────────────── */}
-      <SectionNav />
+      {/* ── Section nav (Dashboard view only) ─────────────────────────── */}
+      {viewMode === 'dashboard' && <SectionNav />}
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
 
@@ -438,7 +507,7 @@ export default function DashboardPage() {
           </div>
         )}
 
-        {warnAlerts.length > 0 && dangerAlerts.length === 0 && (
+        {warnAlerts.length > 0 && dangerAlerts.length === 0 && viewMode === 'dashboard' && (
           <div className="bg-orange-500/10 border border-orange-500/25 rounded-xl px-4 py-3 flex items-center gap-2">
             {ALERT_ICON.warn}
             <span className="text-sm text-orange-300">
@@ -446,6 +515,31 @@ export default function DashboardPage() {
             </span>
           </div>
         )}
+
+        {/* ── Today view ─────────────────────────────────────────────────── */}
+        {viewMode === 'today' && (
+          <DailyFlow
+            totalValue={account.totalValue}
+            equity={account.equity}
+            marginBalance={account.marginBalance}
+            dayGainLoss={dayGL}
+            unrealizedGainLoss={unrealized}
+            availableForWithdrawal={availableForWithdrawal}
+            positions={account.positions}
+            pillarSummary={account.pillarSummary}
+            marginAlerts={account.marginAlerts}
+            dividendsTotal={dividendsTotal}
+            monthlyIncome={monthlyIncome}
+            fireTarget={fireTarget}
+            strategyTargets={strategyTargets}
+            pendingOrderCount={pendingOrders.size}
+            onJumpTo={jumpToSection}
+          />
+        )}
+
+        {/* ── Dashboard view (full detail) ───────────────────────────────── */}
+        {viewMode === 'dashboard' && (
+          <>
 
         {/* ── Portfolio overview ──────────────────────────────────────────── */}
         <div id="panel-overview" className="scroll-mt-20 space-y-4">
@@ -567,7 +661,7 @@ export default function DashboardPage() {
           title="Options & Put Strategy"
           icon={<Shield className="w-4 h-4 text-blue-400" />}
           accentClass="border-blue-500/40"
-          defaultOpen={true}
+          defaultOpen={false}
         >
           <div className="pt-4">
             <OptionsStrategyPanel
@@ -583,7 +677,7 @@ export default function DashboardPage() {
           title="AI Portfolio Analysis"
           icon={<Brain className="w-4 h-4 text-cyan-400" />}
           accentClass="border-cyan-500/40"
-          defaultOpen={true}
+          defaultOpen={false}
         >
           <div className="pt-4">
             <AIAnalysisPanel
@@ -604,7 +698,7 @@ export default function DashboardPage() {
           title="Income & Dividend Dashboard"
           icon={<DollarSign className="w-4 h-4 text-emerald-400" />}
           accentClass="border-emerald-500/40"
-          defaultOpen={true}
+          defaultOpen={false}
         >
           <div className="pt-4">
             <DividendIncomePanel
@@ -726,7 +820,7 @@ export default function DashboardPage() {
           title="Watchlist"
           icon={<Eye className="w-4 h-4 text-purple-400" />}
           accentClass="border-purple-500/30"
-          defaultOpen={true}
+          defaultOpen={false}
         >
           <div className="pt-4">
             <WatchlistPanel />
@@ -770,6 +864,9 @@ export default function DashboardPage() {
             <StrategyGuide />
           </div>
         </CollapsiblePanel>
+
+          </>
+        )}
 
         {/* Footer spacer */}
         <div className="h-12" />
