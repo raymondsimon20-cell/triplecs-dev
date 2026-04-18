@@ -787,6 +787,7 @@ export default function DashboardPage() {
         account={account}
         strategyTargets={strategyTargets}
         pendingOrderCount={pendingOrders.size}
+        dividendsAnnual={dividendsTotal}
       />
     </div>
   );

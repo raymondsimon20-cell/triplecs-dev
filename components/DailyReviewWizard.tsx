@@ -1,19 +1,30 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import {
   TrendingUp, BarChart2, Gauge, ClipboardList,
   CheckCircle, AlertTriangle, AlertCircle, X, ChevronRight,
-  ExternalLink, RefreshCw,
+  ExternalLink, RefreshCw, Brain, Loader2, Zap,
 } from 'lucide-react';
 import { PendingOrdersPanel } from '@/components/PendingOrdersPanel';
-import type { PillarType } from '@/lib/schwab/types';
+import type { PillarType, EnrichedPosition } from '@/lib/schwab/types';
 import type { StrategyTargets } from '@/lib/utils';
 import type { RuleAlert } from '@/lib/classify';
 import { fmt$, gainLossColor } from '@/lib/utils';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
+
+interface AIPulseAlert {
+  level: 'danger' | 'warn' | 'ok';
+  rule: string;
+  detail: string;
+}
+
+interface AIPulse {
+  summary: string;
+  alerts: AIPulseAlert[];
+}
 
 interface PillarSummary {
   pillar: PillarType;
@@ -56,9 +67,11 @@ export interface DailyReviewWizardProps {
     pillarSummary: PillarSummary[];
     marginAlerts: RuleAlert[];
     dayGainLoss: number;
+    positions: EnrichedPosition[];
   };
   strategyTargets: StrategyTargets;
   pendingOrderCount: number;
+  dividendsAnnual?: number;
 }
 
 type StepStatus = 'ok' | 'warn' | 'danger';
@@ -151,9 +164,21 @@ function MetricRow({ label, value, sub, colorClass = 'text-white' }: {
   );
 }
 
+const ALERT_STYLE: Record<string, string> = {
+  danger: 'bg-red-500/10 border-red-500/25 text-red-300',
+  warn:   'bg-orange-500/10 border-orange-500/25 text-orange-300',
+  ok:     'bg-emerald-500/10 border-emerald-500/25 text-emerald-300',
+};
+const ALERT_ICON: Record<string, React.ReactNode> = {
+  danger: <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />,
+  warn:   <AlertCircle   className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />,
+  ok:     <CheckCircle   className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />,
+};
+
 // Step 1 — Market Pulse
 function StepMarket({
   marketData, recommendation, loading, strategyTargets, onApply, onNext,
+  aiPulse, aiPulseLoading, aiPulseError, onGetAIPulse,
 }: {
   marketData: MarketData | null;
   recommendation: Recommendation | null;
@@ -161,6 +186,10 @@ function StepMarket({
   strategyTargets: StrategyTargets;
   onApply: () => void;
   onNext: (status: StepStatus) => void;
+  aiPulse: AIPulse | null;
+  aiPulseLoading: boolean;
+  aiPulseError: string | null;
+  onGetAIPulse: () => void;
 }) {
   if (loading || !marketData) {
     return (
@@ -187,6 +216,13 @@ function StepMarket({
      recommendation.suggestedChanges.incomePct !== strategyTargets.incomePct ||
      recommendation.suggestedChanges.hedgePct !== strategyTargets.hedgePct);
 
+  const topAlerts = aiPulse?.alerts
+    .sort((a, b) => {
+      const order = { danger: 0, warn: 1, ok: 2 };
+      return order[a.level] - order[b.level];
+    })
+    .slice(0, 4) ?? [];
+
   return (
     <StepCard>
       <StatusBadge status={status} />
@@ -212,7 +248,7 @@ function StepMarket({
 
       {recommendation && (
         <div className="bg-[#0f1117] rounded-xl border border-[#2d3248] p-4 space-y-2">
-          <p className="text-xs font-semibold text-[#7c82a0] uppercase tracking-wide">AI Recommendation</p>
+          <p className="text-xs font-semibold text-[#7c82a0] uppercase tracking-wide">Market Signal</p>
           <p className="text-sm font-semibold text-white">{recommendation.recommendation}</p>
           <p className="text-xs text-[#7c82a0] leading-relaxed">{recommendation.reason}</p>
           {hasChanges && (
@@ -236,6 +272,56 @@ function StepMarket({
               })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* AI Daily Pulse */}
+      {!aiPulse && !aiPulseLoading && (
+        <button
+          onClick={onGetAIPulse}
+          className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg border border-violet-500/30 bg-violet-500/10 text-violet-300 hover:bg-violet-500/20 text-sm font-medium transition-colors"
+        >
+          <Zap className="w-4 h-4" />
+          Get AI Daily Pulse
+        </button>
+      )}
+
+      {aiPulseLoading && (
+        <div className="flex items-center justify-center gap-2 py-3 text-violet-300 text-sm">
+          <Loader2 className="w-4 h-4 animate-spin" />
+          Analysing portfolio…
+        </div>
+      )}
+
+      {aiPulseError && (
+        <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
+          {aiPulseError}
+        </div>
+      )}
+
+      {aiPulse && (
+        <div className="bg-violet-500/5 border border-violet-500/20 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <Brain className="w-4 h-4 text-violet-400 flex-shrink-0" />
+            <p className="text-xs font-semibold text-violet-300 uppercase tracking-wide">AI Daily Pulse</p>
+          </div>
+          <p className="text-sm text-violet-100 leading-relaxed">{aiPulse.summary}</p>
+          {topAlerts.length > 0 && (
+            <div className="space-y-1.5">
+              {topAlerts.map((alert, i) => (
+                <div key={i} className={`flex items-start gap-2 border rounded-lg px-2.5 py-2 text-xs ${ALERT_STYLE[alert.level]}`}>
+                  {ALERT_ICON[alert.level]}
+                  <div><span className="font-semibold">{alert.rule}:</span> {alert.detail}</div>
+                </div>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={onGetAIPulse}
+            className="flex items-center gap-1 text-[11px] text-violet-400/60 hover:text-violet-300 transition-colors"
+          >
+            <RefreshCw className="w-3 h-3" /> Refresh
+          </button>
         </div>
       )}
 
@@ -496,7 +582,7 @@ function StepSummary({
 // ─── Main wizard ──────────────────────────────────────────────────────────────
 
 export function DailyReviewWizard({
-  isOpen, onClose, account, strategyTargets, pendingOrderCount,
+  isOpen, onClose, account, strategyTargets, pendingOrderCount, dividendsAnnual = 0,
 }: DailyReviewWizardProps) {
   const [step, setStep] = useState(1);
   const [statuses, setStatuses] = useState<Record<number, StepStatus>>({});
@@ -504,13 +590,18 @@ export function DailyReviewWizard({
   const [recommendation, setRecommendation] = useState<Recommendation | null>(null);
   const [marketLoading, setMarketLoading] = useState(false);
 
+  const [aiPulse,        setAiPulse]        = useState<AIPulse | null>(null);
+  const [aiPulseLoading, setAiPulseLoading] = useState(false);
+  const [aiPulseError,   setAiPulseError]   = useState<string | null>(null);
+
   useEffect(() => {
     if (!isOpen) {
-      // Reset on close so next open starts fresh
       setStep(1);
       setStatuses({});
       setMarketData(null);
       setRecommendation(null);
+      setAiPulse(null);
+      setAiPulseError(null);
       return;
     }
     setMarketLoading(true);
@@ -523,6 +614,73 @@ export function DailyReviewWizard({
       .catch(console.warn)
       .finally(() => setMarketLoading(false));
   }, [isOpen]);
+
+  const handleGetAIPulse = useCallback(async () => {
+    setAiPulseLoading(true);
+    setAiPulseError(null);
+    setAiPulse(null);
+
+    const snapshot = {
+      total_value:            account.totalValue,
+      equity:                 account.equity,
+      margin_balance:         account.marginBalance,
+      margin_utilization_pct: account.totalValue > 0
+        ? (Math.abs(account.marginBalance) / account.totalValue) * 100 : 0,
+      dividends_annual: dividendsAnnual,
+      pillar_summary: account.pillarSummary.map((p) => ({
+        pillar:        p.pillar,
+        label:         p.label,
+        total_value:   p.totalValue,
+        portfolio_pct: p.portfolioPercent,
+        position_count: p.positionCount,
+      })),
+      positions: account.positions.map((p) => ({
+        symbol:           p.instrument?.symbol ?? 'UNKNOWN',
+        pillar:           p.pillar,
+        market_value:     p.marketValue,
+        shares:           p.longQuantity,
+        avg_cost:         p.averagePrice,
+        day_pct:          p.currentDayProfitLossPercentage,
+        unrealized_gl:    p.longOpenProfitLoss,
+        pct_of_portfolio: account.totalValue > 0
+          ? +((p.marketValue / account.totalValue) * 100).toFixed(2) : 0,
+      })),
+    };
+
+    try {
+      const res = await fetch('/api/ai-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode: 'daily_pulse', portfolio: snapshot }),
+      });
+
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        accumulated += decoder.decode(value, { stream: true });
+        if (accumulated.includes('__DONE__')) break;
+      }
+
+      const rawText = accumulated.replace('__DONE__', '').trim();
+      const xmlMatch   = rawText.match(/<json>([\s\S]*?)<\/json>/i);
+      const fenceMatch = rawText.match(/```(?:json)?\s*([\s\S]*?)```/i);
+      const candidate  = xmlMatch ? xmlMatch[1].trim()
+        : fenceMatch ? fenceMatch[1].trim()
+        : rawText.slice(rawText.indexOf('{'), rawText.lastIndexOf('}') + 1);
+
+      const parsed = JSON.parse(candidate);
+      setAiPulse({ summary: parsed.summary ?? '', alerts: parsed.alerts ?? [] });
+    } catch (e) {
+      setAiPulseError(e instanceof Error ? e.message : 'AI analysis failed — try again.');
+    } finally {
+      setAiPulseLoading(false);
+    }
+  }, [account, dividendsAnnual]);
 
   if (!isOpen) return null;
 
@@ -613,6 +771,10 @@ export function DailyReviewWizard({
               strategyTargets={strategyTargets}
               onApply={handleApplyRecommendation}
               onNext={advance}
+              aiPulse={aiPulse}
+              aiPulseLoading={aiPulseLoading}
+              aiPulseError={aiPulseError}
+              onGetAIPulse={handleGetAIPulse}
             />
           )}
           {step === 2 && (
