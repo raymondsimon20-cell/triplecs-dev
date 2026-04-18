@@ -578,6 +578,7 @@ export default function DashboardPage() {
             <OptionsStrategyPanel
               positions={account.positions}
               totalValue={account.totalValue}
+              accountHash={account.accountHash}
             />
           </div>
         </CollapsiblePanel>

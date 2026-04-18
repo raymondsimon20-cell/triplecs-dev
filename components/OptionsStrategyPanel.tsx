@@ -9,27 +9,70 @@
  *   • Bought SPY/QQQ puts ~30 days out, strike ~10% below market
  *   • Roll signal: <14 days to expiry → Roll Now; 14-21 → Roll Soon
  *   • Cover when RSI oversold / VIX spikes
+ *   • "Get AI Rec" → BUY_TO_OPEN protective put via /api/option-plan
  *
  * Section 2 — Sell-Put Income Engine (Vol 6)
  *   • Sell LEAPs on indexed ETFs with LOW share price (UPRO, TQQQ, income ETFs)
  *   • Shows suggested strike (10% below), assignment risk, premium quality score
- *   • Avoid high share-price names (large assignment $ per contract)
- *   • Premiums lower cost basis & margin interest
+ *   • "Get AI Rec" per candidate → SELL_TO_OPEN via /api/option-plan → place order
  *
  * Section 3 — Boxing Tracker (Vol 5, Ch 4-5)
  *   • Short CLM/CRF when: equity low, premium > 20%, RO announced, black-swan recourse
- *   • Boxing raises equity immediately by lowering maintenance
- *   • Cover at lows, DCA long, ride back to top
  */
 
 import { useState } from 'react';
 import {
   Shield, DollarSign, Layers, ChevronDown, ChevronUp,
   AlertTriangle, CheckCircle, Clock, TrendingDown, RefreshCw,
+  Sparkles, Loader2, ShoppingCart, X,
 } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { TRIPLES_SYMBOLS, INCOME_SYMBOLS, CORNERSTONE_SYMBOLS } from '@/lib/classify';
 import { PutChainInline } from '@/components/PutChainInline';
+
+// ─── API types ────────────────────────────────────────────────────────────────
+
+interface SelectedContract {
+  expiration:       string;
+  dte:              number;
+  strike:           number;
+  otmPct:           number;
+  delta:            number;
+  bid:              number;
+  ask:              number;
+  mid:              number;
+  iv:               number;
+  annualisedReturn: number;
+  breakeven:        number;
+  closeTarget75:    number;
+}
+
+interface OptionPlanResponse {
+  occSymbol:        string;
+  instruction:      'BUY_TO_OPEN' | 'SELL_TO_OPEN';
+  contracts:        number;
+  limitPrice:       number;
+  rationale:        string;
+  selectedContract: SelectedContract;
+  validationPassed: boolean;
+  symbol:           string;
+  underlyingPrice:  number;
+  mode:             string;
+}
+
+interface RecState {
+  loading:      boolean;
+  plan:         OptionPlanResponse | null;
+  error:        string | null;
+  contracts:    number;
+  placing:      boolean;
+  orderResult:  string | null;
+}
+
+const initRec = (): RecState => ({
+  loading: false, plan: null, error: null,
+  contracts: 1, placing: false, orderResult: null,
+});
 
 // ─── OCC Option Symbol Parser ─────────────────────────────────────────────────
 
@@ -41,17 +84,9 @@ interface ParsedOption {
   daysToExpiry: number;
 }
 
-/**
- * Parses a Schwab OCC option symbol.
- * Standard format: RRRRRRYYMMDDTSSSSSSSS (21 chars)
- * e.g. "SPY   250117P00580000" → SPY, 2025-01-17, Put, $580.00
- * Falls back to description parsing if symbol doesn't match.
- */
 function parseOptionSymbol(symbol: string, description?: string): ParsedOption | null {
   try {
-    // OCC format: 6-char root + 6-char date (YYMMDD) + 1-char type + 8-char strike
     const cleaned = symbol.replace(/\s+/g, '');
-    // Attempt regex match on cleaned symbol
     const occMatch = cleaned.match(/^([A-Z]+)(\d{2})(\d{2})(\d{2})([PC])(\d{8})$/);
     if (occMatch) {
       const [, root, yy, mm, dd, typeChar, strikeRaw] = occMatch;
@@ -60,16 +95,8 @@ function parseOptionSymbol(symbol: string, description?: string): ParsedOption |
       const strike = parseInt(strikeRaw) / 1000;
       const now = new Date();
       const daysToExpiry = Math.ceil((expiry.getTime() - now.getTime()) / 86_400_000);
-      return {
-        underlying: root,
-        expiry,
-        type: typeChar as 'P' | 'C',
-        strike,
-        daysToExpiry,
-      };
+      return { underlying: root, expiry, type: typeChar as 'P' | 'C', strike, daysToExpiry };
     }
-
-    // Fallback: parse description like "SPY Jan 17 2025 580 Put"
     if (description) {
       const descMatch = description.match(
         /^(\w+)\s+(\w+)\s+(\d+)\s+(\d{4})\s+([\d.]+)\s+(Put|Call)/i,
@@ -84,17 +111,13 @@ function parseOptionSymbol(symbol: string, description?: string): ParsedOption |
         const now = new Date();
         const daysToExpiry = Math.ceil((expiry.getTime() - now.getTime()) / 86_400_000);
         return {
-          underlying: root,
-          expiry,
+          underlying: root, expiry,
           type: typeStr.toLowerCase() === 'put' ? 'P' : 'C',
-          strike: parseFloat(strikeStr),
-          daysToExpiry,
+          strike: parseFloat(strikeStr), daysToExpiry,
         };
       }
     }
-  } catch {
-    // parsing failed
-  }
+  } catch { /* parsing failed */ }
   return null;
 }
 
@@ -116,33 +139,24 @@ function rollUrgency(daysToExpiry: number): { label: string; color: string; bg: 
   return { label: 'Holding', color: 'text-emerald-400', bg: 'bg-emerald-500/10 border-emerald-500/25' };
 }
 
-/** Premium quality score for sell-put candidates (0-100) */
 function premiumQualityScore(pos: EnrichedPosition): number {
   let score = 0;
   const price = pos.quote?.lastPrice ?? pos.averagePrice;
   const symbol = pos.instrument.symbol;
-
-  // Indexed → high preference
   if (TRIPLES_SYMBOLS.has(symbol)) score += 40;
   else if (INCOME_SYMBOLS.has(symbol)) score += 25;
   else score += 10;
-
-  // Low share price → lower assignment risk
   if (price < 30) score += 30;
   else if (price < 60) score += 20;
   else if (price < 100) score += 10;
-  else score -= 10; // high share price — avoid
-
-  // High IV → fatter premiums
+  else score -= 10;
   const iv = pos.quote?.volatility ?? 0;
   if (iv > 50) score += 30;
   else if (iv > 30) score += 20;
   else if (iv > 15) score += 10;
-
   return Math.max(0, Math.min(100, score));
 }
 
-/** Candidate tier for sell-put (Tier 1 = ideal, Tier 2 = good, Tier 3 = caution) */
 function candidateTier(symbol: string, price: number): { tier: 1|2|3; label: string; color: string } {
   const TIER1 = new Set(['TQQQ','UPRO','QQQY','XDTE','FEPI','JEPI','JEPQ','SPYI','AIPI','SPXL','KLIP']);
   const TIER2 = new Set(['QQQ','NVDA','IWMY','JEPY','QDVO','SPYG']);
@@ -151,13 +165,10 @@ function candidateTier(symbol: string, price: number): { tier: 1|2|3; label: str
   return { tier: 3, label: 'Tier 3', color: 'text-orange-400 bg-orange-500/10 border-orange-500/25' };
 }
 
-/** Estimate approximate delta from % OTM (rough Black-Scholes heuristic) */
 function approxDelta(otmPct: number): number {
-  // Very rough: ATM ≈ 0.50; each 5% OTM ≈ -0.08 delta
   return Math.max(0.05, Math.round((0.50 - otmPct / 100 * 1.6) * 100) / 100);
 }
 
-/** Signal for a sold put: close, roll, or hold */
 function soldPutSignal(dte: number, profitPct: number): {
   label: string; color: string; bg: string; icon: 'close'|'roll'|'hold'|'manage';
 } {
@@ -172,10 +183,184 @@ function soldPutSignal(dte: number, profitPct: number): {
   return { label: 'Hold', color: 'text-[#7c82a0]', bg: 'bg-[#22263a] border-[#3d4260]', icon: 'hold' };
 }
 
+// ─── AI Rec Card ──────────────────────────────────────────────────────────────
+
+function AiRecCard({
+  rec,
+  mode,
+  onContractsChange,
+  onPlace,
+  onDismiss,
+}: {
+  rec: RecState;
+  mode: 'sell_put' | 'buy_put';
+  onContractsChange: (n: number) => void;
+  onPlace: () => void;
+  onDismiss: () => void;
+}) {
+  if (rec.loading) {
+    return (
+      <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-violet-500/10 border border-violet-500/20 rounded-lg text-xs text-violet-300">
+        <Loader2 className="w-3.5 h-3.5 animate-spin flex-shrink-0" />
+        <span>AI analysing live options chain…</span>
+      </div>
+    );
+  }
+
+  if (rec.error) {
+    return (
+      <div className="mt-2 flex items-center gap-2 px-3 py-2 bg-red-500/10 border border-red-500/20 rounded-lg text-xs text-red-300">
+        <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0" />
+        <span className="flex-1">{rec.error}</span>
+        <button onClick={onDismiss} className="text-red-400 hover:text-red-200"><X className="w-3 h-3" /></button>
+      </div>
+    );
+  }
+
+  if (!rec.plan) return null;
+
+  const { plan } = rec;
+  const c = plan.selectedContract;
+  const expDisplay = new Date(c.expiration + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: '2-digit' });
+  const isSell = mode === 'sell_put';
+  const accentClass = isSell ? 'border-violet-500/30 bg-violet-500/8' : 'border-blue-500/30 bg-blue-500/8';
+  const badgeClass  = isSell ? 'bg-violet-600/30 text-violet-200' : 'bg-blue-600/30 text-blue-200';
+
+  return (
+    <div className={`mt-2 border rounded-lg overflow-hidden ${accentClass}`}>
+      {/* Rec header */}
+      <div className="flex items-center justify-between px-3 py-1.5 border-b border-white/5">
+        <div className="flex items-center gap-1.5 text-[10px]">
+          <Sparkles className="w-3 h-3 text-violet-400" />
+          <span className="text-[#7c82a0]">AI Recommendation</span>
+          {!plan.validationPassed && (
+            <span className="text-orange-400 text-[9px]">⚠ fallback scoring</span>
+          )}
+        </div>
+        <button onClick={onDismiss} className="text-[#4a5070] hover:text-white"><X className="w-3 h-3" /></button>
+      </div>
+
+      {/* Main rec line */}
+      <div className="px-3 py-2 space-y-1.5">
+        <div className="flex items-center gap-1.5 flex-wrap">
+          <span className={`text-[10px] px-1.5 py-0.5 rounded font-semibold ${badgeClass}`}>
+            {isSell ? 'SELL TO OPEN' : 'BUY TO OPEN'}
+          </span>
+          <span className="font-mono font-semibold text-white text-xs">
+            {plan.symbol} ${c.strike.toFixed(0)}P {expDisplay}
+          </span>
+        </div>
+
+        {/* Metrics row */}
+        <div className="grid grid-cols-4 gap-1.5 text-[10px]">
+          <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+            <div className="text-[#4a5070]">DTE</div>
+            <div className="text-white font-mono font-semibold">{c.dte}d</div>
+          </div>
+          <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+            <div className="text-[#4a5070]">OTM%</div>
+            <div className="text-blue-300 font-mono font-semibold">{c.otmPct.toFixed(1)}%</div>
+          </div>
+          <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+            <div className="text-[#4a5070]">Delta</div>
+            <div className="text-violet-300 font-mono font-semibold">{c.delta.toFixed(2)}</div>
+          </div>
+          <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+            <div className="text-[#4a5070]">IV</div>
+            <div className="text-orange-300 font-mono font-semibold">{c.iv.toFixed(0)}%</div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-3 gap-1.5 text-[10px]">
+          <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+            <div className="text-[#4a5070]">Limit Price</div>
+            <div className="text-emerald-400 font-mono font-semibold">${plan.limitPrice.toFixed(2)}</div>
+          </div>
+          {isSell ? (
+            <>
+              <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+                <div className="text-[#4a5070]">Close @ 75%</div>
+                <div className="text-orange-300 font-mono">${c.closeTarget75.toFixed(2)}</div>
+              </div>
+              <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+                <div className="text-[#4a5070]">Ann. Ret</div>
+                <div className={`font-mono font-semibold ${c.annualisedReturn >= 15 ? 'text-emerald-400' : 'text-blue-400'}`}>
+                  {c.annualisedReturn.toFixed(1)}%
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+                <div className="text-[#4a5070]">Breakeven</div>
+                <div className="text-[#7c82a0] font-mono">${c.breakeven.toFixed(2)}</div>
+              </div>
+              <div className="bg-[#1a1d27] rounded px-2 py-1 text-center">
+                <div className="text-[#4a5070]">Bid / Ask</div>
+                <div className="text-[#7c82a0] font-mono">{c.bid.toFixed(2)} / {c.ask.toFixed(2)}</div>
+              </div>
+            </>
+          )}
+        </div>
+
+        {/* Rationale */}
+        <p className="text-[10px] text-[#7c82a0] leading-relaxed">{plan.rationale}</p>
+
+        {/* Contracts adjuster + place */}
+        {rec.orderResult ? (
+          <div className={`flex items-center gap-1.5 text-xs px-2 py-1.5 rounded ${
+            rec.orderResult.startsWith('✓') ? 'bg-emerald-500/10 text-emerald-300' : 'bg-red-500/10 text-red-300'
+          }`}>
+            {rec.orderResult}
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-1 text-xs text-[#7c82a0]">
+              <span>Contracts:</span>
+              <button
+                onClick={() => onContractsChange(Math.max(1, rec.contracts - 1))}
+                className="w-5 h-5 rounded bg-[#2d3248] text-white hover:bg-[#3d4268] flex items-center justify-center text-sm leading-none"
+              >−</button>
+              <span className="w-5 text-center font-mono text-white">{rec.contracts}</span>
+              <button
+                onClick={() => onContractsChange(Math.min(3, rec.contracts + 1))}
+                className="w-5 h-5 rounded bg-[#2d3248] text-white hover:bg-[#3d4268] flex items-center justify-center text-sm leading-none"
+              >+</button>
+            </div>
+            <button
+              onClick={onPlace}
+              disabled={rec.placing}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-semibold bg-violet-600 hover:bg-violet-500 disabled:opacity-50 text-white transition-colors ml-auto"
+            >
+              {rec.placing ? (
+                <><Loader2 className="w-3 h-3 animate-spin" />Placing…</>
+              ) : (
+                <><ShoppingCart className="w-3 h-3" />Place Order</>
+              )}
+            </button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ─── Section 1: Put Protection Tracker ───────────────────────────────────────
 
-function PutProtectionSection({ positions }: { positions: EnrichedPosition[] }) {
-  // Long option positions (bought puts/calls)
+function PutProtectionSection({
+  positions,
+  accountHash,
+  vix,
+  marketTrend,
+}: {
+  positions:    EnrichedPosition[];
+  accountHash:  string;
+  vix?:         number;
+  marketTrend?: 'bullish' | 'neutral' | 'bearish';
+}) {
+  const [buyRec, setBuyRec]     = useState<Record<string, RecState>>({});
+  const [selectedSym, setSelectedSym] = useState<'SPY' | 'QQQ'>('SPY');
+
   const longOptions = positions.filter(
     (p) => p.instrument.assetType === 'OPTION' && p.longQuantity > 0,
   );
@@ -183,6 +368,63 @@ function PutProtectionSection({ positions }: { positions: EnrichedPosition[] }) 
     const parsed = parseOptionSymbol(p.instrument.symbol, p.instrument.description);
     return parsed?.type === 'P';
   });
+
+  const getAiRec = async (symbol: string) => {
+    setBuyRec((prev) => ({ ...prev, [symbol]: { ...initRec(), loading: true } }));
+    try {
+      const res = await fetch('/api/option-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ symbol, mode: 'buy_put', contracts: 1, vix, marketTrend }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setBuyRec((prev) => ({ ...prev, [symbol]: { ...initRec(), plan: data, contracts: 1 } }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'AI request failed';
+      setBuyRec((prev) => ({ ...prev, [symbol]: { ...initRec(), error: msg } }));
+    }
+  };
+
+  const placeOrder = async (symbol: string) => {
+    const rec = buyRec[symbol];
+    if (!rec?.plan || !accountHash) return;
+    setBuyRec((prev) => ({ ...prev, [symbol]: { ...prev[symbol], placing: true } }));
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountHash,
+          optionOrders: [{
+            occSymbol:   rec.plan.occSymbol,
+            instruction: 'BUY_TO_OPEN',
+            contracts:   rec.contracts,
+            limitPrice:  rec.plan.limitPrice,
+            rationale:   rec.plan.rationale,
+            aiMode:      'buy_put_protection',
+          }],
+        }),
+      });
+      const data = await res.json();
+      const placed = data.optionResults?.[0];
+      const result = placed?.status === 'placed'
+        ? `✓ Order placed — ID ${placed.orderId ?? 'pending'}`
+        : `✗ ${placed?.message ?? data.error ?? 'Unknown error'}`;
+      setBuyRec((prev) => ({ ...prev, [symbol]: { ...prev[symbol], placing: false, orderResult: result } }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Order failed';
+      setBuyRec((prev) => ({ ...prev, [symbol]: { ...prev[symbol], placing: false, orderResult: `✗ ${msg}` } }));
+    }
+  };
+
+  const updateContracts = (symbol: string, n: number) => {
+    setBuyRec((prev) => ({ ...prev, [symbol]: { ...prev[symbol], contracts: n } }));
+  };
+
+  const dismissRec = (symbol: string) => {
+    setBuyRec((prev) => ({ ...prev, [symbol]: initRec() }));
+  };
 
   return (
     <div className="space-y-4">
@@ -274,14 +516,74 @@ function PutProtectionSection({ positions }: { positions: EnrichedPosition[] }) 
           <span>Roll approaching: sell the expiring put(s) to salvage remaining value, then buy new contracts ~30 DTE. Do this on a market down day (or when VIX is low) for cheaper replacement puts.</span>
         </div>
       )}
+
+      {/* AI buy rec section */}
+      {accountHash && (
+        <div className="border border-[#2d3248] rounded-lg p-3 space-y-2 bg-[#0f1117]">
+          <div className="flex items-center gap-2">
+            <Sparkles className="w-3.5 h-3.5 text-blue-400" />
+            <span className="text-xs font-semibold text-white">Buy Protective Put</span>
+            <span className="text-[10px] text-[#4a5070]">Vol 5 · ~30 DTE · 10% OTM</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="text-xs text-[#7c82a0]">Symbol:</span>
+            {(['SPY', 'QQQ'] as const).map((sym) => (
+              <button
+                key={sym}
+                onClick={() => setSelectedSym(sym)}
+                className={`px-2.5 py-1 rounded text-xs font-mono font-semibold transition-colors ${
+                  selectedSym === sym
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-[#22263a] text-[#7c82a0] hover:text-white border border-[#3d4260]'
+                }`}
+              >
+                {sym}
+              </button>
+            ))}
+            <button
+              onClick={() => getAiRec(selectedSym)}
+              disabled={buyRec[selectedSym]?.loading}
+              className="flex items-center gap-1.5 px-3 py-1 rounded text-xs bg-blue-600/20 border border-blue-500/30 text-blue-300 hover:bg-blue-600/40 disabled:opacity-50 transition-colors ml-auto"
+            >
+              {buyRec[selectedSym]?.loading ? (
+                <><Loader2 className="w-3 h-3 animate-spin" />Analysing…</>
+              ) : (
+                <><Sparkles className="w-3 h-3" />Get AI Rec</>
+              )}
+            </button>
+          </div>
+          {buyRec[selectedSym] && (buyRec[selectedSym].loading || buyRec[selectedSym].plan || buyRec[selectedSym].error) && (
+            <AiRecCard
+              rec={buyRec[selectedSym]}
+              mode="buy_put"
+              onContractsChange={(n) => updateContracts(selectedSym, n)}
+              onPlace={() => placeOrder(selectedSym)}
+              onDismiss={() => dismissRec(selectedSym)}
+            />
+          )}
+        </div>
+      )}
     </div>
   );
 }
 
 // ─── Section 2: Sell-Put Income Engine ───────────────────────────────────────
 
-function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPosition[]; totalValue: number }) {
-  // Existing sold puts (short option positions)
+function SellPutIncomeSection({
+  positions,
+  totalValue,
+  accountHash,
+  vix,
+  marketTrend,
+}: {
+  positions:    EnrichedPosition[];
+  totalValue:   number;
+  accountHash:  string;
+  vix?:         number;
+  marketTrend?: 'bullish' | 'neutral' | 'bearish';
+}) {
+  const [aiRecs, setAiRecs] = useState<Record<string, RecState>>({});
+
   const soldPuts = positions.filter(
     (p) => p.instrument.assetType === 'OPTION' && p.shortQuantity > 0,
   ).filter((p) => {
@@ -289,7 +591,6 @@ function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPo
     return parsed?.type === 'P';
   });
 
-  // Sell-put candidates: existing equity positions (not options), indexed/triples, lower share price
   const equityPositions = positions.filter(
     (p) => p.instrument.assetType === 'EQUITY' || p.instrument.assetType === 'MUTUAL_FUND',
   );
@@ -300,9 +601,72 @@ function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPo
       score: premiumQualityScore(pos),
       price: pos.quote?.lastPrice ?? pos.averagePrice,
     }))
-    .filter(({ score }) => score >= 30) // only show worthwhile candidates
+    .filter(({ score }) => score >= 30)
     .sort((a, b) => b.score - a.score)
-    .slice(0, 8); // top 8
+    .slice(0, 8);
+
+  const getAiRec = async (symbol: string, pos: EnrichedPosition) => {
+    setAiRecs((prev) => ({ ...prev, [symbol]: { ...initRec(), loading: true } }));
+    try {
+      const shares = pos.longQuantity;
+      const value  = pos.marketValue;
+      const pillar = pos.pillar ?? 'income';
+      const res = await fetch('/api/option-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          symbol, mode: 'sell_put', contracts: 1, vix, marketTrend,
+          position: { shares, value, pillar },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? `HTTP ${res.status}`);
+      setAiRecs((prev) => ({ ...prev, [symbol]: { ...initRec(), plan: data, contracts: data.contracts } }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'AI request failed';
+      setAiRecs((prev) => ({ ...prev, [symbol]: { ...initRec(), error: msg } }));
+    }
+  };
+
+  const placeOrder = async (symbol: string) => {
+    const rec = aiRecs[symbol];
+    if (!rec?.plan || !accountHash) return;
+    setAiRecs((prev) => ({ ...prev, [symbol]: { ...prev[symbol], placing: true } }));
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountHash,
+          optionOrders: [{
+            occSymbol:   rec.plan.occSymbol,
+            instruction: 'SELL_TO_OPEN',
+            contracts:   rec.contracts,
+            limitPrice:  rec.plan.limitPrice,
+            rationale:   rec.plan.rationale,
+            aiMode:      'sell_put_income',
+          }],
+        }),
+      });
+      const data = await res.json();
+      const placed = data.optionResults?.[0];
+      const result = placed?.status === 'placed'
+        ? `✓ Order placed — ID ${placed.orderId ?? 'pending'}`
+        : `✗ ${placed?.message ?? data.error ?? 'Unknown error'}`;
+      setAiRecs((prev) => ({ ...prev, [symbol]: { ...prev[symbol], placing: false, orderResult: result } }));
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'Order failed';
+      setAiRecs((prev) => ({ ...prev, [symbol]: { ...prev[symbol], placing: false, orderResult: `✗ ${msg}` } }));
+    }
+  };
+
+  const updateContracts = (symbol: string, n: number) => {
+    setAiRecs((prev) => ({ ...prev, [symbol]: { ...prev[symbol], contracts: n } }));
+  };
+
+  const dismissRec = (symbol: string) => {
+    setAiRecs((prev) => ({ ...prev, [symbol]: initRec() }));
+  };
 
   return (
     <div className="space-y-4">
@@ -398,14 +762,15 @@ function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPo
         ) : (
           <div className="space-y-2">
             {candidates.map(({ pos, score, price }) => {
-              const iv    = pos.quote?.volatility ?? 0;
-              const symbol = pos.instrument.symbol;
+              const iv      = pos.quote?.volatility ?? 0;
+              const symbol  = pos.instrument.symbol;
               const isTriple = TRIPLES_SYMBOLS.has(symbol);
               const isIncome = INCOME_SYMBOLS.has(symbol);
-              const tier  = candidateTier(symbol, price);
+              const tier    = candidateTier(symbol, price);
               const scoreColor = score >= 70 ? 'text-emerald-400' : score >= 50 ? 'text-yellow-400' : 'text-orange-400';
+              const rec     = aiRecs[symbol];
+              const hasRec  = rec && (rec.loading || rec.plan !== null || rec.error !== null);
 
-              // Three strike scenarios
               const strikes = [
                 { label: 'Conservative', otm: 15, delta: approxDelta(15) },
                 { label: 'Moderate',     otm: 10, delta: approxDelta(10) },
@@ -458,8 +823,34 @@ function SellPutIncomeSection({ positions, totalValue }: { positions: EnrichedPo
                     </span></span>
                   </div>
 
-                  {/* Live chain link */}
-                  <PutChainInline ticker={symbol} />
+                  {/* AI Rec button + chain */}
+                  <div className="flex items-center gap-3 pt-0.5">
+                    <PutChainInline ticker={symbol} />
+                    {accountHash && (
+                      <button
+                        onClick={() => !hasRec && getAiRec(symbol, pos)}
+                        disabled={rec?.loading}
+                        className="flex items-center gap-1.5 text-xs text-violet-400 hover:text-violet-200 disabled:opacity-50 transition-colors ml-auto whitespace-nowrap"
+                      >
+                        {rec?.loading ? (
+                          <><Loader2 className="w-3.5 h-3.5 animate-spin" />Analysing…</>
+                        ) : (
+                          <><Sparkles className="w-3.5 h-3.5" />Get AI Rec</>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
+                  {/* AI rec card */}
+                  {hasRec && (
+                    <AiRecCard
+                      rec={rec}
+                      mode="sell_put"
+                      onContractsChange={(n) => updateContracts(symbol, n)}
+                      onPlace={() => placeOrder(symbol)}
+                      onDismiss={() => dismissRec(symbol)}
+                    />
+                  )}
                 </div>
               );
             })}
@@ -483,16 +874,13 @@ function BoxingTrackerSection({
   cornerstonePremiumPct,
 }: {
   positions: EnrichedPosition[];
-  cornerstonePremiumPct?: number; // CLM/CRF premium % above NAV, passed from parent
+  cornerstonePremiumPct?: number;
 }) {
-  // Short equity positions in CLM or CRF
   const boxedPositions = positions.filter(
     (p) => CORNERSTONE_SYMBOLS.has(p.instrument.symbol) && p.shortQuantity > 0,
   );
 
-  // Boxing signal conditions (Vol 5, Ch 5)
   const premiumHigh = (cornerstonePremiumPct ?? 0) > 20;
-  const hasNoBoxing = boxedPositions.length === 0;
 
   const boxSignals = [
     {
@@ -502,7 +890,7 @@ function BoxingTrackerSection({
     },
     {
       label: 'Equity too low / margin pressure',
-      active: false, // would need equity% from account data; user assesses
+      active: false,
       desc: 'Boxing immediately raises equity by lowering maintenance requirements',
     },
     {
@@ -526,7 +914,6 @@ function BoxingTrackerSection({
         Cornerstone IS the index — boxing it hedges your whole income portfolio.
       </div>
 
-      {/* Signal checklist */}
       <div className="space-y-1.5">
         <p className="text-xs font-semibold text-white">Box Signals</p>
         {boxSignals.map((signal, i) => (
@@ -555,7 +942,6 @@ function BoxingTrackerSection({
         ))}
       </div>
 
-      {/* Active boxing positions */}
       {boxedPositions.length > 0 ? (
         <div className="space-y-2">
           <p className="text-xs font-semibold text-white">Active Boxing Positions</p>
@@ -634,9 +1020,12 @@ function BoxingTrackerSection({
 // ─── Main Panel ───────────────────────────────────────────────────────────────
 
 interface Props {
-  positions: EnrichedPosition[];
-  totalValue: number;
+  positions:             EnrichedPosition[];
+  totalValue:            number;
+  accountHash:           string;
   cornerstonePremiumPct?: number;
+  vix?:                  number;
+  marketTrend?:          'bullish' | 'neutral' | 'bearish';
 }
 
 const SECTIONS = [
@@ -647,7 +1036,14 @@ const SECTIONS = [
 
 type SectionId = (typeof SECTIONS)[number]['id'];
 
-export function OptionsStrategyPanel({ positions, totalValue, cornerstonePremiumPct }: Props) {
+export function OptionsStrategyPanel({
+  positions,
+  totalValue,
+  accountHash,
+  cornerstonePremiumPct,
+  vix,
+  marketTrend,
+}: Props) {
   const [expanded, setExpanded] = useState<Set<SectionId>>(new Set(['protection', 'income']));
 
   const toggleSection = (id: SectionId) => {
@@ -659,7 +1055,6 @@ export function OptionsStrategyPanel({ positions, totalValue, cornerstonePremium
     });
   };
 
-  // Count active sold puts + bought puts for header badge
   const optionPositions = positions.filter((p) => p.instrument.assetType === 'OPTION');
   const boughtPuts = optionPositions.filter((p) => {
     const parsed = parseOptionSymbol(p.instrument.symbol, p.instrument.description);
@@ -673,7 +1068,6 @@ export function OptionsStrategyPanel({ positions, totalValue, cornerstonePremium
     (p) => CORNERSTONE_SYMBOLS.has(p.instrument.symbol) && p.shortQuantity > 0,
   );
 
-  // Roll alert: any puts with < 14 DTE
   const rollAlert = boughtPuts.some((p) => {
     const parsed = parseOptionSymbol(p.instrument.symbol, p.instrument.description);
     return parsed && parsed.daysToExpiry <= 14;
@@ -735,10 +1129,21 @@ export function OptionsStrategyPanel({ positions, totalValue, cornerstonePremium
             {isOpen && (
               <div className="px-4 py-4">
                 {id === 'protection' && (
-                  <PutProtectionSection positions={positions} />
+                  <PutProtectionSection
+                    positions={positions}
+                    accountHash={accountHash}
+                    vix={vix}
+                    marketTrend={marketTrend}
+                  />
                 )}
                 {id === 'income' && (
-                  <SellPutIncomeSection positions={positions} totalValue={totalValue} />
+                  <SellPutIncomeSection
+                    positions={positions}
+                    totalValue={totalValue}
+                    accountHash={accountHash}
+                    vix={vix}
+                    marketTrend={marketTrend}
+                  />
                 )}
                 {id === 'boxing' && (
                   <BoxingTrackerSection
@@ -752,7 +1157,6 @@ export function OptionsStrategyPanel({ positions, totalValue, cornerstonePremium
         );
       })}
 
-      {/* Vol 5/6 strategy reminder */}
       <div className="text-[10px] text-[#4a5070] border-t border-[#2d3248] pt-3">
         Vol 5: Buy SPY/QQQ puts ~30 DTE, 10% OTM, roll monthly ($100-$300/mo insurance). Box CLM/CRF at premium highs or when equity low.
         Vol 6: Sell 1 LEAP put on indexed names you want to own — premium lowers cost basis and margin. Close at 75% profit.

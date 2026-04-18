@@ -21,7 +21,7 @@ export const CORNERSTONE_SYMBOLS = new Set([
 /** Short / inverse ETFs and put hedges */
 export const HEDGE_SYMBOLS = new Set([
   'SPXU', 'SQQQ', 'SDOW', 'FAZ', 'SRTY', 'SPXS',
-  'SH', 'PSQ', 'DOG', 'UVXY', 'SOXS',
+  'SH', 'PSQ', 'DOG', 'UVXY', 'SOXS', 'FNGD',
 ]);
 
 /** Income ETF families — Yieldmax, Defiance, Roundhill, RexShares, and known high-yielders */
@@ -29,7 +29,7 @@ export const INCOME_SYMBOLS = new Set([
   // Yieldmax
   'TSLY', 'NVDY', 'AMZY', 'GOOGY', 'MSFO', 'APLY', 'OARK', 'JPMO',
   'CONY', 'MSFO', 'NFLY', 'AMZY', 'GOOGY', 'DISO', 'SQY', 'SMCY',
-  'YMAX', 'YMAG', 'ULTY',
+  'YMAX', 'YMAG', 'ULTY', 'DIPS', 'CRSH',
   // Defiance
   'QQQY', 'JEPY', 'IWMY', 'DEFI', 'WDTE', 'BDTE', 'IDTE', 'QDTU',
   // Roundhill
@@ -39,6 +39,9 @@ export const INCOME_SYMBOLS = new Set([
   // Other high-dividend income
   'JEPI', 'JEPQ', 'DIVO', 'SCHD', 'BST', 'STK', 'BDJ', 'EOS',
   'USA', 'GOF', 'PTY', 'RIV', 'OXLC', 'KLIP', 'SPYI',
+  'CHW', 'CSQ', 'EXG', 'ETV', 'GDV',
+  // Newer income ETFs from Vol 7
+  'IQQQ', 'QQQI', 'SPYT', 'XPAY', 'MAGY', 'FNGA', 'FNGB',
   // Bond funds
   'AGG', 'BND', 'TLT', 'IEF', 'SGOV', 'USFR',
 ]);
@@ -192,7 +195,7 @@ const FUND_FAMILY_MAP: Record<string, FundFamily> = {
   MSFO: 'Yieldmax', APLY: 'Yieldmax', OARK: 'Yieldmax', JPMO: 'Yieldmax',
   CONY: 'Yieldmax', NFLY: 'Yieldmax', DISO: 'Yieldmax', SQY: 'Yieldmax',
   SMCY: 'Yieldmax', YMAX: 'Yieldmax', YMAG: 'Yieldmax', ULTY: 'Yieldmax',
-  KLIP: 'Yieldmax',
+  KLIP: 'Yieldmax', DIPS: 'Yieldmax', CRSH: 'Yieldmax',
   // Defiance
   QQQY: 'Defiance', JEPY: 'Defiance', IWMY: 'Defiance',
   DEFI: 'Defiance', WDTE: 'Defiance', BDTE: 'Defiance', IDTE: 'Defiance', QDTU: 'Defiance',
@@ -206,6 +209,7 @@ const FUND_FAMILY_MAP: Record<string, FundFamily> = {
   SPXL: 'Direxion', TECL: 'Direxion', SOXL: 'Direxion', LABU: 'Direxion',
   TNA: 'Direxion', FAS: 'Direxion', FNGU: 'Direxion',
   SPXS: 'Direxion', SOXS: 'Direxion', SRTY: 'Direxion', FAZ: 'Direxion',
+  FNGD: 'Direxion', FNGA: 'Direxion', FNGB: 'Direxion',
   // Cornerstone
   CLM: 'Cornerstone', CRF: 'Cornerstone',
 };
