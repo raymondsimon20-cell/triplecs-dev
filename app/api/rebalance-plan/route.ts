@@ -309,11 +309,23 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
     // Growth anchors / individual
     'NVDA','AAPL','MSFT','AMZN','GOOGL','META','SPYG','MCD','COST','MSTR',
     // Gold
-    'AAAU','GLD','IAU',
+    'AAAU','GLD','IAU','KGC',
     // Defense
-    'ITA',
+    'ITA','VGT',
+    // REITs / BDC
+    'O',
     // Vol 7 additional income
     'IQQQ','SPYT','XPAY','MAGY','FNGA','FNGB',
+    // YieldMax legacy
+    'NFLY','SQY','SMCY','FIAT','FIVY',
+    // Defiance additions
+    'DEFI','BDTE','IDTE','QDTU','YBTC',
+    // Roundhill weekly
+    'WEEK',
+    // Additional CEFs
+    'CHW','CSQ','EXG','GOF',
+    // Bond funds
+    'AGG','BND','TLT','IEF','SGOV','USFR',
   ]);
 
   // ── 5. Stream Claude → client, validate, return result ────────────────────

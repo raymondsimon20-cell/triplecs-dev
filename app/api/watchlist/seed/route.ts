@@ -173,6 +173,32 @@ const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   { symbol: 'MAGY',  pillar: 'income' },
   { symbol: 'FNGA',  pillar: 'income' },
   { symbol: 'FNGB',  pillar: 'income' },
+  // ── Income — YieldMax legacy ──────────────────────────────────────────────
+  { symbol: 'NFLY',  pillar: 'income' },
+  { symbol: 'SQY',   pillar: 'income' },
+  { symbol: 'SMCY',  pillar: 'income' },
+  { symbol: 'FIAT',  pillar: 'income' },
+  { symbol: 'FIVY',  pillar: 'income' },
+  // ── Income — Defiance additions ───────────────────────────────────────────
+  { symbol: 'DEFI',  pillar: 'income' },
+  { symbol: 'BDTE',  pillar: 'income' },
+  { symbol: 'IDTE',  pillar: 'income' },
+  { symbol: 'QDTU',  pillar: 'income' },
+  { symbol: 'YBTC',  pillar: 'income' },
+  // ── Income — Roundhill weekly additions ──────────────────────────────────
+  { symbol: 'WEEK',  pillar: 'income' },
+  // ── Income — Additional CEFs ──────────────────────────────────────────────
+  { symbol: 'CHW',   pillar: 'income' },
+  { symbol: 'CSQ',   pillar: 'income' },
+  { symbol: 'EXG',   pillar: 'income' },
+  { symbol: 'GOF',   pillar: 'income' },
+  // ── Income — Bond funds ───────────────────────────────────────────────────
+  { symbol: 'AGG',   pillar: 'income' },
+  { symbol: 'BND',   pillar: 'income' },
+  { symbol: 'TLT',   pillar: 'income' },
+  { symbol: 'IEF',   pillar: 'income' },
+  { symbol: 'SGOV',  pillar: 'income' },
+  { symbol: 'USFR',  pillar: 'income' },
   // ── Broad index / growth anchors ──────────────────────────────────────────
   { symbol: 'QQQ',   pillar: 'broad' },
   { symbol: 'QQQM',  pillar: 'broad' },
@@ -189,6 +215,7 @@ const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   { symbol: 'SCHG',  pillar: 'broad' },
   { symbol: 'SCHB',  pillar: 'broad' },
   { symbol: 'ITA',   pillar: 'broad' },
+  { symbol: 'VGT',   pillar: 'broad' },
   // ── Individual stocks ─────────────────────────────────────────────────────
   { symbol: 'NVDA',  pillar: 'broad' },
   { symbol: 'AAPL',  pillar: 'broad' },

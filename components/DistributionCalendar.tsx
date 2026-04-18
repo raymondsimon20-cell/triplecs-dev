@@ -110,6 +110,13 @@ const FREQ_MAP: Record<string, Frequency> = {
   GDV: 'quarterly', LICT: 'quarterly', TPVG: 'quarterly',
   ITA: 'quarterly', MCD: 'quarterly', COST: 'quarterly',
 
+  // PHK missing from above
+  PHK: 'monthly',
+
+  // Individual stocks — quarterly dividend payers
+  VGT: 'quarterly', AMZN: 'annual', GOOGL: 'annual', META: 'annual',
+  'BRK.B': 'annual', KGC: 'quarterly',
+
   // No meaningful dividend (3× ETFs, inverse, gold, BRK.B, etc.)
   UPRO: 'annual', TQQQ: 'annual', SPXL: 'annual', UDOW: 'annual', SQQQ: 'annual',
   TECL: 'annual', SOXL: 'annual', FNGU: 'annual', LABU: 'annual',
@@ -208,6 +215,7 @@ const FALLBACK_YIELDS: Record<string, number> = {
   IWM: 1.5, SCHB: 1.3, SCHG: 0.5,
   NVDA: 0.03, AAPL: 0.5, MSFT: 0.7, SPYG: 0.8,
   DJIA: 3, ITA: 1, MCD: 2.2, COST: 0.6,
+  VGT: 0.7, KGC: 0.5, AMZN: 0, GOOGL: 0, META: 0, 'BRK.B': 0,
 };
 
 function estimateAnnualDividend(pos: EnrichedPosition): number {
