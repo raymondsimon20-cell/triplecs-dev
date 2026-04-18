@@ -1,18 +1,13 @@
 /**
  * Market Conditions API Endpoint
  *
- * Provides:
- *   • Real-time VIX data
- *   • Market trend analysis
- *   • AI-generated allocation recommendations based on volatility, trend, and VIX levels
- *
- * In production, this would integrate with:
- *   - MarketWatch or Yahoo Finance API for VIX quotes
- *   - IEX Cloud or Polygon.io for index quotes
- *   - Claude API for allocation recommendations
+ * Fetches live VIX, S&P 500 (SPY), and Nasdaq 100 (QQQ) from Schwab quotes API.
+ * Falls back to neutral defaults if the quote fetch fails (e.g. outside market hours).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { getTokens } from '@/lib/storage';
+import { getQuotes } from '@/lib/schwab/client';
 
 interface MarketData {
   vix: number;
@@ -39,48 +34,60 @@ interface AllocationRecommendation {
   riskLevel: 'low' | 'medium' | 'high';
 }
 
-/**
- * Generate realistic market data (in production, fetch from real APIs)
- * This demonstrates how recommendations would be generated based on market conditions
- */
-function generateMarketData(): MarketData {
-  // Simulated market data (in production, fetch from MarketWatch, Yahoo Finance, etc.)
+async function fetchMarketData(): Promise<MarketData> {
   const now = new Date();
-  const hour = now.getHours();
-  const isMarketOpen = hour >= 9 && hour < 16; // 9 AM - 4 PM ET
 
-  // Realistic ranges during market hours
-  const baseVix = isMarketOpen ? 15 + Math.random() * 20 : 16;
-  const vixChange = (Math.random() - 0.5) * 5;
+  try {
+    const tokens = await getTokens();
+    if (!tokens) throw new Error('No Schwab tokens');
 
-  const baseSP500 = 5450;
-  const sp500Change = (Math.random() - 0.5) * 2;
+    // $VIX.X = CBOE VIX index; SPY = S&P 500 proxy; QQQ = Nasdaq 100 proxy
+    const quotes = await getQuotes(tokens, ['$VIX.X', 'SPY', 'QQQ']);
 
-  const baseNasdaq = 17850;
-  const nasdaq100Change = (Math.random() - 0.5) * 1.5;
+    const vixQ   = quotes['$VIX.X']?.quote;
+    const spyQ   = quotes['SPY']?.quote;
+    const qqqQ   = quotes['QQQ']?.quote;
 
-  const vix = Math.max(10, baseVix + vixChange);
+    const vix        = vixQ?.lastPrice  ?? 20;
+    const vixChange  = vixQ?.netChange  ?? 0;
+    const spyPrice   = spyQ?.lastPrice  ?? 0;
+    const spyClose   = spyQ?.closePrice ?? spyPrice;
+    const sp500Change = spyClose > 0 ? ((spyPrice - spyClose) / spyClose) * 100 : 0;
+    const qqqPrice   = qqqQ?.lastPrice  ?? 0;
+    const qqqClose   = qqqQ?.closePrice ?? qqqPrice;
+    const nasdaqChange = qqqClose > 0 ? ((qqqPrice - qqqClose) / qqqClose) * 100 : 0;
 
-  let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
-  if (vix < 15) volatilityLevel = 'low';
-  else if (vix < 25) volatilityLevel = 'normal';
-  else if (vix < 40) volatilityLevel = 'high';
-  else volatilityLevel = 'extreme';
+    let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
+    if (vix < 15) volatilityLevel = 'low';
+    else if (vix < 25) volatilityLevel = 'normal';
+    else if (vix < 40) volatilityLevel = 'high';
+    else volatilityLevel = 'extreme';
 
-  const marketTrend: 'bullish' | 'neutral' | 'bearish' =
-    sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
+    const marketTrend: 'bullish' | 'neutral' | 'bearish' =
+      sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
 
-  return {
-    vix: vix,
-    vixChange: vixChange,
-    sp500Price: baseSP500 + (sp500Change * 50),
-    sp500Change: sp500Change,
-    nasdaq100Price: baseNasdaq + (nasdaq100Change * 100),
-    nasdaq100Change: nasdaq100Change,
-    marketTrend,
-    volatilityLevel,
-    lastUpdated: now.toISOString(),
-  };
+    return {
+      vix,
+      vixChange,
+      sp500Price:      spyPrice,
+      sp500Change,
+      nasdaq100Price:  qqqPrice,
+      nasdaq100Change: nasdaqChange,
+      marketTrend,
+      volatilityLevel,
+      lastUpdated: now.toISOString(),
+    };
+  } catch {
+    // Outside market hours or auth issue — return neutral defaults
+    return {
+      vix: 20, vixChange: 0,
+      sp500Price: 0, sp500Change: 0,
+      nasdaq100Price: 0, nasdaq100Change: 0,
+      marketTrend: 'neutral',
+      volatilityLevel: 'normal',
+      lastUpdated: now.toISOString(),
+    };
+  }
 }
 
 /** Normalize allocations so they always sum to exactly 100, adjusting income as the flex bucket. */
@@ -168,12 +175,7 @@ function getRecommendationSummary(
 
 export async function GET(request: NextRequest) {
   try {
-    // In production:
-    // 1. Fetch real VIX from MarketWatch API or Yahoo Finance
-    // 2. Fetch S&P 500 and Nasdaq 100 quotes from IEX Cloud or Polygon.io
-    // 3. Call Claude API to generate personalized recommendations
-
-    const marketData = generateMarketData();
+    const marketData = await fetchMarketData();
     const recommendation = generateRecommendation(marketData);
 
     return NextResponse.json(
