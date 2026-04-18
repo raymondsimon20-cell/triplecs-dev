@@ -165,9 +165,11 @@ export async function POST(req: Request) {
 
   // ── 2. Build position data for Claude ─────────────────────────────────────
 
+  // Exclude options, bonds, and cash — include EQUITY, ETF, MUTUAL_FUND, and anything else tradeable
+  const NON_EQUITY = new Set(['OPTION', 'FIXED_INCOME', 'CASH_EQUIVALENT', 'CURRENCY', 'FUTURE']);
   const equityPositions = positions.filter(
-    (p) => (p.instrument.assetType === 'EQUITY' || p.instrument.assetType === 'MUTUAL_FUND')
-        && p.longQuantity > 0
+    (p) => !NON_EQUITY.has(p.instrument.assetType)
+        && Number(p.longQuantity) > 0
         && p.pillar !== 'other',
   );
 
