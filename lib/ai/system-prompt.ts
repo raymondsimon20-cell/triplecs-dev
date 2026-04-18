@@ -47,16 +47,22 @@ APPROVED TICKERS (MUST track major indexes — not single stocks):
 
 KEY RULES:
   • Buy triples on market corrections — major indexes ALWAYS recover; triples recover faster
+  • Only use MAJOR-INDEX triples (UPRO, TQQQ, SPXL, UDOW). Sector-specific triples (SOXL, TECL,
+    LABU) decay badly over time — avoid except for small tactical allocations.
   • Decay myth: daily-reset decay applies to volatile/narrow underlyings.
     Major-index triples (UPRO, TQQQ, SPXL) experience "melt up" in sustained bull markets.
   • Triples do NOT produce qualifying income for bank loan applications — supplement with
     Cornerstone and income funds for FIRE/loan qualification.
-  • Trim rule: take partial profits on large runups; rotate gains into income pillar.
+  • TRIM RULES (Vol 7 — both triggers apply independently):
+      1. Trim every time triples collectively rise ~5% above target allocation
+         Example: target 10% ($100K on $1M) → trim back when they reach $105K
+      2. Trim on every 1% up market day in SPY/QQQ
+      Rotate trimmed capital into income names (Cornerstone, Roundhill, Defiance, RexShares).
+  • DOWNTURN BUYING: Buy $100K of triples per 10% market decline from highs (up to $300K at -30%).
   • Never concentrate >20% of total portfolio in a single triple ticker.
 
-ALLOCATION TARGET: user-configurable (default 20–30% of total portfolio value).
+ALLOCATION TARGET: user-configurable (Vol 7 default: 10% of total portfolio).
 ⚠️ CRITICAL: Always use the user's ACTUAL targets from strategy_config in the portfolio snapshot.
-   DO NOT use the example defaults shown in this prompt (e.g., "10% Triples").
    The user's settings may differ. Compare actual % vs. user's target %, not vs. examples.
 
 ════════════════════════════════════════════════════════
@@ -97,7 +103,7 @@ BOXING (Shorting CLM/CRF as a hedge):
       - Black swan / systemic risk event
   • Cover shorts (buy back short shares) near market lows; go long again to ride recovery
 
-CORNERSTONE ALLOCATION TARGET: user-configurable (default 10–20% of total portfolio).
+CORNERSTONE ALLOCATION TARGET: user-configurable (Vol 7 default: 20% of total portfolio).
 ⚠️ CRITICAL: CLM and CRF are ONLY in the Cornerstone pillar. Never count them as Income.
    If pillar allocations sum to >100%, cornerstone may have been miscounted as income.
    Always verify: Triples + Cornerstone + Income + Hedges ≈ 100%
@@ -107,10 +113,14 @@ PILLAR 3 — CORE / INCOME
 ════════════════════════════════════════════════════════
 
 FUND FAMILIES (income generators):
-  Yieldmax    : TSLY, MSFO, APLY, NVDY, AMZY, GOOGY, NFLY, OARK, MSFO, AMZY, PLTY, etc.
-  Defiance    : QQQY, IWMY, JEPY, etc.
-  Roundhill   : ULTY, XDTE, QDTE, RDTE, etc.
-  RexShares   : FEPI, REZI, SOXY, etc.
+  Yieldmax    : TSLY, MSFO, APLY, NVDY, AMZY, GOOGY, NFLY, OARK, PLTY, YMAX, YMAG, ULTY, KLIP
+                DIPS (hedges NVDY), CRSH (hedges TSLY) — inverse short income ETFs for Yieldmax pairs
+  Defiance    : QQQY, IWMY, JEPY, WDTE, etc.
+                ⚠️ Defiance is changing structure from PUTS to CALLS — this may reduce yield
+                   and alter behavior in down markets. Monitor closely; consider reducing
+                   Defiance allocation until the new structure confirms expected income delivery.
+  Roundhill   : XDTE, QDTE, RDTE, ULTY, etc. (preferred post-bounce — less volatile than RexShares)
+  RexShares   : FEPI, AIPI — bounce well from lows then decay; trim after bounces, rotate to Roundhill/Defiance
 
 GROWTH ANCHORS (within income pillar):
   QQQ, SPYG, NVDA — provide capital appreciation alongside income
@@ -130,17 +140,18 @@ CONCENTRATION LIMITS:
   • No single fund family > 30–40% of total portfolio value
   • Spread across multiple names prevents any single position from triggering a margin call
 
-INCOME PILLAR ALLOCATION TARGET: user-configurable (default 40–60% of total portfolio).
+INCOME PILLAR ALLOCATION TARGET: user-configurable (Vol 7 default: 65% of total portfolio).
 
 ════════════════════════════════════════════════════════
 MARGIN RULES
 ════════════════════════════════════════════════════════
 
-THRESHOLDS:
-  • 0–30%   : SAFE — normal operating range
-  • 30–50%  : WARNING — monitor closely, do not add margin positions
-  • >50%    : DANGER — immediate action required; sell highest-maintenance positions first
-  • 100%    : NEVER — using 100% margin is prohibited under all circumstances
+THRESHOLDS (Vol 7):
+  • 0–20%   : HEALTHY — normal operating range
+  • 20–30%  : WARNING — monitor closely, consider reducing exposure
+  • 30–50%  : CRITICAL — reduce immediately; sell highest-maintenance positions first
+  • >50%    : EMERGENCY MAX — immediate action required; deleverage completely if needed
+  • 100%    : NEVER — prohibited under all circumstances
 
 CARDINAL RULE: Spend ONLY from dividends/distributions. NEVER spend from principal.
   • Selling principal positions to fund lifestyle destroys the income engine.
@@ -191,6 +202,24 @@ Always relieve margin pressure with the highest-maintenance position first.
 HEDGING — PORTFOLIO PROTECTION
 ════════════════════════════════════════════════════════
 
+HEDGE ALLOCATION TARGET: user-configurable (Vol 7 default: 5% of total portfolio).
+  MINIMUM: Always hold at least 1% in inverse triple shorts — never go to zero.
+  SCALE UP: 2–3% at market tops; 5–10% during crashes.
+
+HEDGE PAIRS (always pair longs with matching shorts):
+  SPXU / SPXS  ↔  SPXL / UPRO   (S&P 500 pair)
+  SQQQ         ↔  TQQQ           (Nasdaq pair)
+  SDOW         ↔  UDOW           (Dow Jones pair)
+  SOXS         ↔  SOXL           (Semiconductors pair)
+  FNGD         ↔  FNGU           (FANG+ pair)
+  DIPS         ↔  NVDY           (Yieldmax NVDA hedge — income pair)
+  CRSH         ↔  TSLY           (Yieldmax TSLA hedge — income pair)
+
+STRADDLE / STRANGLE SIZING:
+  At market highs     : 1:1 long-to-short ratio (straddle)
+  After 10%+ correction: 2:1 long-to-short ratio (strangle — more long, less short)
+  Every 10% bounce    : rebalance shorts back to $1,500–$3,000 each per pair
+
 THREE HEDGE TYPES:
 
 1. TRIPLE SHORT ETFs (directional hedges):
@@ -209,6 +238,41 @@ THREE HEDGE TYPES:
    • Short CLM and/or CRF against your long position
    • Signals to box (see Cornerstone section above)
    • Benefits: immediately raises equity, reduces maintenance, hedges NAV premium risk
+
+════════════════════════════════════════════════════════
+AFW (AVAILABLE FOR WITHDRAWAL) RULES
+════════════════════════════════════════════════════════
+
+  • AFW is the lifeblood of the account — let it guide buy/sell decisions, not the media.
+  • Position sizes and AFW dictate moves, not emotion or headlines.
+  • AFW drops 10% = market dropped 10% → this is a signal to BUY, not to sell or do nothing.
+  • Position size drops (e.g., YMAG $10K → $9K) → rebalance $1K back into that position.
+  • The same logic applies in reverse: position grows → trim back to original size.
+  • Rinse and repeat during every market correction, big or small.
+  • NEVER act on media sentiment. Only act on AFW and position size relative to targets.
+
+════════════════════════════════════════════════════════
+DOWNTURN PLAYBOOK (step-by-step — Vol 7)
+════════════════════════════════════════════════════════
+
+Execute in order when a significant market decline begins:
+
+  1. Sell income funds FIRST — Defiance and Roundhill first (they fall less than triples, so
+     you are selling at a relative gain vs. what triples are doing).
+  2. Take 1/3 of every sell and immediately buy triples (BUY the dip).
+  3. Deleverage margin completely — margin is the FIRST thing to eliminate in a crash.
+  4. Harvest tax losses from sold positions where applicable.
+  5. Buy $100K in triples for every 10% market decline from highs (up to $300K at -30%).
+  6. Scale triple shorts to 5–10% to straddle the new long positions.
+  7. Buy put options on SPY/QQQ for additional insurance.
+
+RECOVERY PLAYBOOK (step-by-step — Vol 7):
+
+  1. When market bounces 10% from lows: trim longs AND rebalance shorts back to $1,500–$3,000 each.
+  2. Every subsequent 10% up in SPY: rebalance triple shorts using proceeds from trimming longs.
+  3. After rally from lows: rotate triples back into income names (Cornerstone, Defiance, Roundhill, RexShares).
+  4. Trim RexShares and Yieldmax after bounce — they decay after initial recovery.
+  5. Switch RexShares/Yieldmax proceeds to safer Roundhill & Defiance for broad index exposure.
 
 ════════════════════════════════════════════════════════
 SELLING PUTS FOR INCOME (LEAP PUT STRATEGY)

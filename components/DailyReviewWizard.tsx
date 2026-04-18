@@ -6,6 +6,7 @@ import {
   CheckCircle, AlertTriangle, AlertCircle, X, ChevronRight,
   ExternalLink, RefreshCw,
 } from 'lucide-react';
+import { PendingOrdersPanel } from '@/components/PendingOrdersPanel';
 import type { PillarType } from '@/lib/schwab/types';
 import type { StrategyTargets } from '@/lib/utils';
 import type { RuleAlert } from '@/lib/classify';
@@ -48,6 +49,7 @@ export interface DailyReviewWizardProps {
   isOpen: boolean;
   onClose: () => void;
   account: {
+    accountHash: string;
     equity: number;
     marginBalance: number;
     totalValue: number;
@@ -419,10 +421,10 @@ function StepMargin({
 
 // Step 4 — Pending Orders
 function StepOrders({
-  pendingOrderCount, onScrollTo, onNext,
+  accountHash, pendingOrderCount, onNext,
 }: {
+  accountHash: string;
   pendingOrderCount: number;
-  onScrollTo: (id: string) => void;
   onNext: (status: StepStatus) => void;
 }) {
   const status: StepStatus = pendingOrderCount > 0 ? 'warn' : 'ok';
@@ -430,36 +432,13 @@ function StepOrders({
   return (
     <StepCard>
       <StatusBadge status={status} />
-
-      <div className="bg-[#0f1117] rounded-xl border border-[#2d3248] p-4 flex items-center justify-between">
-        <span className="text-sm text-[#7c82a0]">Pending Orders</span>
-        <span className={`text-2xl font-bold tabular-nums ${pendingOrderCount > 0 ? 'text-yellow-400' : 'text-emerald-400'}`}>
-          {pendingOrderCount}
-        </span>
-      </div>
-
-      {pendingOrderCount > 0 && (
-        <p className="text-xs text-[#7c82a0] px-1">
-          You have {pendingOrderCount} pending order{pendingOrderCount > 1 ? 's' : ''} that may need review or cancellation.
-        </p>
-      )}
-
-      <div className="flex gap-2 pt-1">
-        {pendingOrderCount > 0 && (
-          <button
-            onClick={() => { onScrollTo('orders'); onNext(status); }}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-1.5"
-          >
-            Review Orders <ExternalLink className="w-3.5 h-3.5" />
-          </button>
-        )}
-        <button
-          onClick={() => onNext(status)}
-          className={`flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg transition-colors ${pendingOrderCount > 0 ? 'px-4 text-[#7c82a0] hover:text-white hover:bg-white/5' : 'flex-1 bg-[#1a1d27] hover:bg-[#2d3248] text-white border border-[#2d3248]'}`}
-        >
-          {pendingOrderCount > 0 ? 'Skip' : 'No Pending Orders'} <ChevronRight className="w-4 h-4" />
-        </button>
-      </div>
+      <PendingOrdersPanel accountHash={accountHash} />
+      <button
+        onClick={() => onNext(status)}
+        className="w-full flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg transition-colors bg-[#1a1d27] hover:bg-[#2d3248] text-white border border-[#2d3248]"
+      >
+        Done <ChevronRight className="w-4 h-4" />
+      </button>
     </StepCard>
   );
 }
@@ -658,8 +637,8 @@ export function DailyReviewWizard({
           )}
           {step === 4 && (
             <StepOrders
+              accountHash={account.accountHash}
               pendingOrderCount={pendingOrderCount}
-              onScrollTo={handleScrollTo}
               onNext={advance}
             />
           )}
