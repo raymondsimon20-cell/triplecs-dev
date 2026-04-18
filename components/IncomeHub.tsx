@@ -1088,9 +1088,7 @@ interface DetectedExpense {
 
 function mapApiCategory(cat: string): ExpenseCategory {
   if (cat === 'Margin Interest') return 'Margin Interest';
-  if (cat === 'Advisory Fee' || cat === 'Account Fee') return 'Other';
-  if (cat === 'Transfer Fee' || cat === 'Options Fee') return 'Other';
-  if (cat === 'Tax Withholding') return 'Other';
+  if (cat === 'Transfer Out')    return 'Other';
   return 'Other';
 }
 

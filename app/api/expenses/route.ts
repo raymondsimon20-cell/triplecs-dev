@@ -33,9 +33,21 @@ export interface DetectedExpense {
 
 // ─── Keyword → category mapping ──────────────────────────────────────────────
 
-function categorise(description: string): string {
+const TRANSFER_TYPES = new Set([
+  'WIRE_OUT', 'ACH_DISBURSEMENT', 'ELECTRONIC_FUND', 'DISBURSEMENT',
+  'INTERNAL_TRANSFER', 'TRANSFER', 'MONEYLINK_TRANSFER',
+]);
+
+function isTransferOut(type: string): boolean {
+  return TRANSFER_TYPES.has(type.toUpperCase());
+}
+
+function categorise(description: string, type: string): string {
   const d = description.toUpperCase();
-  if (/MARGIN INTEREST|INTEREST CHARGE|MARGIN FEE/.test(d))      return 'Margin Interest';
+  const t = type.toUpperCase();
+  if (isTransferOut(t))                                            return 'Transfer Out';
+  if (/WIRE OUT|ACH OUT|TRANSFER OUT|FUNDS TRANSFERRED/.test(d))  return 'Transfer Out';
+  if (/MARGIN INTEREST|INTEREST CHARGE|MARGIN FEE/.test(d))       return 'Margin Interest';
   if (/ADVISORY FEE|MANAGEMENT FEE|ADVISORY CHARGE/.test(d))      return 'Advisory Fee';
   if (/SERVICE CHARGE|ACCOUNT FEE|MAINTENANCE FEE/.test(d))       return 'Account Fee';
   if (/WIRE FEE|TRANSFER FEE|ACH FEE/.test(d))                    return 'Transfer Fee';
@@ -70,13 +82,11 @@ export async function GET(req: Request) {
 
     await Promise.all(accountNums.map(async ({ hashValue }) => {
       try {
-        // Fetch JOURNAL + OTHER + ALL to catch margin interest (which Schwab sometimes
-        // files under JOURNAL, sometimes OTHER, sometimes RECEIVE_AND_DELIVER)
         const txns = await client.getTransactions(
           hashValue,
           start.toISOString(),
           now.toISOString(),
-          'JOURNAL,OTHER,RECEIVE_AND_DELIVER',
+          'JOURNAL,OTHER,RECEIVE_AND_DELIVER,ELECTRONIC_FUND,WIRE_OUT,ACH_DISBURSEMENT,DISBURSEMENT,TRANSFER',
         );
 
         for (const t of txns) {
@@ -98,7 +108,7 @@ export async function GET(req: Request) {
             date,
             description: desc || type || 'Unknown charge',
             amount: Math.abs(amount),
-            category: categorise(desc),
+            category: categorise(desc, type),
             rawType: type,
           });
         }
