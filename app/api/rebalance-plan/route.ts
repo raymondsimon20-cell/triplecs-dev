@@ -218,7 +218,7 @@ STRATEGY RULES (must follow exactly):
 1. 1/3 RULE: When trimming income, route exactly 1/3 of the trimmed dollars into Triples (TQQQ or UPRO preferred). The remaining 2/3 stays as freed capital / cash.
 2. NEVER sell Cornerstone (CLM or CRF). These are long-term DRIP positions — do not touch.
 3. For SELL orders: only sell symbols the user already holds (listed above).
-4. For BUY orders: prefer symbols already held. Only suggest new symbols from this approved list: TQQQ, UPRO, SPXL, SQQQ, SPXU, JEPI, JEPQ, SPYI, QQQY, XDTE, FEPI, AIPI.
+4. For BUY orders: prefer symbols already held. For new positions, you may suggest any symbol from the Triple C universe (YieldMax, Defiance, Roundhill, RexShares, Neos, PIMCO/CEF income, ProShares/Direxion triples, hedge inverses, broad index ETFs, or individual growth anchors). Prioritise Vol 7 favourites: TQQQ, UPRO, YMAG, XDTE, FEPI, SPYI, JEPI, JEPQ, QQQY, CLM, CRF.
 5. Shares MUST be whole numbers: use Math.floor(dollarAmount / pricePerShare).
 6. Minimum 1 share per order. Skip orders where Math.floor gives 0.
 7. Only include orders for pillars with |drift| > 1% AND driftDollars > $500.
@@ -254,8 +254,60 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
   const positionShareMap = new Map(
     equityPositions.map((p) => [p.instrument.symbol, p.longQuantity])
   );
+  // All known symbols from the Triple C universe — any can be suggested as a new buy
   const APPROVED_BUY_NEW = new Set([
-    'TQQQ','UPRO','SPXL','SQQQ','SPXU','JEPI','JEPQ','SPYI','QQQY','XDTE','FEPI','AIPI',
+    // Triples (long)
+    'TQQQ','UPRO','SPXL','UDOW','TECL','SOXL','FNGU','LABU','TNA','FAS','UMDD','URTY','CURE','HIBL',
+    // Hedges / inverse
+    'SPXU','SQQQ','SDOW','FAZ','SRTY','SPXS','SH','PSQ','DOG','UVXY','SOXS','FNGD',
+    // Cornerstone
+    'CLM','CRF',
+    // YieldMax
+    'TSLY','NVDY','AMZY','GOOGY','MSFO','APLY','OARK','JPMO','CONY','NFLXY','AMDY','PYPLY',
+    'AIYY','OILY','CVNY','MRNY','SNOY','BIOY','DISO','ULTY','YMAX','YMAG','MSFO2','GDXY',
+    'XOMO','AMZY2','FBY','FIAT','FIVY','TSMY','DIPS','CRSH','KLIP','MSTY','PLTY',
+    // Defiance
+    'QQQY','IWMY','JEPY','QDTY','SDTY','DFNV','IWMY2',
+    // Roundhill
+    'XDTE','QDTE','RDTE','WDTE','MDTE','TOPW','BRKW',
+    // RexShares
+    'FEPI','AIPI','REXQ','REXS','SPYI2',
+    // GraniteShares
+    'TSYY',
+    // Kurv
+    'KSLV',
+    // JPMorgan
+    'JEPI','JEPQ',
+    // Neos
+    'SPYI','QDVO','JPEI','IWMI','QQQI','BTCI','NIHI','IAUI',
+    // Global X
+    'QYLD','RYLD','XYLD','DJIA','NVDL','TSLL',
+    // PIMCO
+    'PDI','PDO','PTY','PCN','PFL','PFN','PHK',
+    // Eaton Vance
+    'ETV','ETB','EOS','EOI','EVT',
+    // BlackRock
+    'BST','BDJ','ECAT','BGY','BCAT','BUI',
+    // Amplify
+    'DIVO','BLOK','COWS',
+    // Oxford Lane / RiverNorth / Liberty / Gabelli / Columbia
+    'OXLC','OXSQ','RIV','OPP','USA','LICT','GAB','GDV','GGT','STK',
+    // Invesco
+    'QQQ','QQQM','RSP',
+    // KraneShares
+    'KMLM',
+    // BDC
+    'TPVG',
+    // Schwab / Vanguard / iShares / broad index
+    'SCHD','SCHG','SCHB','VTI','VOO','VYM','VXUS','SPY','IVV','IWM',
+    // Growth anchors / individual
+    'NVDA','AAPL','MSFT','AMZN','GOOGL','META','SPYG','MCD','COST','MSTR',
+    // Gold
+    'AAAU','GLD','IAU',
+    // Defense
+    'ITA',
+    // Vol 7 additional income
+    'IQQQ','SPYT','XPAY','MAGY','FNGA','FNGB',
   ]);
 
   // ── 5. Stream Claude → client, validate, return result ────────────────────
