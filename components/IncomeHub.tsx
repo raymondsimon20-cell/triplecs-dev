@@ -14,9 +14,9 @@ import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   DollarSign, TrendingUp, ChevronDown, ChevronUp,
   Flame, Target, BarChart2, Calendar, AlertTriangle,
-  CheckCircle, Layers, RefreshCw,
+  CheckCircle, RefreshCw, Gauge, Plus, Minus, ArrowRight,
 } from 'lucide-react';
-import type { EnrichedPosition } from '@/lib/schwab/types';
+import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -34,10 +34,21 @@ interface DividendData {
   endDate: string;
 }
 
+interface PillarSummary {
+  pillar: PillarType;
+  label: string;
+  totalValue: number;
+  portfolioPercent: number;
+  positionCount: number;
+  dayGainLoss: number;
+}
+
 interface Props {
   positions: EnrichedPosition[];
   totalValue: number;
+  equity: number;
   marginBalance?: number;
+  pillarSummary?: PillarSummary[];
 }
 
 type Tab = 'historical' | 'projected' | 'fire' | 'margin';
@@ -248,6 +259,35 @@ const MAINTENANCE_SCORES: Record<string, { score: number; label: string; reason:
 
 function getMaintenanceScore(symbol: string) {
   return MAINTENANCE_SCORES[symbol.toUpperCase()] ?? { score: 40, label: 'Unknown', reason: 'No maintenance data' };
+}
+
+// ─── Simulator constants ──────────────────────────────────────────────────────
+
+const SIM_PILLAR_MAP: Record<string, PillarType> = {
+  UPRO: 'triples', TQQQ: 'triples', SPXL: 'triples', UDOW: 'triples', UMDD: 'triples', URTY: 'triples',
+  CLM: 'cornerstone', CRF: 'cornerstone',
+  SQQQ: 'hedge', SPXS: 'hedge', UVXY: 'hedge',
+};
+
+const WARN_MARGIN_PCT = 30;
+const MAX_MARGIN_PCT  = 50;
+
+function fmtPct(n: number) { return `${n.toFixed(1)}%`; }
+
+const PILLAR_COLORS: Record<PillarType, string> = {
+  triples:     'text-violet-400',
+  cornerstone: 'text-amber-400',
+  income:      'text-emerald-400',
+  hedge:       'text-blue-400',
+  other:       'text-[#7c82a0]',
+};
+
+function getSimPillar(symbol: string, positions: EnrichedPosition[]): PillarType {
+  const upper = symbol.toUpperCase();
+  if (SIM_PILLAR_MAP[upper]) return SIM_PILLAR_MAP[upper];
+  const existing = positions.find((p) => p.instrument?.symbol?.toUpperCase() === upper);
+  if (existing) return existing.pillar;
+  return 'income';
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -663,13 +703,16 @@ function FireTab({ dividends, marginBalance }: { dividends: DividendRecord[]; ma
 // ─── Tab: Margin ──────────────────────────────────────────────────────────────
 
 function MarginTab({
-  dividends, marginBalance, totalValue, positions,
+  dividends, marginBalance, totalValue, equity, positions, pillarSummary,
 }: {
   dividends: DividendRecord[];
   marginBalance: number;
   totalValue: number;
+  equity: number;
   positions: EnrichedPosition[];
+  pillarSummary: PillarSummary[];
 }) {
+  // ── Coverage stats ──────────────────────────────────────────────────────────
   const byMonth = groupByMonth(dividends);
   const months = last12Months();
   const values = months.map((m) => byMonth[m] ?? 0);
@@ -679,6 +722,7 @@ function MarginTab({
   const coverageRatio = monthlyMarginInterest > 0 ? monthlyAvg / monthlyMarginInterest : Infinity;
   const isFullyCovered = coverageRatio >= 1;
   const marginPct = totalValue > 0 ? (marginBalance / totalValue) * 100 : 0;
+  const currentMarginPct = totalValue > 0 ? (marginBalance / totalValue) * 100 : 0;
 
   const ranked = positions
     .filter((p) => !p.instrument.symbol.includes(' ') && (p.currentValue ?? 0) > 0)
@@ -697,9 +741,68 @@ function MarginTab({
     'Unknown':   'text-[#7c82a0] bg-[#2d3248]',
   };
 
+  // ── Simulator state ─────────────────────────────────────────────────────────
+  const [simSymbol,     setSimSymbol]     = useState('');
+  const [simAction,     setSimAction]     = useState<'BUY' | 'SELL'>('BUY');
+  const [simSharesStr,  setSimSharesStr]  = useState('');
+  const [simManualPrice,setSimManualPrice]= useState('');
+
+  const knownPos = useMemo(
+    () => positions.find((p) => p.instrument?.symbol?.toUpperCase() === simSymbol.toUpperCase()),
+    [positions, simSymbol]
+  );
+  const knownPrice = knownPos ? (knownPos.marketValue / (knownPos.longQuantity || 1)) : null;
+  const effectivePrice = simManualPrice ? parseFloat(simManualPrice) : (knownPrice ?? 0);
+  const simShares = parseInt(simSharesStr) || 0;
+  const tradeValue = effectivePrice * simShares;
+
+  const simResult = useMemo(() => {
+    if (!simSymbol || simShares <= 0 || effectivePrice <= 0) return null;
+    const pillar = getSimPillar(simSymbol, positions);
+    let newTotalValue    = totalValue;
+    let newEquity        = equity;
+    let newMarginBalance = marginBalance;
+
+    if (simAction === 'BUY') {
+      newTotalValue    += tradeValue;
+      newMarginBalance += tradeValue * 0.5;
+      newEquity        -= tradeValue * 0.5;
+    } else {
+      const heldQty = knownPos?.longQuantity ?? 0;
+      const actualValue = effectivePrice * Math.min(simShares, heldQty > 0 ? heldQty : simShares);
+      newTotalValue    -= actualValue;
+      const paydown     = Math.min(actualValue, newMarginBalance);
+      newMarginBalance -= paydown;
+      newEquity        += actualValue - paydown;
+    }
+
+    const newMarginUtilPct = newTotalValue > 0 ? (newMarginBalance / newTotalValue) * 100 : 0;
+    const marginStatus = newMarginUtilPct >= MAX_MARGIN_PCT ? 'danger' : newMarginUtilPct >= WARN_MARGIN_PCT ? 'warn' : 'safe';
+
+    const pillarDeltas = pillarSummary.map((ps) => {
+      let afterValue = ps.totalValue;
+      if (ps.pillar === pillar)
+        afterValue += simAction === 'BUY' ? tradeValue : -Math.min(tradeValue, ps.totalValue);
+      return { pillar: ps.pillar, label: ps.label, before: ps.portfolioPercent, after: newTotalValue > 0 ? (afterValue / newTotalValue) * 100 : 0 };
+    });
+
+    const alerts: string[] = [];
+    if (marginStatus === 'danger') alerts.push(`Margin would hit ${fmtPct(newMarginUtilPct)} — exceeds 50% hard cap.`);
+    else if (marginStatus === 'warn') alerts.push(`Margin would reach ${fmtPct(newMarginUtilPct)} — in warning zone (30–50%).`);
+    const triplesDelta = pillarDeltas.find((p) => p.pillar === 'triples');
+    if (triplesDelta && triplesDelta.after > 45)
+      alerts.push(`Triples would be ${fmtPct(triplesDelta.after)} — very high concentration.`);
+    if (simAction === 'BUY' && pillar === 'income') {
+      const incomeAfter = pillarDeltas.find((p) => p.pillar === 'income')?.after ?? 0;
+      if (incomeAfter > 70) alerts.push(`Income pillar would reach ${fmtPct(incomeAfter)} — consider 1/3 rule.`);
+    }
+
+    return { newTotalValue, newEquity, newMarginBalance, newMarginUtilPct, marginStatus, pillarDeltas, alerts };
+  }, [simSymbol, simAction, simShares, effectivePrice, positions, totalValue, equity, marginBalance, pillarSummary, tradeValue, knownPos]);
+
   return (
     <div className="space-y-5">
-      {/* Coverage stats */}
+      {/* ── Coverage stats ────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         <div className="bg-[#0f1117] rounded-lg p-3 text-center">
           <div className="text-xs text-[#7c82a0] mb-0.5">Margin Debt</div>
@@ -726,25 +829,16 @@ function MarginTab({
       </div>
 
       <div className={`rounded-lg p-3 border text-sm flex items-start gap-2 ${
-        isFullyCovered
-          ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300'
-          : 'bg-red-500/10 border-red-500/25 text-red-300'
+        isFullyCovered ? 'bg-emerald-500/10 border-emerald-500/25 text-emerald-300' : 'bg-red-500/10 border-red-500/25 text-red-300'
       }`}>
-        {isFullyCovered
-          ? <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-          : <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />
-        }
+        {isFullyCovered ? <CheckCircle className="w-4 h-4 flex-shrink-0 mt-0.5" /> : <AlertTriangle className="w-4 h-4 flex-shrink-0 mt-0.5" />}
         <span>
-          {marginBalance === 0
-            ? 'No margin debt — 100% equity position.'
-            : isFullyCovered
-              ? `Dividends cover margin interest ${coverageRatio.toFixed(1)}x — margin is self-sustaining.`
-              : `Dividends don't fully cover margin interest. Gap: ${fmt$Dec(monthlyMarginInterest - monthlyAvg)}/mo.`
-          }
+          {marginBalance === 0 ? 'No margin debt — 100% equity position.'
+            : isFullyCovered ? `Dividends cover margin interest ${coverageRatio.toFixed(1)}x — margin is self-sustaining.`
+            : `Dividends don't fully cover margin interest. Gap: ${fmt$Dec(monthlyMarginInterest - monthlyAvg)}/mo.`}
         </span>
       </div>
 
-      {/* Margin utilization bar */}
       <div className="space-y-2">
         <div className="flex items-center justify-between text-xs">
           <span className="text-[#7c82a0]">Margin Utilization</span>
@@ -753,10 +847,8 @@ function MarginTab({
           </span>
         </div>
         <div className="w-full bg-[#2d3248] rounded-full h-3 relative overflow-hidden">
-          <div
-            className={`h-full rounded-full ${marginPct > 50 ? 'bg-red-500' : marginPct > 30 ? 'bg-orange-500' : 'bg-emerald-500'}`}
-            style={{ width: `${Math.min(marginPct * 2, 100)}%` }}
-          />
+          <div className={`h-full rounded-full ${marginPct > 50 ? 'bg-red-500' : marginPct > 30 ? 'bg-orange-500' : 'bg-emerald-500'}`}
+            style={{ width: `${Math.min(marginPct * 2, 100)}%` }} />
           <div className="absolute top-0 h-full w-px bg-orange-400/60" style={{ left: '60%' }} />
           <div className="absolute top-0 h-full w-px bg-red-400/60" style={{ left: '100%' }} />
         </div>
@@ -765,7 +857,7 @@ function MarginTab({
         </div>
       </div>
 
-      {/* Pressure valve hierarchy */}
+      {/* ── Pressure valve hierarchy ───────────────────────────────────────── */}
       {ranked.length > 0 && (
         <div className="space-y-3">
           <p className="text-xs text-[#7c82a0]">
@@ -776,9 +868,7 @@ function MarginTab({
               <div key={symbol} className="flex items-center gap-3 bg-[#0f1117] rounded-lg px-3 py-2 text-xs">
                 <span className="text-[#4a5070] w-4 flex-shrink-0">#{i + 1}</span>
                 <span className="font-mono font-bold text-white w-14 flex-shrink-0">{symbol}</span>
-                <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${labelColor[label] ?? labelColor['Unknown']}`}>
-                  {label}
-                </span>
+                <span className={`px-1.5 py-0.5 rounded text-xs font-medium flex-shrink-0 ${labelColor[label] ?? labelColor['Unknown']}`}>{label}</span>
                 <span className="text-[#7c82a0] flex-1 hidden sm:block truncate">{reason}</span>
                 <span className="text-white font-medium flex-shrink-0">{fmt$(value, true)}</span>
                 <span className="text-[#4a5070] flex-shrink-0 w-6 text-right">{score}</span>
@@ -793,13 +883,157 @@ function MarginTab({
           </div>
         </div>
       )}
+
+      {/* ── "What If" Simulator ────────────────────────────────────────────── */}
+      <div className="border-t border-[#2d3248] pt-5 space-y-4">
+        <div className="flex items-center gap-2">
+          <Gauge className="w-4 h-4 text-blue-400" />
+          <span className="text-sm font-semibold text-white">"What If" Simulator</span>
+          <span className="text-xs text-[#4a5070] bg-[#2d3248] px-2 py-0.5 rounded-full">
+            margin now: {fmtPct(currentMarginPct)}
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <div className="space-y-1">
+            <label className="text-xs text-[#7c82a0]">Action</label>
+            <div className="flex gap-1">
+              {(['BUY', 'SELL'] as const).map((a) => (
+                <button key={a} onClick={() => setSimAction(a)}
+                  className={`flex-1 flex items-center justify-center gap-1 text-xs py-2 rounded transition-colors ${
+                    simAction === a
+                      ? a === 'BUY' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
+                      : 'bg-[#0f1117] border border-[#2d3248] text-[#7c82a0]'
+                  }`}>
+                  {a === 'BUY' ? <Plus className="w-3 h-3" /> : <Minus className="w-3 h-3" />}{a}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-[#7c82a0]">Symbol</label>
+            <input type="text" value={simSymbol}
+              onChange={(e) => { setSimSymbol(e.target.value.toUpperCase()); setSimManualPrice(''); }}
+              placeholder="TQQQ"
+              className="w-full bg-[#0f1117] border border-[#2d3248] rounded px-3 py-2 text-sm text-white placeholder-[#3d4260] focus:outline-none focus:border-blue-500/50 uppercase"
+            />
+            {knownPrice && <p className="text-[10px] text-emerald-400">Current: ${knownPrice.toFixed(2)}</p>}
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-[#7c82a0]">Shares</label>
+            <input type="number" min={1} value={simSharesStr} onChange={(e) => setSimSharesStr(e.target.value)}
+              placeholder="100"
+              className="w-full bg-[#0f1117] border border-[#2d3248] rounded px-3 py-2 text-sm text-white placeholder-[#3d4260] focus:outline-none focus:border-blue-500/50"
+            />
+          </div>
+
+          <div className="space-y-1">
+            <label className="text-xs text-[#7c82a0]">Price {knownPrice ? '(override)' : '(required)'}</label>
+            <input type="number" min={0} step="0.01" value={simManualPrice}
+              onChange={(e) => setSimManualPrice(e.target.value)}
+              placeholder={knownPrice ? knownPrice.toFixed(2) : '0.00'}
+              className="w-full bg-[#0f1117] border border-[#2d3248] rounded px-3 py-2 text-sm text-white placeholder-[#3d4260] focus:outline-none focus:border-blue-500/50"
+            />
+          </div>
+        </div>
+
+        {simShares > 0 && effectivePrice > 0 && (
+          <div className="text-xs text-[#7c82a0] bg-[#0f1117] border border-[#2d3248] rounded px-3 py-2">
+            {simAction} <span className="text-white font-semibold">{simShares} × {simSymbol}</span>
+            {' '}@ ${effectivePrice.toFixed(2)} = <span className="text-white font-semibold">{fmt$(tradeValue)}</span>
+            {' '}in <span className={PILLAR_COLORS[getSimPillar(simSymbol, positions)]}>{getSimPillar(simSymbol, positions)}</span> pillar
+          </div>
+        )}
+
+        {simResult && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3 space-y-2">
+                <p className="text-[10px] text-[#4a5070] font-semibold uppercase">Before</p>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between"><span className="text-[#7c82a0]">Portfolio</span><span className="text-white">{fmt$(totalValue)}</span></div>
+                  <div className="flex justify-between"><span className="text-[#7c82a0]">Equity</span><span className="text-white">{fmt$(equity)}</span></div>
+                  <div className="flex justify-between"><span className="text-[#7c82a0]">Margin used</span>
+                    <span className={currentMarginPct >= MAX_MARGIN_PCT ? 'text-red-400' : currentMarginPct >= WARN_MARGIN_PCT ? 'text-orange-400' : 'text-emerald-400'}>
+                      {fmtPct(currentMarginPct)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+              <div className={`rounded-lg p-3 space-y-2 border ${
+                simResult.marginStatus === 'danger' ? 'bg-red-500/5 border-red-500/25' :
+                simResult.marginStatus === 'warn'   ? 'bg-orange-500/5 border-orange-500/25' :
+                                                      'bg-emerald-500/5 border-emerald-500/25'
+              }`}>
+                <p className="text-[10px] text-[#4a5070] font-semibold uppercase">After</p>
+                <div className="space-y-1 text-xs">
+                  <div className="flex justify-between"><span className="text-[#7c82a0]">Portfolio</span><span className="text-white">{fmt$(simResult.newTotalValue)}</span></div>
+                  <div className="flex justify-between"><span className="text-[#7c82a0]">Equity</span><span className="text-white">{fmt$(simResult.newEquity)}</span></div>
+                  <div className="flex justify-between"><span className="text-[#7c82a0]">Margin used</span>
+                    <span className={simResult.marginStatus === 'danger' ? 'text-red-400 font-bold' : simResult.marginStatus === 'warn' ? 'text-orange-400 font-bold' : 'text-emerald-400'}>
+                      {fmtPct(simResult.newMarginUtilPct)}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3 space-y-2">
+              <p className="text-[10px] text-[#4a5070] font-semibold uppercase">Pillar Impact</p>
+              {simResult.pillarDeltas.filter((p) => p.before !== p.after || p.pillar !== 'other').map((pd) => {
+                const delta = pd.after - pd.before;
+                const changed = Math.abs(delta) > 0.05;
+                return (
+                  <div key={pd.pillar} className="flex items-center gap-2 text-xs">
+                    <span className={`w-24 capitalize ${PILLAR_COLORS[pd.pillar]}`}>{pd.label}</span>
+                    <span className="text-[#7c82a0]">{fmtPct(pd.before)}</span>
+                    <ArrowRight className="w-3 h-3 text-[#4a5070]" />
+                    <span className={changed ? (delta > 0 ? 'text-emerald-400 font-semibold' : 'text-orange-400 font-semibold') : 'text-[#7c82a0]'}>
+                      {fmtPct(pd.after)}
+                    </span>
+                    {changed && (
+                      <span className={`text-[10px] ${delta > 0 ? 'text-emerald-400' : 'text-orange-400'}`}>
+                        {delta > 0 ? '+' : ''}{delta.toFixed(1)}pp
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            {simResult.alerts.length > 0 ? (
+              <div className="space-y-2">
+                {simResult.alerts.map((a, i) => (
+                  <div key={i} className={`flex items-start gap-2 rounded-lg px-3 py-2 text-xs ${
+                    simResult.marginStatus === 'danger'
+                      ? 'bg-red-500/10 border border-red-500/25 text-red-300'
+                      : 'bg-orange-500/10 border border-orange-500/25 text-orange-300'
+                  }`}>
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />{a}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 bg-emerald-500/10 border border-emerald-500/20 rounded-lg px-3 py-2 text-xs text-emerald-300">
+                <CheckCircle className="w-3.5 h-3.5" />Trade looks safe — no rule violations projected.
+              </div>
+            )}
+          </div>
+        )}
+
+        <p className="text-[10px] text-[#4a5070]">
+          BUY assumes 50% Reg T margin financing. SELL assumes proceeds pay down margin first. Thresholds: warn 30%, cap 50%.
+        </p>
+      </div>
     </div>
   );
 }
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function IncomeHub({ positions, totalValue, marginBalance = 0 }: Props) {
+export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [] }: Props) {
   const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('historical');
   const [data, setData] = useState<DividendData | null>(null);
@@ -918,7 +1152,7 @@ export function IncomeHub({ positions, totalValue, marginBalance = 0 }: Props) {
             ) : activeTab === 'fire' ? (
               <FireTab dividends={dividends} marginBalance={marginDebt} />
             ) : (
-              <MarginTab dividends={dividends} marginBalance={marginDebt} totalValue={totalValue} positions={positions} />
+              <MarginTab dividends={dividends} marginBalance={marginDebt} totalValue={totalValue} equity={equity} positions={positions} pillarSummary={pillarSummary} />
             )}
           </div>
         </div>

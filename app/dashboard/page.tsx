@@ -19,7 +19,6 @@ import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
 import { YmagDripTracker } from '@/components/YmagDripTracker';
 import { HedgePairTracker } from '@/components/HedgePairTracker';
-import { MarginSimulator } from '@/components/MarginSimulator';
 import { PositionsTable } from '@/components/PositionsTable';
 import { PendingOrdersPanel, usePendingOrderSymbols } from '@/components/PendingOrdersPanel';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
@@ -604,13 +603,16 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
-        {/* ── Income Hub (Historical + Projected + FIRE + Margin) ─────────── */}
+        {/* ── Income Hub (Historical + Projected + FIRE + Margin + Simulator) ── */}
         <div id="panel-income" className="scroll-mt-20">
           <div id="panel-calendar" />
+          <div id="panel-simulator" />
           <IncomeHub
             positions={account.positions}
             totalValue={account.totalValue}
+            equity={account.equity}
             marginBalance={account.marginBalance}
+            pillarSummary={account.pillarSummary}
           />
         </div>
 
@@ -679,25 +681,6 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <HedgePairTracker positions={account.positions} />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── "What If" Margin Simulator ───────────────────────────────────── */}
-        <CollapsiblePanel
-          id="simulator"
-          title='"What If" Margin Simulator'
-          icon={<Gauge className="w-4 h-4 text-rose-400" />}
-          accentClass="border-rose-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <MarginSimulator
-              positions={account.positions}
-              totalValue={account.totalValue}
-              equity={account.equity}
-              marginBalance={account.marginBalance}
-              pillarSummary={account.pillarSummary}
-            />
           </div>
         </CollapsiblePanel>
 
