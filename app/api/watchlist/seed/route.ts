@@ -177,8 +177,6 @@ const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   { symbol: 'NFLY',  pillar: 'income' },
   { symbol: 'SQY',   pillar: 'income' },
   { symbol: 'SMCY',  pillar: 'income' },
-  { symbol: 'FIAT',  pillar: 'income' },
-  { symbol: 'FIVY',  pillar: 'income' },
   // ── Income — Defiance additions ───────────────────────────────────────────
   { symbol: 'DEFI',  pillar: 'income' },
   { symbol: 'BDTE',  pillar: 'income' },

@@ -307,7 +307,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
     // Schwab / Vanguard / iShares / broad index
     'SCHD','SCHG','SCHB','VTI','VOO','VYM','VXUS','SPY','IVV','IWM',
     // Growth anchors / individual
-    'NVDA','AAPL','MSFT','AMZN','GOOGL','META','SPYG','MCD','COST','MSTR',
+    'NVDA','AAPL','MSFT','AMZN','GOOGL','META','SPYG','MCD','COST','MSTR','BRK.B',
     // Gold
     'AAAU','GLD','IAU','KGC',
     // Defense
