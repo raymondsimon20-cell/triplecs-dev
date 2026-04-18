@@ -163,10 +163,12 @@ function filterContracts(contracts: PutContract[], mode: 'sell_put' | 'buy_put')
              !c.inTheMoney && c.mid > 0,
     );
   } else {
-    // Vol 5: ~30 DTE, 7–15% OTM, protective put
+    // Vol 5: ~30 DTE, 5–20% OTM, protective put
+    // Wide DTE range (7–90) and OTM range (3–22%) so high-priced ETFs like QQQ
+    // with $1 strike spacing always have candidates in the fetched chain.
     return contracts.filter(
-      (c) => c.dte >= 14 && c.dte <= 60 &&
-             c.otmPct >= 5 && c.otmPct <= 18 &&
+      (c) => c.dte >= 7 && c.dte <= 90 &&
+             c.otmPct >= 3 && c.otmPct <= 22 &&
              !c.inTheMoney && c.mid > 0,
     );
   }
@@ -239,7 +241,7 @@ export async function POST(req: Request) {
     const todayStr = new Date().toISOString().slice(0, 10);
     const raw = await getOptionsChain(tokens, symbol.toUpperCase(), {
       contractType: 'PUT',
-      strikeCount:  25,
+      strikeCount:  50,   // QQQ/SPY use $1 spacing near ATM — need 50 to reach 5% OTM
       fromDate:     todayStr,
     });
 
@@ -273,7 +275,7 @@ export async function POST(req: Request) {
 
   const criteria = mode === 'sell_put'
     ? 'DTE 45–90 ideal (60–90 best), delta −0.20 to −0.30 ideal (−0.25 is standard entry), OTM 7–15% preferred. Choose best annualised return that meets delta/DTE. Max 3 contracts.'
-    : 'DTE closest to 30, strike ~10% OTM (7–13% range), delta closest to −0.20. Buy 1–2 contracts for insurance.';
+    : 'DTE closest to 30 (7–90 range), strike ~7–15% OTM, delta closest to −0.20. Buy 1–2 contracts for insurance.';
 
   const contractsJson = JSON.stringify(
     filtered.slice(0, 20).map((c) => ({
