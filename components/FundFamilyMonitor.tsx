@@ -33,7 +33,7 @@ const FUND_FAMILIES: Record<string, string> = {
   MSFO2: 'YieldMax', GDXY: 'YieldMax', XOMO: 'YieldMax', AMZY2: 'YieldMax',
   FBY: 'YieldMax', FIAT: 'YieldMax', FIVY: 'YieldMax', TSMY: 'YieldMax',
   APLY: 'YieldMax', OARK: 'YieldMax', DIPS: 'YieldMax', CRSH: 'YieldMax',
-  KLIP: 'YieldMax',
+  KLIP: 'YieldMax', MSTY: 'YieldMax', PLTY: 'YieldMax',
 
   // Defiance ETFs
   QQQY: 'Defiance', IWMY: 'Defiance', JEPY: 'Defiance',
@@ -41,11 +41,17 @@ const FUND_FAMILIES: Record<string, string> = {
 
   // Roundhill Investments
   XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', WDTE: 'Roundhill',
-  MDTE: 'Roundhill',
+  MDTE: 'Roundhill', TOPW: 'Roundhill', BRKW: 'Roundhill',
 
   // RexShares
   FEPI: 'RexShares', REXS: 'RexShares', REXQ: 'RexShares', AIPI: 'RexShares',
   SPYI2: 'RexShares',
+
+  // GraniteShares
+  TSYY: 'GraniteShares',
+
+  // Kurv
+  KSLV: 'Kurv',
 
   // JPMorgan
   JEPI: 'JPMorgan', JEPQ: 'JPMorgan',
@@ -56,6 +62,7 @@ const FUND_FAMILIES: Record<string, string> = {
 
   // Neos Investments
   SPYI: 'Neos', QDVO: 'Neos', JPEI: 'Neos', IWMI: 'Neos',
+  QQQI: 'Neos', BTCI: 'Neos', NIHI: 'Neos', IAUI: 'Neos',
 
   // PIMCO
   PDI: 'PIMCO', PDO: 'PIMCO', PTY: 'PIMCO', PCN: 'PIMCO',
@@ -107,16 +114,21 @@ const FUND_FAMILIES: Record<string, string> = {
   // Schwab / Vanguard / iShares — broad index, typically no cap needed
   SCHD: 'Schwab', SCHG: 'Schwab', SCHB: 'Schwab',
   VTI: 'Vanguard', VOO: 'Vanguard', VYM: 'Vanguard', VXUS: 'Vanguard',
-  SPY: 'iShares', IVV: 'iShares', IWM: 'iShares',
+  SPY: 'iShares', IVV: 'iShares', IWM: 'iShares', ITA: 'iShares',
 
   // Growth anchors — treated as individual, not families
   NVDA: 'Individual', AAPL: 'Individual', MSFT: 'Individual',
   AMZN: 'Individual', GOOGL: 'Individual', META: 'Individual',
   SPYG: 'Individual',
+  MCD: 'Individual', COST: 'Individual', 'BRK.B': 'Individual',
+  MSTR: 'Individual', KGC: 'Individual', 'O': 'Individual',
+
+  // Physical-gold anchors
+  AAAU: 'Gold', GLD: 'Gold', IAU: 'Gold',
 };
 
 // Families exempt from cap warnings (index funds, individual stocks, etc.)
-const EXEMPT_FAMILIES = new Set(['Cornerstone', 'Individual', 'Schwab', 'Vanguard', 'iShares']);
+const EXEMPT_FAMILIES = new Set(['Cornerstone', 'Individual', 'Schwab', 'Vanguard', 'iShares', 'Gold']);
 
 const WARN_PCT  = 30;
 const MAX_PCT   = 40;

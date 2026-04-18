@@ -218,11 +218,17 @@ STRATEGY RULES (must follow exactly):
 1. 1/3 RULE: When trimming income, route exactly 1/3 of the trimmed dollars into Triples (TQQQ or UPRO preferred). The remaining 2/3 stays as freed capital / cash.
 2. NEVER sell Cornerstone (CLM or CRF). These are long-term DRIP positions — do not touch.
 3. For SELL orders: only sell symbols the user already holds (listed above).
-4. For BUY orders: prefer symbols already held. For new positions, you may suggest any symbol from the Triple C universe (YieldMax, Defiance, Roundhill, RexShares, Neos, PIMCO/CEF income, ProShares/Direxion triples, hedge inverses, broad index ETFs, or individual growth anchors). Prioritise Vol 7 favourites: TQQQ, UPRO, YMAG, XDTE, FEPI, SPYI, JEPI, JEPQ, QQQY, CLM, CRF.
+4. For BUY orders: prefer symbols already held. For new positions choose from the Vol 7 preferred lists:
+   - Triples pillar → TQQQ, UPRO, SPXL (index 3×), or SOXL/TECL (sector 3× — use sparingly)
+   - Income pillar → YMAG, XDTE, FEPI, AIPI, SPYI, JEPI, JEPQ, QQQY, NVDY, TSLY, YMAX, KLIP
+   - Cornerstone pillar → CLM or CRF (DRIP enrolled)
+   - Hedge pillar → SPXU, SQQQ (paired with their bull counterparts SPXL, TQQQ)
 5. Shares MUST be whole numbers: use Math.floor(dollarAmount / pricePerShare).
 6. Minimum 1 share per order. Skip orders where Math.floor gives 0.
 7. Only include orders for pillars with |drift| > 1% AND driftDollars > $500.
 8. Keep individual orders manageable — split large sells across top 2-3 positions if needed.
+9. For income buys: prefer monthly-distribution ETFs with >15% yield (YMAG, XDTE, FEPI) over lower-yield names.
+10. For triples buys: prefer index-linked (TQQQ/UPRO) unless the user already holds significant sector 3×.
 
 TASK: Generate the minimum set of orders to move each pillar to within 1% of target.
 Apply the 1/3 rule automatically for income trims.

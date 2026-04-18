@@ -67,8 +67,16 @@ export async function GET() {
 
     if (tokens) {
       try {
+        // Batch into chunks of 50 — Schwab quote API is unreliable with 100+ symbols
         const symbols = items.map((i) => i.symbol);
-        const quotes = await getQuotes(tokens, symbols);
+        const BATCH = 50;
+        const merged: Awaited<ReturnType<typeof getQuotes>> = {};
+        for (let i = 0; i < symbols.length; i += BATCH) {
+          const chunk = symbols.slice(i, i + BATCH);
+          const result = await getQuotes(tokens, chunk);
+          Object.assign(merged, result);
+        }
+        const quotes = merged;
 
         enriched = items.map((item) => {
           const q = quotes[item.symbol]?.quote;

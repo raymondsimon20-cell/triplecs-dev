@@ -252,6 +252,8 @@ export function WatchlistPanel() {
   const [loading, setLoading] = useState(true);
   const [showAdd, setShowAdd] = useState(false);
   const [seeding, setSeeding] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filterAlert, setFilterAlert] = useState(false);
   const toast = useToast();
   const prevHits = useRef<Set<string>>(new Set());
 
@@ -329,19 +331,32 @@ export function WatchlistPanel() {
 
   const hitCount = items.filter((i) => i.hitBuyTarget || i.hitSellTarget).length;
 
+  const filtered = items.filter((i) => {
+    if (filterAlert && !i.hitBuyTarget && !i.hitSellTarget) return false;
+    if (search) return i.symbol.includes(search.toUpperCase());
+    return true;
+  });
+
   return (
     <div className="space-y-3">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <span className="text-xs text-[#7c82a0]">
-            {items.length} symbol{items.length !== 1 ? 's' : ''}
+            {filtered.length}{filtered.length !== items.length ? `/${items.length}` : ''} symbol{items.length !== 1 ? 's' : ''}
           </span>
           {hitCount > 0 && (
-            <span className="flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold bg-yellow-500/15 text-yellow-400">
+            <button
+              onClick={() => setFilterAlert((v) => !v)}
+              className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-bold transition-colors ${
+                filterAlert
+                  ? 'bg-yellow-500/30 text-yellow-300'
+                  : 'bg-yellow-500/15 text-yellow-400'
+              }`}
+            >
               <Bell className="w-2.5 h-2.5" />
               {hitCount} alert{hitCount !== 1 ? 's' : ''}
-            </span>
+            </button>
           )}
         </div>
         <div className="flex items-center gap-2">
@@ -375,6 +390,18 @@ export function WatchlistPanel() {
         </div>
       </div>
 
+      {/* Search bar — shown when there are enough items to warrant filtering */}
+      {items.length >= 10 && (
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value.toUpperCase())}
+          placeholder="Filter symbols…"
+          className="w-full bg-[#22263a] border border-[#2d3248] rounded-lg px-3 py-1.5 text-xs text-white
+            placeholder-[#4a5070] focus:outline-none focus:border-blue-500"
+        />
+      )}
+
       {/* Add form */}
       {showAdd && (
         <div className="bg-[#22263a] rounded-xl p-3 border border-[#2d3248]">
@@ -394,9 +421,11 @@ export function WatchlistPanel() {
             Add your first symbol
           </button>
         </div>
+      ) : filtered.length === 0 ? (
+        <p className="text-xs text-center text-[#4a5070] py-4">No symbols match your filter.</p>
       ) : (
         <div className="space-y-2">
-          {items.map((item) => (
+          {filtered.map((item) => (
             <WatchlistRow
               key={item.symbol}
               item={item}

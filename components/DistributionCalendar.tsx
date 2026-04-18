@@ -31,6 +31,9 @@ const FREQ_MAP: Record<string, Frequency> = {
   // Weekly payers (Roundhill)
   XDTE: 'weekly', QDTE: 'weekly', RDTE: 'weekly', WDTE: 'weekly', MDTE: 'weekly',
 
+  // Weekly payers — Roundhill (all options-overlay weekly ETFs)
+  TOPW: 'weekly', BRKW: 'weekly',
+
   // Monthly payers — YieldMax family
   TSLY: 'monthly', NVDY: 'monthly', AMZY: 'monthly', GOOGY: 'monthly',
   MSFO: 'monthly', CONY: 'monthly', JPMO: 'monthly', NFLXY: 'monthly',
@@ -39,15 +42,20 @@ const FREQ_MAP: Record<string, Frequency> = {
   DISO: 'monthly', ULTY: 'monthly', YMAX: 'monthly', YMAG: 'monthly',
   FBY: 'monthly', GDXY: 'monthly', XOMO: 'monthly', TSMY: 'monthly',
   APLY: 'monthly', OARK: 'monthly', DIPS: 'monthly', CRSH: 'monthly',
-  KLIP: 'monthly',
+  KLIP: 'monthly', MSTY: 'monthly', PLTY: 'monthly',
+  MSFO2: 'monthly', AMZY2: 'monthly',
 
   // Defiance
   QQQY: 'monthly', IWMY: 'monthly', JEPY: 'monthly',
-  QDTY: 'monthly', SDTY: 'monthly',
+  QDTY: 'monthly', SDTY: 'monthly', DFNV: 'monthly', IWMY2: 'monthly',
 
   // RexShares / Neos
-  FEPI: 'monthly', AIPI: 'monthly', SPYI: 'monthly', QDVO: 'monthly',
-  JPEI: 'monthly', IWMI: 'monthly',
+  FEPI: 'monthly', AIPI: 'monthly', REXQ: 'monthly', REXS: 'monthly', SPYI2: 'monthly',
+  SPYI: 'monthly', QDVO: 'monthly', JPEI: 'monthly', IWMI: 'monthly',
+  QQQI: 'monthly', BTCI: 'monthly', NIHI: 'monthly', IAUI: 'monthly',
+
+  // GraniteShares / Kurv
+  TSYY: 'monthly', KSLV: 'monthly',
 
   // JPMorgan
   JEPI: 'monthly', JEPQ: 'monthly',
@@ -56,27 +64,45 @@ const FREQ_MAP: Record<string, Frequency> = {
   CLM: 'monthly', CRF: 'monthly',
 
   // Other CEFs — monthly
-  OXLC: 'monthly', PDI: 'monthly', PDO: 'monthly', PTY: 'monthly',
+  OXLC: 'monthly', OXSQ: 'monthly',
+  PDI: 'monthly', PDO: 'monthly', PTY: 'monthly',
   PCN: 'monthly', PFL: 'monthly', PFN: 'monthly',
-  ETV: 'monthly', ETB: 'monthly', EOS: 'monthly', EOI: 'monthly',
-  BST: 'monthly', BDJ: 'monthly', ECAT: 'monthly',
+  ETV: 'monthly', ETB: 'monthly', EOS: 'monthly', EOI: 'monthly', EVT: 'monthly',
+  BST: 'monthly', BDJ: 'monthly', ECAT: 'monthly', BGY: 'monthly', BCAT: 'monthly', BUI: 'monthly',
   RIV: 'monthly', OPP: 'monthly', GOF: 'monthly',
   STK: 'monthly', USA: 'monthly',
+  GAB: 'monthly', GGT: 'monthly', KMLM: 'monthly',
+  COWS: 'monthly',
+
+  // Global X covered-call (monthly)
+  QYLD: 'monthly', RYLD: 'monthly', XYLD: 'monthly', NVDL: 'monthly',
+
+  // Vol 7 income additions
+  IQQQ: 'monthly', SPYT: 'monthly', FNGA: 'monthly', FNGB: 'monthly',
+  XPAY: 'monthly', MAGY: 'monthly',
 
   // Amplify
   DIVO: 'quarterly',
 
-  // Global X covered-call (monthly)
-  QYLD: 'monthly', RYLD: 'monthly', XYLD: 'monthly',
-
   // Quarterly — traditional ETFs / dividend stocks
-  SCHD: 'quarterly', VYM: 'quarterly', QQQ: 'quarterly',
+  SCHD: 'quarterly', VYM: 'quarterly', VXUS: 'quarterly',
+  QQQ: 'quarterly', QQQM: 'quarterly', RSP: 'quarterly',
   SPY: 'quarterly', IVV: 'quarterly', VOO: 'quarterly', VTI: 'quarterly',
+  IWM: 'quarterly', SCHB: 'quarterly', SCHG: 'quarterly',
   NVDA: 'quarterly', AAPL: 'quarterly', MSFT: 'quarterly',
-  SPYG: 'quarterly',
+  SPYG: 'quarterly', DJIA: 'quarterly',
+  GDV: 'quarterly', LICT: 'quarterly', TPVG: 'quarterly',
+  ITA: 'quarterly', MCD: 'quarterly', COST: 'quarterly',
 
-  // 3× ETFs — no dividend
+  // No meaningful dividend (3× ETFs, inverse, gold, BRK.B, etc.)
   UPRO: 'annual', TQQQ: 'annual', SPXL: 'annual', UDOW: 'annual', SQQQ: 'annual',
+  TECL: 'annual', SOXL: 'annual', FNGU: 'annual', LABU: 'annual',
+  TNA: 'annual', FAS: 'annual', UMDD: 'annual', URTY: 'annual',
+  CURE: 'annual', HIBL: 'annual',
+  SPXU: 'annual', SDOW: 'annual', SOXS: 'annual', FNGD: 'annual',
+  FAZ: 'annual', SRTY: 'annual', SPXS: 'annual', UVXY: 'annual',
+  GLD: 'annual', IAU: 'annual', AAAU: 'annual',
+  TSLL: 'annual', BLOK: 'annual', MSTR: 'annual',
 };
 
 // Months quarterly payers typically distribute (0-indexed)
@@ -99,19 +125,26 @@ const FALLBACK_YIELDS: Record<string, number> = {
   // Roundhill weekly payers (~25–60% trailing yields)
   XDTE: 30, QDTE: 35, RDTE: 28, WDTE: 30, MDTE: 28,
 
-  // YieldMax single-stock (~20–80% trailing)
+  // YieldMax single-stock (~20–130% trailing)
   TSLY: 55, NVDY: 50, CONY: 70, MSFO: 30, AMZY: 45,
   GOOGY: 25, JPMO: 15, NFLXY: 35, AMDY: 40, PYPLY: 30,
   AIYY: 35, OILY: 35, CVNY: 30, MRNY: 40, SNOY: 25,
   BIOY: 25, DISO: 30, ULTY: 55, YMAX: 40, YMAG: 35,
   FBY: 35, GDXY: 25, XOMO: 30, TSMY: 30,
   APLY: 35, OARK: 45, DIPS: 35, CRSH: 35,
+  KLIP: 35, MSTY: 75, PLTY: 130,
+  MSFO2: 30, AMZY2: 45,
 
   // Defiance (~30–60%)
-  QQQY: 50, IWMY: 55, JEPY: 35, QDTY: 30, SDTY: 30,
+  QQQY: 50, IWMY: 55, JEPY: 35, QDTY: 30, SDTY: 30, DFNV: 30, IWMY2: 55,
 
   // RexShares / Neos (~10–30%)
-  FEPI: 20, AIPI: 25, SPYI: 12, QDVO: 10, JPEI: 12, IWMI: 15,
+  FEPI: 20, AIPI: 25, REXQ: 18, REXS: 18, SPYI2: 12,
+  SPYI: 12, QDVO: 10, JPEI: 12, IWMI: 15,
+  QQQI: 20, BTCI: 25, NIHI: 20, IAUI: 18,
+
+  // GraniteShares / Kurv
+  TSYY: 40, KSLV: 25,
 
   // JPMorgan (~7–10%)
   JEPI: 7.5, JEPQ: 9.5,
@@ -119,24 +152,35 @@ const FALLBACK_YIELDS: Record<string, number> = {
   // Cornerstone CEFs (~15–20% managed distribution)
   CLM: 18, CRF: 18,
 
-  // Other CEFs (~8–15%)
-  OXLC: 18, PDI: 13, PDO: 12, PTY: 10, PCN: 9, PFL: 10, PFN: 10,
-  ETV: 8.5, ETB: 8, EOS: 8, EOI: 8,
-  BST: 6, BDJ: 7, ECAT: 9, RIV: 12, OPP: 12, GOF: 14,
-  STK: 7, USA: 10, KLIP: 35,
+  // Other CEFs (~6–18%)
+  OXLC: 18, OXSQ: 15,
+  PDI: 13, PDO: 12, PTY: 10, PCN: 9, PFL: 10, PFN: 10,
+  ETV: 8.5, ETB: 8, EOS: 8, EOI: 8, EVT: 7.5,
+  BST: 6, BDJ: 7, ECAT: 9, BGY: 10, BCAT: 9, BUI: 7,
+  RIV: 12, OPP: 12, GOF: 14,
+  STK: 7, USA: 10,
+  GAB: 8, GGT: 8, GDV: 6, LICT: 5,
+  KMLM: 10, TPVG: 10, COWS: 5,
 
-  // Global X covered-call (~10–12%)
-  QYLD: 12, RYLD: 12, XYLD: 11,
+  // Global X covered-call / leveraged (~10–12%)
+  QYLD: 12, RYLD: 12, XYLD: 11, NVDL: 8,
+
+  // Vol 7 additions (estimated)
+  IQQQ: 20, SPYT: 18, FNGA: 8, FNGB: 8, XPAY: 15, MAGY: 20,
+
+  // Roundhill weekly
+  TOPW: 25, BRKW: 25,
 
   // Amplify
-  DIVO: 4.5,
+  DIVO: 4.5, BLOK: 0,
 
   // Traditional dividend ETFs / stocks (~1–4%)
-  SCHD: 3.5, VYM: 3, QQQ: 0.6, SPY: 1.3, IVV: 1.3,
-  VOO: 1.3, VTI: 1.3, NVDA: 0.03, AAPL: 0.5, MSFT: 0.7, SPYG: 0.8,
-
-  // 3× ETFs (negligible)
-  UPRO: 0, TQQQ: 0, SPXL: 0, UDOW: 0, SQQQ: 0,
+  SCHD: 3.5, VYM: 3, VXUS: 3,
+  QQQ: 0.6, QQQM: 0.6, RSP: 1.5,
+  SPY: 1.3, IVV: 1.3, VOO: 1.3, VTI: 1.3,
+  IWM: 1.5, SCHB: 1.3, SCHG: 0.5,
+  NVDA: 0.03, AAPL: 0.5, MSFT: 0.7, SPYG: 0.8,
+  DJIA: 3, ITA: 1, MCD: 2.2, COST: 0.6,
 };
 
 function estimateAnnualDividend(pos: EnrichedPosition): number {
