@@ -104,6 +104,15 @@ function positionPrice(pos: EnrichedPosition): number {
 // ─── Route ────────────────────────────────────────────────────────────────────
 
 export async function POST(req: Request) {
+  try {
+    return await handlePost(req);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `Unexpected error: ${msg}` }, { status: 500 });
+  }
+}
+
+async function handlePost(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }

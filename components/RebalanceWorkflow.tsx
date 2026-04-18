@@ -252,8 +252,17 @@ export function RebalanceWorkflow({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ totalValue, equity, positions, pillarSummary, targets }),
       });
+
+      if (!res.ok) {
+        const ct = res.headers.get('content-type') ?? '';
+        if (ct.includes('application/json')) {
+          const err = await res.json();
+          throw new Error(err.error ?? `Server error (HTTP ${res.status})`);
+        }
+        throw new Error(`Server error (HTTP ${res.status})`);
+      }
+
       const data: PlanResponse = await res.json();
-      if (!res.ok) throw new Error((data as { error?: string }).error ?? `HTTP ${res.status}`);
 
       setDrifts(data.drifts ?? []);
       setSummary(data.summary ?? '');
