@@ -15,7 +15,6 @@ import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { DividendIncomePanel } from '@/components/DividendIncomePanel';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHistoryPanel } from '@/components/TradeHistoryPanel';
-import { RebalanceCalculator } from '@/components/RebalanceCalculator';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
 import { DistributionCalendar } from '@/components/DistributionCalendar';
@@ -31,7 +30,7 @@ import { AlertMonitor } from '@/components/ToastProvider';
 import { WatchlistPanel } from '@/components/WatchlistPanel';
 import { StrategyGuide } from '@/components/StrategyGuide';
 import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
-import { SimplifiedTradeWorkflow } from '@/components/SimplifiedTradeWorkflow';
+import { RebalanceWorkflow } from '@/components/RebalanceWorkflow';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
 import { DailyReviewWizard } from '@/components/DailyReviewWizard';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
@@ -637,32 +636,15 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
-        {/* ── Rebalance Calculator ─────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="rebalance"
-          title="Rebalance Calculator"
-          icon={<Calculator className="w-4 h-4 text-yellow-400" />}
-          accentClass="border-yellow-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4 space-y-4">
-            <RebalanceCalculator
-              positions={account.positions}
-              totalValue={account.totalValue}
-              equity={account.equity}
-              marginBalance={account.marginBalance}
-              pillarSummary={account.pillarSummary}
-            />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Simplified Trade Workflow ────────────────────────────────────── */}
-        <SimplifiedTradeWorkflow
-          pillars={account.pillarSummary}
+        {/* ── Rebalance Workflow ───────────────────────────────────────────── */}
+        <RebalanceWorkflow
           positions={account.positions}
+          pillarSummary={account.pillarSummary}
           totalValue={account.totalValue}
-          currentTargets={strategyTargets}
-          marginData={{ equity: account.equity, marginBalance: account.marginBalance }}
+          equity={account.equity}
+          marginBalance={account.marginBalance}
+          accountHash={account.accountHash}
+          strategyTargets={strategyTargets}
         />
 
         {/* ── Open Put Tracker ─────────────────────────────────────────────── */}
