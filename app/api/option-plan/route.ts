@@ -155,11 +155,11 @@ function parseChain(
 /** Filter contracts to the Vol 5/6 sweet window for each mode. */
 function filterContracts(contracts: PutContract[], mode: 'sell_put' | 'buy_put'): PutContract[] {
   if (mode === 'sell_put') {
-    // Vol 6: 45–150 DTE, 5–25% OTM, delta -0.15 to -0.42, OTM only
+    // Vol 6: 45–150 DTE, 4–28% OTM, delta -0.13 to -0.45 (skip delta check when 0 — missing after-hours data)
     return contracts.filter(
       (c) => c.dte >= 45 && c.dte <= 150 &&
              c.otmPct >= 4 && c.otmPct <= 28 &&
-             Math.abs(c.delta) >= 0.13 && Math.abs(c.delta) <= 0.45 &&
+             (c.delta === 0 || (Math.abs(c.delta) >= 0.13 && Math.abs(c.delta) <= 0.45)) &&
              !c.inTheMoney && c.mid > 0,
     );
   } else {
@@ -177,15 +177,16 @@ function filterContracts(contracts: PutContract[], mode: 'sell_put' | 'buy_put')
 /** Fallback: pick best contract by our own scoring if Claude fails validation. */
 function scoreFallback(contracts: PutContract[], mode: 'sell_put' | 'buy_put'): PutContract {
   if (mode === 'sell_put') {
-    // Prefer delta -0.25, DTE 60-90, highest annualised return
+    // Prefer OTM 10%, DTE 60-90, highest annualised return (use otmPct when delta=0)
     return contracts.reduce((best, c) => {
-      const deltaDiff  = Math.abs(Math.abs(c.delta) - 0.25);
-      const bestDelta  = Math.abs(Math.abs(best.delta) - 0.25);
-      const dteScore   = c.dte >= 60 && c.dte <= 90 ? 0 : 1;
-      const bestDte    = best.dte >= 60 && best.dte <= 90 ? 0 : 1;
-      // Lower score = better
-      const score      = deltaDiff + dteScore * 0.5 - c.annualisedReturn * 0.01;
-      const bestScore  = bestDelta + bestDte * 0.5 - best.annualisedReturn * 0.01;
+      const deltaC    = c.delta !== 0 ? Math.abs(c.delta) : Math.max(0.05, 0.5 - c.otmPct / 100 * 1.6);
+      const deltaB    = best.delta !== 0 ? Math.abs(best.delta) : Math.max(0.05, 0.5 - best.otmPct / 100 * 1.6);
+      const deltaDiff = Math.abs(deltaC - 0.25);
+      const bestDelta = Math.abs(deltaB - 0.25);
+      const dteScore  = c.dte >= 60 && c.dte <= 90 ? 0 : 1;
+      const bestDte   = best.dte >= 60 && best.dte <= 90 ? 0 : 1;
+      const score     = deltaDiff + dteScore * 0.5 - c.annualisedReturn * 0.01;
+      const bestScore = bestDelta + bestDte * 0.5 - best.annualisedReturn * 0.01;
       return score < bestScore ? c : best;
     });
   } else {
@@ -241,7 +242,7 @@ export async function POST(req: Request) {
     const todayStr = new Date().toISOString().slice(0, 10);
     const raw = await getOptionsChain(tokens, symbol.toUpperCase(), {
       contractType: 'PUT',
-      strikeCount:  50,   // QQQ/SPY use $1 spacing near ATM — need 50 to reach 5% OTM
+      strikeCount:  80,   // QQQ/SPY use $1 spacing near ATM — need 80 to reach 8%+ OTM for sell_put
       fromDate:     todayStr,
     });
 
