@@ -156,6 +156,7 @@ const NAV_ITEMS = [
   { id: 'puts',         label: 'Open Puts',     icon: History     },
   { id: 'families',     label: 'Fund Families', icon: List        },
   { id: 'simulator',    label: 'Simulator',     icon: Gauge       },
+  { id: 'history',      label: 'Trade History', icon: History     },
   { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
   { id: 'positions',    label: 'Positions',     icon: List        },
@@ -225,17 +226,9 @@ export default function DashboardPage() {
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
   // Estimated monthly income from dividend data (for FIRE pill)
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
-  // FIRE target from settings (default 10 000)
-  const [fireTarget] = useState<number>(() => {
-    if (typeof window === 'undefined') return 10_000;
-    try {
-      const raw = localStorage.getItem('triplec_strategy_targets');
-      return raw ? (JSON.parse(raw).fireNumber ?? 10_000) : 10_000;
-    } catch { return 10_000; }
-  });
-
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
   const strategyTargets = useStrategyTargets();
+  const fireTarget = strategyTargets.fireNumber;
 
   const fetchDividends = useCallback(async () => {
     try {
