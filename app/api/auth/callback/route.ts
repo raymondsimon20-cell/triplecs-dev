@@ -29,7 +29,11 @@ export async function GET(req: NextRequest) {
   // Verify CSRF state
   const storedState = req.cookies.get('oauth_state')?.value;
   if (storedState !== state) {
-    return NextResponse.redirect(appUrl('/?error=state_mismatch'));
+    // Clear any stale auth cookies so the user can retry login cleanly.
+    const res = NextResponse.redirect(appUrl('/?error=state_mismatch'));
+    res.cookies.delete('oauth_state');
+    res.cookies.delete('triple_c_session');
+    return res;
   }
 
   try {
