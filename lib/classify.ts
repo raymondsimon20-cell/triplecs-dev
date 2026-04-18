@@ -11,6 +11,7 @@ import type { SchwabPosition, EnrichedPosition, PillarType, SchwabQuotesResponse
 export const TRIPLES_SYMBOLS = new Set([
   'UPRO', 'TQQQ', 'SPXL', 'UDOW', 'TECL', 'SOXL',
   'FNGU', 'LABU', 'TNA', 'FAS',
+  'UMDD', 'URTY', 'CURE', 'HIBL',
 ]);
 
 /** Cornerstone — CLM/CRF only. DRIP at NAV is the key mechanic. */
@@ -24,32 +25,86 @@ export const HEDGE_SYMBOLS = new Set([
   'SH', 'PSQ', 'DOG', 'UVXY', 'SOXS', 'FNGD',
 ]);
 
-/** Income ETF families — Yieldmax, Defiance, Roundhill, RexShares, and known high-yielders */
+/** Income ETF families — Yieldmax, Defiance, Roundhill, RexShares, NEOS, and known high-yielders */
 export const INCOME_SYMBOLS = new Set([
   // Yieldmax
   'TSLY', 'NVDY', 'AMZY', 'GOOGY', 'MSFO', 'APLY', 'OARK', 'JPMO',
   'CONY', 'MSFO', 'NFLY', 'AMZY', 'GOOGY', 'DISO', 'SQY', 'SMCY',
   'YMAX', 'YMAG', 'ULTY', 'DIPS', 'CRSH',
+  'MSTY', 'PLTY', 'GDXY',
+  // GraniteShares YieldBOOST
+  'TSYY',
   // Defiance
   'QQQY', 'JEPY', 'IWMY', 'DEFI', 'WDTE', 'BDTE', 'IDTE', 'QDTU',
   // Roundhill
-  'XDTE', 'QDTE', 'RDTE', 'YBTC', 'WEEK', 'RDTE',
+  'XDTE', 'QDTE', 'RDTE', 'YBTC', 'WEEK', 'RDTE', 'TOPW', 'BRKW',
   // RexShares
   'FEPI', 'AIPI',
+  // NEOS high-income
+  'QQQI', 'SPYI', 'BTCI', 'NIHI', 'IAUI',
+  // Kurv enhanced income
+  'KSLV',
   // Other high-dividend income
   'JEPI', 'JEPQ', 'DIVO', 'SCHD', 'BST', 'STK', 'BDJ', 'EOS',
-  'USA', 'GOF', 'PTY', 'RIV', 'OXLC', 'KLIP', 'SPYI',
+  'USA', 'GOF', 'PTY', 'RIV', 'OXLC', 'KLIP',
   'CHW', 'CSQ', 'EXG', 'ETV', 'GDV',
+  // BlackRock closed-end income
+  'ECAT',
+  // REIT income
+  'O',
   // Newer income ETFs from Vol 7
-  'IQQQ', 'QQQI', 'SPYT', 'XPAY', 'MAGY', 'FNGA', 'FNGB',
+  'IQQQ', 'SPYT', 'XPAY', 'MAGY', 'FNGA', 'FNGB',
   // Bond funds
   'AGG', 'BND', 'TLT', 'IEF', 'SGOV', 'USFR',
+  // YieldMax (additional variants)
+  'AIYY', 'AMDY', 'AMZY2', 'BIOY', 'CVNY', 'FBY', 'FIAT', 'FIVY',
+  'MRNY', 'MSFO2', 'NFLXY', 'OILY', 'PYPLY', 'SNOY', 'TSMY', 'XOMO',
+  // Defiance (additional)
+  'DFNV', 'QDTY', 'SDTY', 'IWMY2',
+  // Roundhill (additional)
+  'MDTE',
+  // RexShares (additional)
+  'REXQ', 'REXS', 'SPYI2',
+  // Neos (additional)
+  'QDVO', 'JPEI', 'IWMI',
+  // Global X covered-call / leveraged income
+  'DJIA', 'NVDL', 'TSLL', 'QYLD', 'RYLD', 'XYLD',
+  // PIMCO CEFs
+  'PCN', 'PDI', 'PDO', 'PFL', 'PFN', 'PHK',
+  // Eaton Vance CEFs
+  'EOI', 'ETB', 'EVT',
+  // BlackRock CEFs (additional)
+  'BCAT', 'BGY', 'BUI',
+  // Amplify
+  'BLOK', 'COWS',
+  // Oxford Lane
+  'OXSQ',
+  // RiverNorth
+  'OPP',
+  // Liberty All-Star
+  'LICT',
+  // Gabelli
+  'GAB', 'GGT',
+  // Invesco (additional)
+  'QQQM', 'RSP',
+  // KraneShares
+  'KMLM',
+  // BDC income
+  'TPVG',
 ]);
 
 /** Growth anchors — treated as income/core layer */
 export const GROWTH_ANCHORS = new Set([
   'QQQ', 'SPYG', 'NVDA', 'MSFT', 'AAPL', 'AMZN', 'GOOGL', 'META',
   'SPY', 'VOO', 'IVV', 'VTI', 'VGT',
+  // Quality / consumer / conglomerate anchors
+  'MCD', 'COST', 'BRK.B', 'MSTR',
+  // Gold / precious metals anchors
+  'KGC', 'AAAU', 'GLD', 'IAU',
+  // Defense anchor
+  'ITA',
+  // Broad index / ETF anchors (additional)
+  'IWM', 'SCHB', 'SCHG', 'VXUS', 'VYM',
 ]);
 
 // ─── Classifier ───────────────────────────────────────────────────────────────
@@ -184,6 +239,10 @@ export type FundFamily =
   | 'Defiance'
   | 'Roundhill'
   | 'RexShares'
+  | 'NEOS'
+  | 'GraniteShares'
+  | 'Kurv'
+  | 'BlackRock'
   | 'ProShares'
   | 'Direxion'
   | 'Cornerstone'
@@ -196,13 +255,23 @@ const FUND_FAMILY_MAP: Record<string, FundFamily> = {
   CONY: 'Yieldmax', NFLY: 'Yieldmax', DISO: 'Yieldmax', SQY: 'Yieldmax',
   SMCY: 'Yieldmax', YMAX: 'Yieldmax', YMAG: 'Yieldmax', ULTY: 'Yieldmax',
   KLIP: 'Yieldmax', DIPS: 'Yieldmax', CRSH: 'Yieldmax',
+  MSTY: 'Yieldmax', PLTY: 'Yieldmax', GDXY: 'Yieldmax',
   // Defiance
   QQQY: 'Defiance', JEPY: 'Defiance', IWMY: 'Defiance',
   DEFI: 'Defiance', WDTE: 'Defiance', BDTE: 'Defiance', IDTE: 'Defiance', QDTU: 'Defiance',
   // Roundhill
   XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', YBTC: 'Roundhill', WEEK: 'Roundhill',
+  TOPW: 'Roundhill', BRKW: 'Roundhill',
   // RexShares
   FEPI: 'RexShares', AIPI: 'RexShares',
+  // NEOS (high-income option-overlay ETFs)
+  QQQI: 'NEOS', SPYI: 'NEOS', BTCI: 'NEOS', NIHI: 'NEOS', IAUI: 'NEOS',
+  // GraniteShares YieldBOOST
+  TSYY: 'GraniteShares',
+  // Kurv
+  KSLV: 'Kurv',
+  // BlackRock closed-end funds
+  ECAT: 'BlackRock', BST: 'BlackRock', BDJ: 'BlackRock',
   // ProShares (triple long)
   UPRO: 'ProShares', TQQQ: 'ProShares', UDOW: 'ProShares',
   // Direxion (triple long + short)
