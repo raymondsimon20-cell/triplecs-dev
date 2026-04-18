@@ -316,6 +316,8 @@ IMPORTANT:
 - The occSymbol in your response MUST match exactly one of the occSymbol values listed above.
 - limitPrice must be between bid and ask of the selected contract (use mid price).
 - rationale must cite DTE, OTM%, delta, and the specific Vol 5/6 rule being applied.
+- DO NOT write any prose, explanation, or analysis outside the <json></json> block.
+- Your ENTIRE response must be the JSON object below and nothing else.
 
 Respond with ONLY a JSON object wrapped in <json></json> tags:
 <json>
@@ -370,16 +372,15 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
           }
         }
 
-        let plan: ClaudeOptionPlan;
-        try {
-          plan = JSON.parse(extractJSON(fullText)) as ClaudeOptionPlan;
-        } catch {
-          throw new Error('AI response was not valid JSON — try again');
+        let plan: ClaudeOptionPlan | null = null;
+        const extracted = extractJSON(fullText);
+        if (extracted.trimStart().startsWith('{')) {
+          try { plan = JSON.parse(extracted) as ClaudeOptionPlan; } catch { /* fall through to scoreFallback */ }
         }
 
         // Validate: occSymbol must exist in the live chain
-        let validationPassed = occSet.has(plan.occSymbol);
-        let selectedContract = filtered.find((c) => c.symbol === plan.occSymbol) ?? null;
+        let validationPassed = plan != null && occSet.has(plan.occSymbol);
+        let selectedContract = plan != null ? (filtered.find((c) => c.symbol === plan!.occSymbol) ?? null) : null;
 
         if (!validationPassed || !selectedContract) {
           selectedContract = scoreFallback(filtered, mode);
@@ -389,18 +390,19 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
             contracts:        Math.min(requestedContracts, 3),
             limitPrice:       selectedContract.mid,
             rationale:        `AI selection failed validation — using best scored contract: ${selectedContract.dte} DTE, ${selectedContract.otmPct.toFixed(1)}% OTM, Δ ${selectedContract.delta.toFixed(2)}`,
-            selectedContract: plan.selectedContract ?? selectedContract,
+            selectedContract: plan?.selectedContract ?? selectedContract,
           };
           validationPassed = false;
         }
 
-        plan.limitPrice = +Math.max(selectedContract.bid, Math.min(selectedContract.ask, plan.limitPrice)).toFixed(2);
-        plan.contracts  = Math.max(1, Math.min(3, Math.floor(plan.contracts)));
+        const finalPlan = plan!;
+        finalPlan.limitPrice = +Math.max(selectedContract.bid, Math.min(selectedContract.ask, finalPlan.limitPrice)).toFixed(2);
+        finalPlan.contracts  = Math.max(1, Math.min(3, Math.floor(finalPlan.contracts)));
 
         const result = JSON.stringify({
-          occSymbol: plan.occSymbol, instruction: plan.instruction,
-          contracts: plan.contracts, limitPrice: plan.limitPrice,
-          rationale: plan.rationale, selectedContract,
+          occSymbol: finalPlan.occSymbol, instruction: finalPlan.instruction,
+          contracts: finalPlan.contracts, limitPrice: finalPlan.limitPrice,
+          rationale: finalPlan.rationale, selectedContract,
           validationPassed, symbol: symbol.toUpperCase(), underlyingPrice, mode,
         });
         controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
