@@ -1076,11 +1076,33 @@ function saveExpenses(items: Expense[]) {
 
 const EMPTY_FORM = { name: '', amount: '', category: 'Other' as ExpenseCategory, frequency: 'monthly' as 'monthly' | 'annual' };
 
+interface DetectedExpense {
+  description: string;
+  category: string;
+  totalPaid: number;
+  avgMonthly: number;
+  occurrences: number;
+  lastDate: string;
+  isRecurring: boolean;
+}
+
+function mapApiCategory(cat: string): ExpenseCategory {
+  if (cat === 'Margin Interest') return 'Margin Interest';
+  if (cat === 'Advisory Fee' || cat === 'Account Fee') return 'Other';
+  if (cat === 'Transfer Fee' || cat === 'Options Fee') return 'Other';
+  if (cat === 'Tax Withholding') return 'Other';
+  return 'Other';
+}
+
 function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
   const [expenses, setExpenses]   = useState<Expense[]>(() => loadExpenses());
   const [editing, setEditing]     = useState<string | null>(null);
   const [showForm, setShowForm]   = useState(false);
   const [form, setForm]           = useState(EMPTY_FORM);
+  const [detected, setDetected]   = useState<DetectedExpense[]>([]);
+  const [importLoading, setImportLoading] = useState(false);
+  const [importError, setImportError]     = useState<string | null>(null);
+  const [showImport, setShowImport]       = useState(false);
 
   function persist(next: Expense[]) {
     setExpenses(next);
@@ -1113,6 +1135,34 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
 
   function remove(id: string) {
     persist(expenses.filter((e) => e.id !== id));
+  }
+
+  async function fetchFromSchwab() {
+    setImportLoading(true);
+    setImportError(null);
+    try {
+      const res = await fetch('/api/expenses');
+      if (!res.ok) throw new Error(await res.text());
+      const data = await res.json();
+      setDetected(data.detected ?? []);
+      setShowImport(true);
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setImportLoading(false);
+    }
+  }
+
+  function addDetected(d: DetectedExpense) {
+    const alreadyAdded = expenses.some((e) => e.name.toLowerCase() === d.description.toLowerCase());
+    if (alreadyAdded) return;
+    persist([...expenses, {
+      id: Date.now().toString(),
+      name: d.description,
+      amount: parseFloat(d.avgMonthly.toFixed(2)),
+      category: mapApiCategory(d.category),
+      frequency: 'monthly',
+    }]);
   }
 
   const totalMonthly = expenses.reduce((s, e) => s + (e.frequency === 'monthly' ? e.amount : e.amount / 12), 0);
@@ -1182,16 +1232,77 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
         </div>
       )}
 
-      {/* Add button */}
+      {/* Action buttons */}
       <div className="flex justify-between items-center">
         <p className="text-xs text-[#4a5070]">{expenses.length} expense{expenses.length !== 1 ? 's' : ''}</p>
-        <button
-          onClick={openAdd}
-          className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg transition-colors"
-        >
-          <Plus className="w-3.5 h-3.5" />Add Expense
-        </button>
+        <div className="flex gap-2">
+          <button
+            onClick={fetchFromSchwab}
+            disabled={importLoading}
+            className="flex items-center gap-1.5 text-xs bg-blue-600 hover:bg-blue-700 disabled:opacity-50 text-white px-3 py-1.5 rounded-lg transition-colors"
+          >
+            {importLoading ? <RefreshCw className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+            Import from Schwab
+          </button>
+          <button
+            onClick={openAdd}
+            className="flex items-center gap-1.5 text-xs bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-1.5 rounded-lg transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" />Add
+          </button>
+        </div>
       </div>
+
+      {/* Import error */}
+      {importError && (
+        <div className="text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded-lg px-3 py-2">
+          {importError}
+        </div>
+      )}
+
+      {/* Detected charges panel */}
+      {showImport && detected.length > 0 && (
+        <div className="bg-[#0f1117] border border-blue-800/40 rounded-lg p-4 space-y-3">
+          <div className="flex justify-between items-center">
+            <span className="text-xs font-semibold text-blue-300">Detected Brokerage Charges</span>
+            <button onClick={() => setShowImport(false)}><X className="w-4 h-4 text-[#7c82a0] hover:text-white" /></button>
+          </div>
+          <p className="text-[10px] text-[#4a5070]">These are fees and charges found in your Schwab account. Click + to add as a tracked expense.</p>
+          <div className="space-y-1.5">
+            {detected.map((d, i) => {
+              const alreadyAdded = expenses.some((e) => e.name.toLowerCase() === d.description.toLowerCase());
+              return (
+                <div key={i} className="flex items-center gap-2 text-xs">
+                  <div className="flex-1 min-w-0">
+                    <span className="text-white truncate block">{d.description}</span>
+                    <span className="text-[#4a5070]">
+                      {fmt$(d.avgMonthly, true)}/mo avg · {d.occurrences}×
+                      {d.isRecurring && <span className="text-blue-400 ml-1">recurring</span>}
+                    </span>
+                  </div>
+                  <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium flex-shrink-0 ${CATEGORY_COLORS[mapApiCategory(d.category)]}`}>
+                    {d.category}
+                  </span>
+                  <button
+                    onClick={() => addDetected(d)}
+                    disabled={alreadyAdded}
+                    className={`flex-shrink-0 p-1.5 rounded transition-colors ${alreadyAdded ? 'text-[#4a5070] cursor-default' : 'text-emerald-400 hover:bg-emerald-900/30'}`}
+                    title={alreadyAdded ? 'Already added' : 'Add to tracker'}
+                  >
+                    {alreadyAdded ? <CheckCircle className="w-3.5 h-3.5" /> : <Plus className="w-3.5 h-3.5" />}
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+      )}
+
+      {showImport && detected.length === 0 && (
+        <div className="text-xs text-[#4a5070] bg-[#0f1117] border border-[#2d3248] rounded-lg px-3 py-3 text-center">
+          No brokerage charges found in the last 90 days.
+        </div>
+      )}
 
       {/* Add / edit form */}
       {showForm && (
