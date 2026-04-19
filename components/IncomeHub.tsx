@@ -1034,8 +1034,6 @@ function MarginTab({
 
 // ─── Tab: Expenses ────────────────────────────────────────────────────────────
 
-const EXPENSES_KEY = 'triple-c-expenses';
-
 const EXPENSE_CATEGORIES = [
   'Housing', 'Utilities', 'Food', 'Transport', 'Insurance',
   'Subscriptions', 'Healthcare', 'Margin Interest', 'Entertainment', 'Other',
@@ -1063,15 +1061,19 @@ const CATEGORY_COLORS: Record<ExpenseCategory, string> = {
   'Other':            'bg-[#2d3248] text-[#7c82a0]',
 };
 
-function loadExpenses(): Expense[] {
-  try {
-    const raw = typeof window !== 'undefined' ? localStorage.getItem(EXPENSES_KEY) : null;
-    return raw ? JSON.parse(raw) : [];
-  } catch { return []; }
+async function fetchSavedExpenses(): Promise<Expense[]> {
+  const res = await fetch('/api/expenses/saved');
+  if (!res.ok) return [];
+  const data = await res.json();
+  return Array.isArray(data.expenses) ? data.expenses : [];
 }
 
-function saveExpenses(items: Expense[]) {
-  try { localStorage.setItem(EXPENSES_KEY, JSON.stringify(items)); } catch { /* ignore */ }
+async function persistExpenses(items: Expense[]): Promise<void> {
+  await fetch('/api/expenses/saved', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ expenses: items }),
+  });
 }
 
 const EMPTY_FORM = { name: '', amount: '', category: 'Other' as ExpenseCategory, frequency: 'monthly' as 'monthly' | 'annual' };
@@ -1093,7 +1095,7 @@ function mapApiCategory(cat: string): ExpenseCategory {
 }
 
 function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
-  const [expenses, setExpenses]   = useState<Expense[]>(() => loadExpenses());
+  const [expenses, setExpenses]   = useState<Expense[]>([]);
   const [editing, setEditing]     = useState<string | null>(null);
   const [showForm, setShowForm]   = useState(false);
   const [form, setForm]           = useState(EMPTY_FORM);
@@ -1102,9 +1104,13 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
   const [importError, setImportError]     = useState<string | null>(null);
   const [showImport, setShowImport]       = useState(false);
 
+  useEffect(() => {
+    fetchSavedExpenses().then(setExpenses);
+  }, []);
+
   function persist(next: Expense[]) {
     setExpenses(next);
-    saveExpenses(next);
+    persistExpenses(next);
   }
 
   function openAdd() {
@@ -1384,7 +1390,7 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
         </div>
       )}
 
-      <p className="text-[10px] text-[#4a5070]">Stored locally in your browser. Annual expenses are divided by 12 for monthly comparison.</p>
+      <p className="text-[10px] text-[#4a5070]">Synced to your account. Annual expenses are divided by 12 for monthly comparison.</p>
     </div>
   );
 }

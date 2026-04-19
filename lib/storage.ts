@@ -78,3 +78,14 @@ export async function listAnalyses(accountHash: string): Promise<AnalysisRecord[
     .sort((a, b) => b.createdAt - a.createdAt)
     .slice(0, 20);
 }
+
+// ─── User expenses ────────────────────────────────────────────────────────────
+
+export async function saveUserExpenses(expenses: unknown[]): Promise<void> {
+  await getStore('user-expenses').setJSON('expenses', expenses);
+}
+
+export async function getUserExpenses(): Promise<unknown[]> {
+  const data = await getStore('user-expenses').get('expenses', { type: 'json' });
+  return Array.isArray(data) ? data : [];
+}
