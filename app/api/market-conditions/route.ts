@@ -108,80 +108,122 @@ function normalize(t: number, c: number, i: number, h: number) {
 }
 
 /**
- * Generate AI recommendation based on market conditions.
- * All scenarios use Vol 7 base targets (Triples 10 / Cornerstone 20 / Income 65 / Hedge 5 = 100%)
- * and are guaranteed to sum to 100 via normalize().
+ * Generate recommendation based on the COMBINED VIX + TREND LOGIC from Vol 7.
+ * Allocations follow the system prompt's VIX-based and trend-based shift rules exactly.
+ * All scenarios use Vol 7 base: Triples 10 / Cornerstone 20 / Income 65 / Hedge 5 = 100.
+ * normalize() adjusts income as the flex bucket to guarantee the sum is always 100.
  */
 function generateRecommendation(marketData: MarketData): AllocationRecommendation {
   const { vix, marketTrend } = marketData;
+  const v = vix.toFixed(1);
 
-  let reason = '';
-  let confidence = 0.7;
-  let riskLevel: 'low' | 'medium' | 'high' = 'medium';
-
-  // Each set of four values must sum to 100. normalize() enforces this as a safety net.
-  let alloc = normalize(10, 20, 65, 5); // Vol 7 defaults
-
+  // VIX < 15 + BULLISH → MOST AGGRESSIVE: Triples +30% (VIX) +20% (trend) = 15%, Hedges min 2%
   if (vix < 15 && marketTrend === 'bullish') {
-    reason = `VIX is low (${vix.toFixed(1)}) and market is bullish. Markets are calm and rallying — ideal for leveraged exposure. Increase Triples to capture gains; trim hedges since downside risk is minimal.`;
-    alloc = normalize(20, 20, 56, 4); // 100
-    confidence = 0.85;
-    riskLevel = 'medium';
-  } else if (vix < 15 && marketTrend === 'neutral') {
-    reason = `VIX is low (${vix.toFixed(1)}) but market is flat. Hold current Vol 7 allocation.`;
-    alloc = normalize(10, 20, 65, 5); // 100
-    confidence = 0.70;
-    riskLevel = 'low';
-  } else if (vix >= 15 && vix < 25 && marketTrend === 'bullish') {
-    reason = `VIX is in normal range (${vix.toFixed(1)}) and market is bullish. Maintain balanced allocation with a slight lean toward growth.`;
-    alloc = normalize(15, 20, 60, 5); // 100
-    confidence = 0.75;
-    riskLevel = 'medium';
-  } else if (vix >= 25 && vix < 40 && (marketTrend === 'bearish' || marketTrend === 'neutral')) {
-    reason = `VIX is elevated (${vix.toFixed(1)}) and market sentiment is uncertain. Increase hedges for downside protection; reduce Triples exposure.`;
-    alloc = normalize(5, 20, 65, 10); // 100
-    confidence = 0.80;
-    riskLevel = 'medium';
-  } else if (vix >= 40) {
-    reason = `VIX is at extreme levels (${vix.toFixed(1)}) — market is in panic mode. Set maximum hedges now, then prepare dry powder to nibble-buy Triples on weakness.`;
-    alloc = normalize(3, 17, 65, 15); // 100
-    confidence = 0.90;
-    riskLevel = 'high';
-  } else {
-    reason = `Market conditions are mixed. Hold current Vol 7 allocation with no major adjustments.`;
-    alloc = normalize(10, 20, 65, 5); // 100
-    confidence = 0.60;
-    riskLevel = 'low';
+    return {
+      recommendation: '🚀 Be Aggressive: Maximize Triples, Ride the Bull Market',
+      reason: `VIX is low (${v}) and market is bullish — peak compounding environment. Raise Triples to 15%, cut Hedges to minimum 2%.`,
+      suggestedChanges: normalize(15, 20, 63, 2),
+      confidence: 0.85,
+      riskLevel: 'medium',
+    };
   }
 
+  // VIX < 15 + NEUTRAL → Hold baseline (VIX calm but no trend signal)
+  if (vix < 15 && marketTrend === 'neutral') {
+    return {
+      recommendation: '⏸️ Hold Baseline: Low Volatility, No Clear Trend',
+      reason: `VIX is low (${v}) but market is flat. Hold Vol 7 baseline — no signal to deviate.`,
+      suggestedChanges: normalize(10, 20, 65, 5),
+      confidence: 0.70,
+      riskLevel: 'low',
+    };
+  }
+
+  // VIX < 15 + BEARISH → Contradictory signals; VIX calm but trend is down — hold baseline
+  if (vix < 15 && marketTrend === 'bearish') {
+    return {
+      recommendation: '⚠️ Mixed Signals: Low VIX but Bearish Trend — Hold Baseline',
+      reason: `VIX is low (${v}) yet market is trending down. Contradictory signals — hold baseline and monitor.`,
+      suggestedChanges: normalize(10, 20, 65, 5),
+      confidence: 0.55,
+      riskLevel: 'low',
+    };
+  }
+
+  // VIX 15–25 + BULLISH → MODERATE GROWTH: Triples +10% (11%), Income -5% (62%)
+  if (vix >= 15 && vix < 25 && marketTrend === 'bullish') {
+    return {
+      recommendation: '✅ Moderate Growth: Lean Into Triples, Markets Are Healthy',
+      reason: `VIX normal (${v}) with bullish trend. Triples +10% to 11%; rotate small income slice into growth.`,
+      suggestedChanges: normalize(11, 20, 64, 5),
+      confidence: 0.75,
+      riskLevel: 'medium',
+    };
+  }
+
+  // VIX 15–25 + NEUTRAL → Hold baseline
+  if (vix >= 15 && vix < 25 && marketTrend === 'neutral') {
+    return {
+      recommendation: '⏸️ Hold Baseline: Normal Conditions, No Adjustment Needed',
+      reason: `VIX normal (${v}) and market is flat. This is the range the strategy was designed for — no changes.`,
+      suggestedChanges: normalize(10, 20, 65, 5),
+      confidence: 0.70,
+      riskLevel: 'low',
+    };
+  }
+
+  // VIX 15–25 + BEARISH → DEFENSIVE: Triples -30% (7%), Hedges +50% (8%), Income +20% (65%)
+  if (vix >= 15 && vix < 25 && marketTrend === 'bearish') {
+    return {
+      recommendation: '🛡️ Defensive: Reduce Triples, Raise Hedges, Protect Income',
+      reason: `VIX normal (${v}) but market is trending down. Triples -30% to 7%; Hedges +50% to 8%; add bond stabilizers.`,
+      suggestedChanges: normalize(7, 20, 65, 8),
+      confidence: 0.75,
+      riskLevel: 'medium',
+    };
+  }
+
+  // VIX 25–40 + BULLISH → VIX level dominates; stay cautious despite bullish day
+  if (vix >= 25 && vix < 40 && marketTrend === 'bullish') {
+    return {
+      recommendation: '⚠️ Stay Cautious: Elevated VIX Overrides Bullish Day',
+      reason: `VIX elevated (${v}) despite a green day — do not chase. Hold reduced Triples; maintain hedges.`,
+      suggestedChanges: normalize(8, 20, 64, 8),
+      confidence: 0.75,
+      riskLevel: 'medium',
+    };
+  }
+
+  // VIX 25–40 + BEARISH or NEUTRAL → CAUTIOUS: Triples -40% (6%), Hedges +100% (10%)
+  if (vix >= 25 && vix < 40) {
+    return {
+      recommendation: '⚠️ Be Cautious: Increase Hedges, Reduce Triples Exposure',
+      reason: `VIX elevated (${v}) with uncertain/negative trend. Triples -40% to 6%; Hedges +100% to 10%. Sell Triples into strength, not weakness.`,
+      suggestedChanges: normalize(6, 20, 64, 10),
+      confidence: 0.80,
+      riskLevel: 'medium',
+    };
+  }
+
+  // VIX > 40 → EXTREME: Minimize Triples (2%), Maximize Hedges (15%), Cornerstone holds at 20%
+  if (vix >= 40) {
+    return {
+      recommendation: '💎 Buy the Dip: Extreme Fear = Best Opportunity. Set Hedges, Buy on Weakness',
+      reason: `VIX extreme (${v}) — panic mode. Raise hedges to 15%; nibble-buy Triples at 2%; DRIP at NAV is an automatic buying advantage.`,
+      suggestedChanges: normalize(2, 20, 63, 15),
+      confidence: 0.90,
+      riskLevel: 'high',
+    };
+  }
+
+  // Fallback (should not be reached)
   return {
-    recommendation: getRecommendationSummary(alloc.triplesPct, alloc.cornerstonePct, alloc.incomePct, alloc.hedgePct, vix, marketTrend),
-    reason,
-    suggestedChanges: alloc,
-    confidence,
-    riskLevel,
+    recommendation: '⏸️ Hold: No Clear Signal',
+    reason: 'Market conditions are mixed. Hold current Vol 7 allocation.',
+    suggestedChanges: normalize(10, 20, 65, 5),
+    confidence: 0.60,
+    riskLevel: 'low',
   };
-}
-
-function getRecommendationSummary(
-  triples: number,
-  cornerstone: number,
-  income: number,
-  hedge: number,
-  vix: number,
-  trend: string
-): string {
-  if (vix < 15 && trend === 'bullish') {
-    return '🚀 Be Aggressive: Increase Triples, Ride the Bull Market';
-  } else if (vix >= 25 && vix < 40) {
-    return '⚠️ Be Cautious: Increase Hedges, Reduce Triples Exposure';
-  } else if (vix >= 40) {
-    return '💎 Buy the Dip: Extreme Fear = Best Opportunity. Set Hedges, Buy on Weakness';
-  } else if (vix >= 15 && vix < 25 && trend === 'bullish') {
-    return '✅ Stay Balanced: Markets are Healthy. Hold Your Current Allocation';
-  } else {
-    return '⏸️ Hold: Markets are Calm. No Major Adjustments Needed';
-  }
 }
 
 export async function GET(request: NextRequest) {

@@ -97,9 +97,10 @@ export async function POST(req: Request) {
   const enrichedSnapshot = {
     ...portfolio,
     strategy_config: config ?? {
-      triplesTargetPct:     25,
-      cornerstoneTargetPct: 15,
-      incomeTargetPct:      60,
+      triplesTargetPct:     10,   // Vol 7 default  ─┐
+      cornerstoneTargetPct: 20,   // Vol 7 default   │ sum = 100%
+      incomeTargetPct:      65,   // Vol 7 default   │
+      hedgeTargetPct:        5,   // Vol 7 default  ─┘
       marginWarnPct:        30,
       marginMaxPct:         50,
       fireMonthlyTarget:    10000,
