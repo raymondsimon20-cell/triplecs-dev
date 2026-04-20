@@ -178,7 +178,7 @@ async function handlePost(req: Request) {
   const NON_EQUITY = new Set(['OPTION', 'FIXED_INCOME', 'CASH_EQUIVALENT', 'CURRENCY', 'FUTURE']);
   const equityPositions = positions.filter(
     (p) => !NON_EQUITY.has(p.instrument.assetType)
-        && Number(p.longQuantity) > 0
+        && (Number(p.longQuantity) > 0 || Number(p.shortQuantity) > 0)
         && p.pillar !== 'other',
   );
 
@@ -186,9 +186,30 @@ async function handlePost(req: Request) {
     .sort((a, b) => b.marketValue - a.marketValue)
     .map((p) => {
       const price = positionPrice(p);
+      if (Number(p.shortQuantity) > 0) {
+        return `${p.instrument.symbol} | ${p.pillar} | SHORT ${p.shortQuantity} shares | $${price.toFixed(2)}/sh | $${p.marketValue.toFixed(0)} value`;
+      }
       return `${p.instrument.symbol} | ${p.pillar} | ${p.longQuantity} shares | $${price.toFixed(2)}/sh | $${p.marketValue.toFixed(0)} value`;
     })
     .join('\n');
+
+  // Hedge pairs: when a long is trimmed, the paired short should be rebalanced too
+  const HEDGE_PAIRS: Record<string, string> = {
+    'UPRO': 'SPXU', 'SPXL': 'SPXU',
+    'TQQQ': 'SQQQ',
+    'UDOW': 'SDOW',
+    'SOXL': 'SOXS',
+    'FNGU': 'FNGD',
+  };
+
+  // Target size for each short hedge = hedge pillar target split evenly across active pairs
+  const activePairs = equityPositions
+    .filter((p) => Number(p.shortQuantity) > 0 && p.pillar === 'hedge')
+    .map((p) => p.instrument.symbol);
+  const hedgeTargetDollars = (targets.hedgePct / 100) * totalValue;
+  const perPairTargetDollars = activePairs.length > 0
+    ? hedgeTargetDollars / activePairs.length
+    : hedgeTargetDollars;
 
   const driftRows = drifts
     .map((d) => {
@@ -214,6 +235,11 @@ CURRENT EQUITY POSITIONS (sell/buy candidates):
 symbol | pillar | shares | price | value
 ${positionRows || 'No equity positions found.'}
 
+HEDGE PAIRS (long ↔ short):
+  UPRO/SPXL ↔ SPXU  |  TQQQ ↔ SQQQ  |  UDOW ↔ SDOW  |  SOXL ↔ SOXS  |  FNGU ↔ FNGD
+Active short hedge positions (symbols with SHORT above): ${activePairs.join(', ') || 'none'}
+Target size per short hedge: $${perPairTargetDollars.toFixed(0)} (hedge target ${targets.hedgePct}% ÷ ${activePairs.length || 1} active pairs)
+
 STRATEGY RULES (must follow exactly):
 1. 1/3 RULE: When trimming income, route exactly 1/3 of the trimmed dollars into Triples (TQQQ or UPRO preferred). The remaining 2/3 stays as freed capital / cash.
 2. NEVER sell Cornerstone (CLM or CRF). These are long-term DRIP positions — do not touch.
@@ -229,6 +255,11 @@ STRATEGY RULES (must follow exactly):
 8. Keep individual orders manageable — split large sells across top 2-3 positions if needed.
 9. For income buys: prefer monthly-distribution ETFs with >15% yield (YMAG, XDTE, FEPI) over lower-yield names.
 10. For triples buys: prefer index-linked (TQQQ/UPRO) unless the user already holds significant sector 3×.
+11. SHORT REBALANCE RULE: Whenever a triple long is trimmed or sold, check its paired short hedge
+    (see HEDGE PAIRS above). If the short is above or below its target size ($${perPairTargetDollars.toFixed(0)}),
+    include a BUY TO COVER (SELL instruction on short) or SELL SHORT (BUY instruction flagged as short)
+    to bring it back to target. Use the hedge's current price and Math.floor for share count.
+    If no paired short exists yet and hedges are under target, recommend opening one.
 
 TASK: Generate the minimum set of orders to move each pillar to within 1% of target.
 Apply the 1/3 rule automatically for income trims.
@@ -258,7 +289,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
     equityPositions.map((p) => [p.instrument.symbol, positionPrice(p)])
   );
   const positionShareMap = new Map(
-    equityPositions.map((p) => [p.instrument.symbol, p.longQuantity])
+    equityPositions.map((p) => [p.instrument.symbol, Math.max(p.longQuantity, p.shortQuantity)])
   );
   // All known symbols from the Triple C universe — any can be suggested as a new buy
   const APPROVED_BUY_NEW = new Set([
