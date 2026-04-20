@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getTokens } from '@/lib/storage';
 import { getQuotes } from '@/lib/schwab/client';
 
+export const dynamic = 'force-dynamic';
+
 interface MarketData {
   vix: number;
   vixChange: number;
