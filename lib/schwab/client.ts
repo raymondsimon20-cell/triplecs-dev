@@ -160,54 +160,25 @@ export async function getQuotes(
   );
   if (validSymbols.length === 0) return {};
 
-  const params = new URLSearchParams({
-    symbols: validSymbols.join(','),
-    fields: 'quote,reference',
-    indicative: 'false',
-  });
+  // Build query string manually — URLSearchParams encodes '$' as '%24' which
+  // Schwab rejects for index symbols like $VIX.X, $SPX.X, $NDX.X.
+  function buildQuoteUrl(syms: string[]): string {
+    const tail = new URLSearchParams({ fields: 'quote,reference', indicative: 'false' }).toString();
+    return `${MARKET_BASE}/quotes?symbols=${syms.join(',')}&${tail}`;
+  }
 
   try {
-    return await schwabFetch<SchwabQuotesResponse>(
-      `${MARKET_BASE}/quotes?${params.toString()}`,
-      tokens
-    );
+    return await schwabFetch<SchwabQuotesResponse>(buildQuoteUrl(validSymbols), tokens);
   } catch (err) {
-    // If batch fails (likely a bad symbol), fall back to individual fetches
     console.warn('[getQuotes] Batch request failed, falling back to individual symbol fetches:', err);
     const result: SchwabQuotesResponse = {};
-    const CHUNK_SIZE = 10; // fetch in small batches to limit API calls
 
-    for (let i = 0; i < validSymbols.length; i += CHUNK_SIZE) {
-      const chunk = validSymbols.slice(i, i + CHUNK_SIZE);
-      const chunkParams = new URLSearchParams({
-        symbols: chunk.join(','),
-        fields: 'quote,reference',
-        indicative: 'false',
-      });
+    for (const sym of validSymbols) {
       try {
-        const chunkResult = await schwabFetch<SchwabQuotesResponse>(
-          `${MARKET_BASE}/quotes?${chunkParams.toString()}`,
-          tokens
-        );
-        Object.assign(result, chunkResult);
-      } catch (chunkErr) {
-        // If a chunk fails, try each symbol individually
-        for (const sym of chunk) {
-          try {
-            const singleParams = new URLSearchParams({
-              symbols: sym,
-              fields: 'quote,reference',
-              indicative: 'false',
-            });
-            const singleResult = await schwabFetch<SchwabQuotesResponse>(
-              `${MARKET_BASE}/quotes?${singleParams.toString()}`,
-              tokens
-            );
-            Object.assign(result, singleResult);
-          } catch {
-            console.warn(`[getQuotes] Skipping unresolvable symbol: ${sym}`);
-          }
-        }
+        const single = await schwabFetch<SchwabQuotesResponse>(buildQuoteUrl([sym]), tokens);
+        Object.assign(result, single);
+      } catch {
+        console.warn(`[getQuotes] Skipping unresolvable symbol: ${sym}`);
       }
     }
     return result;

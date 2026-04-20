@@ -43,22 +43,21 @@ async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: strin
     const tokens = await getTokens();
     if (!tokens) throw new Error('No Schwab tokens');
 
-    // Try multiple VIX symbol formats — Schwab has been inconsistent about $VIX.X vs VIX
-    const VIX_CANDIDATES = ['$VIX.X', 'VIX', 'VIXY'];
-    const quotes = await getQuotes(tokens, [...VIX_CANDIDATES, 'SPY', 'QQQ']);
+    // Use actual indices: $SPX.X = S&P 500, $NDX.X = Nasdaq 100, $VIX.X = VIX
+    const quotes = await getQuotes(tokens, ['$VIX.X', '$SPX.X', '$NDX.X']);
 
-    const vixQ = VIX_CANDIDATES.map((s) => quotes[s]?.quote).find(Boolean);
-    const spyQ   = quotes['SPY']?.quote;
-    const qqqQ   = quotes['QQQ']?.quote;
+    const vixQ  = quotes['$VIX.X']?.quote;
+    const spxQ  = quotes['$SPX.X']?.quote;
+    const ndxQ  = quotes['$NDX.X']?.quote;
 
-    const vix        = vixQ?.lastPrice  ?? 20;
-    const vixChange  = vixQ?.netChange  ?? 0;
-    const spyPrice   = spyQ?.lastPrice  ?? 0;
-    const spyClose   = spyQ?.closePrice ?? spyPrice;
-    const sp500Change = spyClose > 0 ? ((spyPrice - spyClose) / spyClose) * 100 : 0;
-    const qqqPrice   = qqqQ?.lastPrice  ?? 0;
-    const qqqClose   = qqqQ?.closePrice ?? qqqPrice;
-    const nasdaqChange = qqqClose > 0 ? ((qqqPrice - qqqClose) / qqqClose) * 100 : 0;
+    const vix         = vixQ?.lastPrice  ?? 20;
+    const vixChange   = vixQ?.netChange  ?? 0;
+    const spxPrice    = spxQ?.lastPrice  ?? 0;
+    const spxClose    = spxQ?.closePrice ?? spxPrice;
+    const sp500Change = spxClose > 0 ? ((spxPrice - spxClose) / spxClose) * 100 : 0;
+    const ndxPrice    = ndxQ?.lastPrice  ?? 0;
+    const ndxClose    = ndxQ?.closePrice ?? ndxPrice;
+    const nasdaqChange = ndxClose > 0 ? ((ndxPrice - ndxClose) / ndxClose) * 100 : 0;
 
     let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
     if (vix < 15) volatilityLevel = 'low';
@@ -70,18 +69,18 @@ async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: strin
       sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
 
     const missingSymbols = [
-      !vixQ && 'VIX',
-      !spyQ && 'SPY',
-      !qqqQ && 'QQQ',
+      !vixQ && '$VIX.X',
+      !spxQ && '$SPX.X',
+      !ndxQ && '$NDX.X',
     ].filter(Boolean);
 
     return {
       data: {
         vix,
         vixChange,
-        sp500Price:      spyPrice,
+        sp500Price:      spxPrice,
         sp500Change,
-        nasdaq100Price:  qqqPrice,
+        nasdaq100Price:  ndxPrice,
         nasdaq100Change: nasdaqChange,
         marketTrend,
         volatilityLevel,
