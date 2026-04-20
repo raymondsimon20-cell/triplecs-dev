@@ -34,7 +34,7 @@ interface AllocationRecommendation {
   riskLevel: 'low' | 'medium' | 'high';
 }
 
-async function fetchMarketData(): Promise<MarketData> {
+async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: string }> {
   const now = new Date();
 
   try {
@@ -47,6 +47,11 @@ async function fetchMarketData(): Promise<MarketData> {
     const vixQ   = quotes['$VIX.X']?.quote;
     const spyQ   = quotes['SPY']?.quote;
     const qqqQ   = quotes['QQQ']?.quote;
+
+    console.log('[market-conditions] quote keys returned:', Object.keys(quotes));
+    console.log('[market-conditions] VIX quote:', JSON.stringify(vixQ));
+    console.log('[market-conditions] SPY quote:', JSON.stringify(spyQ));
+    console.log('[market-conditions] QQQ quote:', JSON.stringify(qqqQ));
 
     const vix        = vixQ?.lastPrice  ?? 20;
     const vixChange  = vixQ?.netChange  ?? 0;
@@ -66,26 +71,41 @@ async function fetchMarketData(): Promise<MarketData> {
     const marketTrend: 'bullish' | 'neutral' | 'bearish' =
       sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
 
+    const missingSymbols = [
+      !vixQ && '$VIX.X',
+      !spyQ && 'SPY',
+      !qqqQ && 'QQQ',
+    ].filter(Boolean);
+
     return {
-      vix,
-      vixChange,
-      sp500Price:      spyPrice,
-      sp500Change,
-      nasdaq100Price:  qqqPrice,
-      nasdaq100Change: nasdaqChange,
-      marketTrend,
-      volatilityLevel,
-      lastUpdated: now.toISOString(),
+      data: {
+        vix,
+        vixChange,
+        sp500Price:      spyPrice,
+        sp500Change,
+        nasdaq100Price:  qqqPrice,
+        nasdaq100Change: nasdaqChange,
+        marketTrend,
+        volatilityLevel,
+        lastUpdated: now.toISOString(),
+      },
+      fetchError: missingSymbols.length > 0
+        ? `No quote data returned for: ${missingSymbols.join(', ')}`
+        : undefined,
     };
-  } catch {
-    // Outside market hours or auth issue — return neutral defaults
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error('[market-conditions] fetchMarketData error:', msg);
     return {
-      vix: 20, vixChange: 0,
-      sp500Price: 0, sp500Change: 0,
-      nasdaq100Price: 0, nasdaq100Change: 0,
-      marketTrend: 'neutral',
-      volatilityLevel: 'normal',
-      lastUpdated: now.toISOString(),
+      data: {
+        vix: 20, vixChange: 0,
+        sp500Price: 0, sp500Change: 0,
+        nasdaq100Price: 0, nasdaq100Change: 0,
+        marketTrend: 'neutral',
+        volatilityLevel: 'normal',
+        lastUpdated: now.toISOString(),
+      },
+      fetchError: msg,
     };
   }
 }
@@ -175,7 +195,7 @@ function getRecommendationSummary(
 
 export async function GET(request: NextRequest) {
   try {
-    const marketData = await fetchMarketData();
+    const { data: marketData, fetchError } = await fetchMarketData();
     const recommendation = generateRecommendation(marketData);
 
     return NextResponse.json(
@@ -183,6 +203,7 @@ export async function GET(request: NextRequest) {
         success: true,
         marketData,
         recommendation,
+        fetchError,
         timestamp: new Date().toISOString(),
       },
       {

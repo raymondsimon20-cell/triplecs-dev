@@ -49,33 +49,22 @@ export function MarketConditionsDashboard({
   const [loading, setLoading] = useState(true);
   const [lastFetchTime, setLastFetchTime] = useState<string>('');
   const [showApplyButton, setShowApplyButton] = useState(false);
+  const [fetchError, setFetchError] = useState<string | null>(null);
 
   useEffect(() => {
     const fetchMarketData = async () => {
       try {
         setLoading(true);
-        // In production, this would call a real market data API
-        // For now, we'll use historical context or generate realistic data
         const response = await fetch('/api/market-conditions');
         if (response.ok) {
           const data = await response.json();
           setMarketData(data.marketData);
           setRecommendation(data.recommendation);
+          setFetchError(data.fetchError ?? null);
         }
       } catch (error) {
         console.error('Failed to fetch market data:', error);
-        // Fallback: show placeholder
-        setMarketData({
-          vix: 18.5,
-          vixChange: 2.1,
-          sp500Price: 5450.23,
-          sp500Change: 1.2,
-          nasdaq100Price: 17850.5,
-          nasdaq100Change: 0.8,
-          marketTrend: 'bullish',
-          volatilityLevel: 'normal',
-          lastUpdated: new Date().toLocaleTimeString(),
-        });
+        setFetchError(error instanceof Error ? error.message : 'Failed to fetch market data');
       } finally {
         setLoading(false);
         setLastFetchTime(new Date().toLocaleTimeString());
@@ -147,6 +136,11 @@ export function MarketConditionsDashboard({
 
   return (
     <div className="w-full space-y-4">
+      {fetchError && (
+        <div className="text-xs text-red-400 bg-red-900/20 border border-red-800/40 rounded-lg px-3 py-2">
+          Market data error: {fetchError}
+        </div>
+      )}
       {/* Market Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* VIX Card */}
