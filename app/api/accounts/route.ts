@@ -80,7 +80,12 @@ export async function GET(req: Request) {
           ? await client.getQuotes(symbols)
           : {};
 
-        const totalValue = acct.currentBalances.liquidationValue ?? 0;
+        // Use gross market value (longs + shorts) so pillar % are based on
+        // total position exposure, not net equity. liquidationValue is net of
+        // margin debt and causes pillars to sum to >100% in margin accounts.
+        const totalValue =
+          (acct.currentBalances.longMarketValue ?? 0) +
+          Math.abs(acct.currentBalances.shortMarketValue ?? 0);
 
         const enrichedPositions = enrichPositions(
           positions,
