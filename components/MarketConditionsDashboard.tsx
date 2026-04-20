@@ -25,6 +25,8 @@ interface MarketData {
   marketTrend: 'bullish' | 'neutral' | 'bearish';
   volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
   lastUpdated: string;
+  stale?: boolean;
+  error?: string;
 }
 
 interface AllocationRecommendation {
@@ -54,27 +56,34 @@ export function MarketConditionsDashboard({
     const fetchMarketData = async () => {
       try {
         setLoading(true);
-        // In production, this would call a real market data API
-        // For now, we'll use historical context or generate realistic data
         const response = await fetch('/api/market-conditions');
         if (response.ok) {
           const data = await response.json();
           setMarketData(data.marketData);
           setRecommendation(data.recommendation);
+        } else {
+          setMarketData({
+            vix: 20, vixChange: 0,
+            sp500Price: 0, sp500Change: 0,
+            nasdaq100Price: 0, nasdaq100Change: 0,
+            marketTrend: 'neutral',
+            volatilityLevel: 'normal',
+            lastUpdated: new Date().toISOString(),
+            stale: true,
+            error: `API error ${response.status}`,
+          });
         }
       } catch (error) {
         console.error('Failed to fetch market data:', error);
-        // Fallback: show placeholder
         setMarketData({
-          vix: 18.5,
-          vixChange: 2.1,
-          sp500Price: 5450.23,
-          sp500Change: 1.2,
-          nasdaq100Price: 17850.5,
-          nasdaq100Change: 0.8,
-          marketTrend: 'bullish',
+          vix: 20, vixChange: 0,
+          sp500Price: 0, sp500Change: 0,
+          nasdaq100Price: 0, nasdaq100Change: 0,
+          marketTrend: 'neutral',
           volatilityLevel: 'normal',
-          lastUpdated: new Date().toLocaleTimeString(),
+          lastUpdated: new Date().toISOString(),
+          stale: true,
+          error: 'Network error — unable to reach /api/market-conditions',
         });
       } finally {
         setLoading(false);
@@ -147,6 +156,23 @@ export function MarketConditionsDashboard({
 
   return (
     <div className="w-full space-y-4">
+      {marketData.stale && (
+        <div className="bg-red-900/20 border border-red-800/50 rounded-lg p-3 flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 text-red-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs">
+            <p className="text-red-300 font-semibold">Live market data unavailable</p>
+            <p className="text-gray-400 mt-0.5">
+              {marketData.error ?? 'Showing neutral defaults. Check Schwab connection on the Settings tab.'}
+            </p>
+          </div>
+        </div>
+      )}
+      {!marketData.stale && marketData.error && (
+        <div className="bg-yellow-900/20 border border-yellow-800/50 rounded-lg p-2 flex items-center gap-2 text-xs text-yellow-300">
+          <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+          {marketData.error}
+        </div>
+      )}
       {/* Market Overview Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         {/* VIX Card */}

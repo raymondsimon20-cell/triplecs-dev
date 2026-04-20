@@ -9,6 +9,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getTokens } from '@/lib/storage';
 import { getQuotes } from '@/lib/schwab/client';
 
+export const dynamic = 'force-dynamic';
+
 interface MarketData {
   vix: number;
   vixChange: number;
@@ -19,6 +21,8 @@ interface MarketData {
   marketTrend: 'bullish' | 'neutral' | 'bearish';
   volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
   lastUpdated: string;
+  stale?: boolean;
+  error?: string;
 }
 
 interface AllocationRecommendation {
@@ -37,57 +41,85 @@ interface AllocationRecommendation {
 async function fetchMarketData(): Promise<MarketData> {
   const now = new Date();
 
+  const neutral = (error?: string): MarketData => ({
+    vix: 20, vixChange: 0,
+    sp500Price: 0, sp500Change: 0,
+    nasdaq100Price: 0, nasdaq100Change: 0,
+    marketTrend: 'neutral',
+    volatilityLevel: 'normal',
+    lastUpdated: now.toISOString(),
+    stale: true,
+    ...(error ? { error } : {}),
+  });
+
+  let tokens;
   try {
-    const tokens = await getTokens();
-    if (!tokens) throw new Error('No Schwab tokens');
-
-    // $VIX.X = CBOE VIX index; SPY = S&P 500 proxy; QQQ = Nasdaq 100 proxy
-    const quotes = await getQuotes(tokens, ['$VIX.X', 'SPY', 'QQQ']);
-
-    const vixQ   = quotes['$VIX.X']?.quote;
-    const spyQ   = quotes['SPY']?.quote;
-    const qqqQ   = quotes['QQQ']?.quote;
-
-    const vix        = vixQ?.lastPrice  ?? 20;
-    const vixChange  = vixQ?.netChange  ?? 0;
-    const spyPrice   = spyQ?.lastPrice  ?? 0;
-    const spyClose   = spyQ?.closePrice ?? spyPrice;
-    const sp500Change = spyClose > 0 ? ((spyPrice - spyClose) / spyClose) * 100 : 0;
-    const qqqPrice   = qqqQ?.lastPrice  ?? 0;
-    const qqqClose   = qqqQ?.closePrice ?? qqqPrice;
-    const nasdaqChange = qqqClose > 0 ? ((qqqPrice - qqqClose) / qqqClose) * 100 : 0;
-
-    let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
-    if (vix < 15) volatilityLevel = 'low';
-    else if (vix < 25) volatilityLevel = 'normal';
-    else if (vix < 40) volatilityLevel = 'high';
-    else volatilityLevel = 'extreme';
-
-    const marketTrend: 'bullish' | 'neutral' | 'bearish' =
-      sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
-
-    return {
-      vix,
-      vixChange,
-      sp500Price:      spyPrice,
-      sp500Change,
-      nasdaq100Price:  qqqPrice,
-      nasdaq100Change: nasdaqChange,
-      marketTrend,
-      volatilityLevel,
-      lastUpdated: now.toISOString(),
-    };
-  } catch {
-    // Outside market hours or auth issue — return neutral defaults
-    return {
-      vix: 20, vixChange: 0,
-      sp500Price: 0, sp500Change: 0,
-      nasdaq100Price: 0, nasdaq100Change: 0,
-      marketTrend: 'neutral',
-      volatilityLevel: 'normal',
-      lastUpdated: now.toISOString(),
-    };
+    tokens = await getTokens();
+  } catch (err) {
+    console.error('[market-conditions] getTokens failed:', err);
+    return neutral('Unable to load Schwab tokens');
   }
+  if (!tokens) {
+    console.warn('[market-conditions] No Schwab tokens — user not authenticated');
+    return neutral('Not authenticated with Schwab');
+  }
+
+  // $VIX.X = CBOE VIX index; SPY = S&P 500 proxy; QQQ = Nasdaq 100 proxy.
+  // getQuotes is internally resilient: if one symbol fails, others still resolve.
+  let quotes;
+  try {
+    quotes = await getQuotes(tokens, ['$VIX.X', 'SPY', 'QQQ']);
+  } catch (err) {
+    console.error('[market-conditions] getQuotes failed:', err);
+    const msg = err instanceof Error ? err.message : String(err);
+    return neutral(msg === 'REFRESH_TOKEN_EXPIRED' ? 'Schwab session expired — please reconnect' : `Schwab quotes unavailable: ${msg}`);
+  }
+
+  const vixQ   = quotes['$VIX.X']?.quote;
+  const spyQ   = quotes['SPY']?.quote;
+  const qqqQ   = quotes['QQQ']?.quote;
+
+  const missing: string[] = [];
+  if (!vixQ) missing.push('$VIX.X');
+  if (!spyQ) missing.push('SPY');
+  if (!qqqQ) missing.push('QQQ');
+  if (missing.length > 0) {
+    console.warn(`[market-conditions] Missing quotes for: ${missing.join(', ')} — returned keys: ${Object.keys(quotes).join(', ')}`);
+  }
+
+  const vix        = vixQ?.lastPrice  ?? 20;
+  const vixChange  = vixQ?.netChange  ?? 0;
+  const spyPrice   = spyQ?.lastPrice  ?? 0;
+  const spyClose   = spyQ?.closePrice ?? spyPrice;
+  const sp500Change = spyClose > 0 ? ((spyPrice - spyClose) / spyClose) * 100 : 0;
+  const qqqPrice   = qqqQ?.lastPrice  ?? 0;
+  const qqqClose   = qqqQ?.closePrice ?? qqqPrice;
+  const nasdaqChange = qqqClose > 0 ? ((qqqPrice - qqqClose) / qqqClose) * 100 : 0;
+
+  let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
+  if (vix < 15) volatilityLevel = 'low';
+  else if (vix < 25) volatilityLevel = 'normal';
+  else if (vix < 40) volatilityLevel = 'high';
+  else volatilityLevel = 'extreme';
+
+  const marketTrend: 'bullish' | 'neutral' | 'bearish' =
+    sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
+
+  const stale = missing.length === 3;
+
+  return {
+    vix,
+    vixChange,
+    sp500Price:      spyPrice,
+    sp500Change,
+    nasdaq100Price:  qqqPrice,
+    nasdaq100Change: nasdaqChange,
+    marketTrend,
+    volatilityLevel,
+    lastUpdated: now.toISOString(),
+    ...(stale ? { stale: true, error: 'Schwab returned no quote data' } : {}),
+    ...(missing.length > 0 && !stale ? { error: `Partial data — missing: ${missing.join(', ')}` } : {}),
+  };
 }
 
 /** Normalize allocations so they always sum to exactly 100, adjusting income as the flex bucket. */
