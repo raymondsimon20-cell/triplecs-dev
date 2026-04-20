@@ -319,6 +319,41 @@ export function getFundFamilyConcentrations(
   return [...map.values()].sort((a, b) => b.portfolioPercent - a.portfolioPercent);
 }
 
+// ─── Tax-loss harvest candidates ─────────────────────────────────────────────
+
+export interface TaxHarvestCandidate {
+  symbol: string;
+  pillar: PillarType;
+  gainLossPct: number;
+  gainLossDollars: number;
+  marketValue: number;
+}
+
+/**
+ * Returns income/cornerstone positions (not triples) with unrealized loss ≤ -threshold%.
+ * Triples are excluded — those should be held through drawdowns per strategy rules.
+ */
+export function getTaxHarvestCandidates(
+  positions: EnrichedPosition[],
+  thresholdPct = 10,
+): TaxHarvestCandidate[] {
+  return positions
+    .filter(
+      (p) =>
+        p.pillar !== 'triples' &&
+        p.longQuantity > 0 &&
+        p.gainLossPercent <= -thresholdPct,
+    )
+    .map((p) => ({
+      symbol:          p.instrument.symbol,
+      pillar:          p.pillar,
+      gainLossPct:     parseFloat(p.gainLossPercent.toFixed(2)),
+      gainLossDollars: parseFloat(p.gainLoss.toFixed(2)),
+      marketValue:     p.marketValue,
+    }))
+    .sort((a, b) => a.gainLossPct - b.gainLossPct); // worst losses first
+}
+
 // ─── Margin / risk rule checks ────────────────────────────────────────────────
 
 export interface RuleAlert {

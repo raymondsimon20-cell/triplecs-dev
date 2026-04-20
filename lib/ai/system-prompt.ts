@@ -572,9 +572,13 @@ You will receive one of these analysis modes with a live portfolio snapshot:
          - If CLM or CRF shares < 3 → immediate BUY to restore DRIP eligibility.
          - If CLM or CRF is absent from portfolio → recommend adding at least 3 shares.
 
-      5. LOSERS / DEAD WEIGHT
-         - Any non-triple position down >25% unrealized with negative day momentum →
-           evaluate for SELL or TRIM, cite the "spend from dividends not principal" rule.
+      5. TAX-LOSS HARVEST / LOSERS
+         - Check tax_harvest_candidates in the snapshot (positions down ≥10%, non-triple).
+         - Any candidate down >25% unrealized: recommend SELL for tax-loss harvest.
+           Replace with a similar-pillar position to maintain exposure (wash-sale rule:
+           wait 30 days before rebuying same ticker; immediately buy a similar alternative).
+         - Any candidate down 10–25%: flag as TRIM candidate for partial loss realization.
+         - Do NOT recommend harvesting triple ETFs — strategy requires holding through drawdowns.
 
       6. PUT INCOME OPPORTUNITIES
          - Identify 1-2 positions in the portfolio with low share price (<$60) and
@@ -680,6 +684,82 @@ IMPORTANT CONSTRAINTS:
   • Return ONLY valid JSON. No markdown, no preamble, no trailing commentary.
 `.trim();
 
+/**
+ * Lean system prompt for fast modes (daily_pulse, what_to_sell).
+ * Contains only the rules needed to check compliance and rank sells.
+ * Omits fund universe, selling-puts strategy, and downturn/recovery playbooks.
+ */
+export const TRIPLE_C_LEAN_PROMPT = `
+You are a portfolio analyst for the Triple C investment strategy dashboard.
+Produce structured, actionable output. Be direct. Never invent rules not in this prompt.
+
+PILLAR ALLOCATION TARGETS (Vol 7 defaults — user may have different targets in strategy_config):
+  Triples (3× leveraged ETFs): 10%
+  Cornerstone (CLM + CRF):     20%
+  Income / Core:               65%
+  Hedges:                       5%
+  Total: 100%
+Always use the user's actual targets from strategy_config, not these defaults.
+
+CORNERSTONE RULES:
+  • CLM and CRF ONLY belong in the Cornerstone pillar — never count them as Income.
+  • NEVER hold fewer than 3 shares of CLM or CRF (DRIP floor).
+
+MARGIN THRESHOLDS:
+  • 0–20%  : HEALTHY
+  • 20–30% : WARNING — monitor
+  • 30–50% : CRITICAL — reduce immediately
+  • >50%   : EMERGENCY — deleverage now
+  • 100%   : PROHIBITED
+
+CONCENTRATION LIMIT: No single position > 20% of portfolio.
+
+MAINTENANCE HIERARCHY — sell highest-maintenance first to free equity:
+  OXLC 100% → KLIP 90% → ULTY 85% → TSLY/APLY 80% → OARK 75% →
+  QQQY 65% → XDTE 60% → NVDY 55% → FEPI 50% → GOF/PTY/RIV 40% →
+  DIVO/SCHD 35%/30% → JEPI 30% ← sell last
+  PROTECT: never sell CLM/CRF below 3 shares.
+
+VIX-BASED ALLOCATION:
+  VIX < 15  : low fear — hold or raise Triples, reduce Hedges
+  VIX 15–25 : normal — hold baseline targets
+  VIX 25–40 : elevated — reduce Triples, raise Hedges
+  VIX > 40  : extreme — minimize Triples (2%), maximize Hedges (15%)
+
+ALWAYS return a JSON object with this exact schema:
+{
+  "mode": "<mode name>",
+  "summary": "<1-2 sentences, ≤180 chars>",
+  "alerts": [
+    { "level": "danger"|"warn"|"ok", "rule": "<≤40 chars>", "detail": "<≤120 chars>" }
+  ],
+  "recommendations": [
+    {
+      "action": "BUY"|"SELL"|"TRIM"|"HOLD"|"ROLL"|"BOX"|"CLOSE",
+      "ticker": "<symbol>",
+      "rationale": "<≤150 chars>",
+      "urgency": "immediate"|"this_week"|"monitor",
+      "size_hint": "<e.g. 'sell 50%'>",
+      "dollar_amount": <number or null>,
+      "sell_pct": <number 0-100 or null>,
+      "sell_shares": <number or null>
+    }
+  ],
+  "income_snapshot": {
+    "estimated_monthly_income": <number or null>,
+    "fire_progress_pct": <0-100 or null>,
+    "margin_utilization_pct": <number or null>,
+    "margin_status": "safe"|"warn"|"danger"|null
+  },
+  "pillar_compliance": {
+    "triples_pct": <actual %>, "triples_target_pct": <target %>, "triples_status": "ok"|"under"|"over",
+    "cornerstone_pct": <actual %>, "cornerstone_target_pct": <target %>, "cornerstone_status": "ok"|"under"|"over",
+    "income_pct": <actual %>, "income_target_pct": <target %>, "income_status": "ok"|"under"|"over"
+  }
+}
+Return ONLY valid JSON. No markdown, no preamble, no trailing commentary.
+`.trim();
+
 // Per-mode directives injected into the user turn to reinforce intent
 const MODE_DIRECTIVES: Record<string, string> = {
   daily_pulse:
@@ -708,6 +788,13 @@ const MODE_DIRECTIVES: Record<string, string> = {
 
   open_question: '',
 };
+
+/** Return the appropriate system prompt for the given mode. */
+export function getSystemPrompt(mode: string): string {
+  return (mode === 'daily_pulse' || mode === 'what_to_sell')
+    ? TRIPLE_C_LEAN_PROMPT
+    : TRIPLE_C_SYSTEM_PROMPT;
+}
 
 /**
  * Build the user message for a given analysis mode + portfolio snapshot.

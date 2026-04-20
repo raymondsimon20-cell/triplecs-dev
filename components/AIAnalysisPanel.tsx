@@ -7,7 +7,7 @@
  * Trade execution: select AI recommendations → review modal → batch place via Schwab API
  */
 
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import {
   Brain, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, AlertCircle,
   Zap, BarChart2, Shield, TrendingDown, MessageCircle, Loader2, RefreshCw,
@@ -347,6 +347,8 @@ export function AIAnalysisPanel({
   const [error,         setError]         = useState<string | null>(null);
   const [copied,        setCopied]        = useState(false);
   const [showReasoning, setShowReasoning] = useState(false);
+  const [recHistory,    setRecHistory]    = useState<{id:string;action:string;ticker:string;status:string;savedAt:number}[]>([]);
+  const [showHistory,   setShowHistory]   = useState(false);
 
   // Order flow state
   const [selectedRecs,  setSelectedRecs]  = useState<Set<number>>(new Set());
@@ -354,6 +356,46 @@ export function AIAnalysisPanel({
   const [orderRows,     setOrderRows]     = useState<OrderRow[]>([]);
   const [placing,       setPlacing]       = useState(false);
   const [orderResults,  setOrderResults]  = useState<OrderResult[]>([]);
+
+  // ── Recommendation history ──────────────────────────────────────────────────
+
+  useEffect(() => {
+    fetch('/api/recommendations')
+      .then((r) => r.json())
+      .then((d) => setRecHistory(d.recommendations ?? []))
+      .catch(() => {});
+  }, []);
+
+  const saveRecs = useCallback((recs: AIAnalysis['recommendations']) => {
+    if (!recs?.length) return;
+    const toSave = recs.map((r) => ({
+      id: `${Date.now()}-${r.ticker}`,
+      savedAt: Date.now(),
+      mode,
+      action: r.action,
+      ticker: r.ticker,
+      rationale: r.rationale,
+      urgency: r.urgency,
+      dollarAmount: r.dollar_amount ?? null,
+      sellPct: r.sell_pct ?? null,
+      status: 'pending',
+    }));
+    fetch('/api/recommendations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ recommendations: toSave }),
+    }).catch(() => {});
+    setRecHistory((prev) => [...toSave, ...prev].slice(0, 100));
+  }, [mode]);
+
+  const markRecStatus = useCallback((id: string, status: 'executed' | 'skipped') => {
+    fetch('/api/recommendations', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, status }),
+    }).catch(() => {});
+    setRecHistory((prev) => prev.map((r) => r.id === id ? { ...r, status } : r));
+  }, []);
 
   // ── Analysis ────────────────────────────────────────────────────────────────
 
@@ -448,6 +490,7 @@ export function AIAnalysisPanel({
       catch { throw new Error(`Could not parse AI response.\n\nRaw:\n${rawText.slice(0, 400)}`); }
 
       setAnalysis(data);
+      if (data.recommendations?.length) saveRecs(data.recommendations);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         setError('Analysis timed out after 90 seconds. Try again or use a simpler query.');
@@ -777,6 +820,29 @@ export function AIAnalysisPanel({
 
                           <p className="text-xs text-[#7c82a0] leading-relaxed">{rec.rationale}</p>
 
+                          {/* Mark executed / skipped */}
+                          {(() => {
+                            const saved = recHistory.find(
+                              (r) => r.action === rec.action && r.ticker === rec.ticker && r.status === 'pending'
+                            );
+                            return saved ? (
+                              <div className="flex gap-2 pt-1">
+                                <button
+                                  onClick={() => markRecStatus(saved.id, 'executed')}
+                                  className="text-[10px] px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-400 hover:bg-emerald-500/30 transition-colors"
+                                >
+                                  ✓ Mark Executed
+                                </button>
+                                <button
+                                  onClick={() => markRecStatus(saved.id, 'skipped')}
+                                  className="text-[10px] px-2 py-0.5 rounded bg-[#2d3248] text-[#7c82a0] hover:text-white transition-colors"
+                                >
+                                  Skip
+                                </button>
+                              </div>
+                            ) : null;
+                          })()}
+
                           {/* Inline put chain — shown when rec involves put selling */}
                           {(rec.action === 'SELL' || rec.action === 'BUY') &&
                             rec.rationale?.toLowerCase().includes('put') && (
@@ -817,12 +883,39 @@ export function AIAnalysisPanel({
                   </div>
                 )}
 
-                <div className="flex justify-end">
+                <div className="flex justify-end gap-3">
+                  {recHistory.length > 0 && (
+                    <button
+                      onClick={() => setShowHistory((v) => !v)}
+                      className="flex items-center gap-1.5 text-xs text-[#4a5070] hover:text-[#7c82a0] transition-colors"
+                    >
+                      {showHistory ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
+                      History ({recHistory.length})
+                    </button>
+                  )}
                   <button onClick={copyJSON} className="flex items-center gap-1.5 text-xs text-[#4a5070] hover:text-[#7c82a0] transition-colors">
                     {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
                     {copied ? 'Copied!' : 'Copy JSON'}
                   </button>
                 </div>
+
+                {showHistory && recHistory.length > 0 && (
+                  <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3 space-y-2">
+                    <h3 className="text-xs font-semibold text-[#7c82a0] uppercase tracking-wide">Recommendation History</h3>
+                    {recHistory.slice(0, 20).map((r) => (
+                      <div key={r.id} className="flex items-center gap-2 text-xs">
+                        <span className={`px-1.5 py-0.5 rounded border text-[10px] font-bold ${ACTION_COLORS[r.action] ?? 'bg-[#2d3248] text-white border-[#4a5070]'}`}>{r.action}</span>
+                        <span className="text-white font-medium">{r.ticker}</span>
+                        <span className={`ml-auto text-[10px] px-1.5 py-0.5 rounded ${
+                          r.status === 'executed' ? 'bg-emerald-500/15 text-emerald-400' :
+                          r.status === 'skipped'  ? 'bg-[#2d3248] text-[#7c82a0]' :
+                          'bg-yellow-500/10 text-yellow-400'
+                        }`}>{r.status}</span>
+                        <span className="text-[#4a5070] text-[10px]">{new Date(r.savedAt).toLocaleDateString()}</span>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>

@@ -17,7 +17,8 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { requireAuth } from '@/lib/session';
-import { TRIPLE_C_SYSTEM_PROMPT, buildUserMessage } from '@/lib/ai/system-prompt';
+import { getSystemPrompt, buildUserMessage } from '@/lib/ai/system-prompt';
+import { getLatestPortfolioSnapshot } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
@@ -94,8 +95,18 @@ export async function POST(req: Request) {
   }
 
   // ── Build snapshot ────────────────────────────────────────────────────────
+  const previousSnapshot = await getLatestPortfolioSnapshot().catch(() => null);
+
   const enrichedSnapshot = {
     ...portfolio,
+    previous_snapshot: previousSnapshot
+      ? {
+          saved_at: new Date(previousSnapshot.savedAt).toISOString(),
+          total_value: previousSnapshot.totalValue,
+          margin_utilization_pct: previousSnapshot.marginUtilizationPct,
+          pillar_summary: previousSnapshot.pillarSummary,
+        }
+      : null,
     strategy_config: config ?? {
       triplesTargetPct:     10,   // Vol 7 default  ─┐
       cornerstoneTargetPct: 20,   // Vol 7 default   │ sum = 100%
@@ -131,7 +142,7 @@ export async function POST(req: Request) {
         const stream = await client.messages.stream({
           model,
           max_tokens: maxTokens,
-          system: TRIPLE_C_SYSTEM_PROMPT,
+          system: getSystemPrompt(mode),
           messages: [{ role: 'user', content: userMessage }],
         });
 

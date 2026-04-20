@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers } from '@/lib/schwab/client';
-import { getCachedPortfolio, cachePortfolio, getTokens } from '@/lib/storage';
-import { enrichPositions, summarizeByPillar, checkMarginRules } from '@/lib/classify';
+import { getCachedPortfolio, cachePortfolio, getTokens, savePortfolioSnapshot } from '@/lib/storage';
+import { enrichPositions, summarizeByPillar, checkMarginRules, getTaxHarvestCandidates } from '@/lib/classify';
 import type { SchwabAccountWrapper } from '@/lib/schwab/types';
 
 export const dynamic = 'force-dynamic';
@@ -116,6 +116,8 @@ export async function GET(req: Request) {
           (acct.currentBalances.cashBalance ?? 0) +
           (acct.currentBalances.moneyMarketFund ?? 0);
 
+        const taxHarvestCandidates = getTaxHarvestCandidates(enrichedPositions);
+
         const result = {
           accountNumber: acct.accountNumber,
           accountHash:   accountNumMap[acct.accountNumber] ?? '',
@@ -130,11 +132,36 @@ export async function GET(req: Request) {
           positions: enrichedPositions,
           pillarSummary,
           marginAlerts,
+          taxHarvestCandidates,
           balances: acct.currentBalances,
         };
 
         // Cache for 60 seconds
         await cachePortfolio(acct.accountNumber, result);
+
+        // Persist snapshot for AI history and proactive alerts (fire-and-forget)
+        const equity    = acct.currentBalances.equity;
+        const marginBal = Math.abs(acct.currentBalances.marginBalance ?? 0);
+        savePortfolioSnapshot({
+          savedAt: Date.now(),
+          totalValue,
+          equity,
+          marginBalance: marginBal,
+          marginUtilizationPct: totalValue > 0 ? (marginBal / totalValue) * 100 : 0,
+          pillarSummary: pillarSummary.map((p) => ({
+            pillar: p.pillar,
+            portfolioPercent: p.portfolioPercent,
+            totalValue: p.totalValue,
+          })),
+          positions: enrichedPositions.map((p) => ({
+            symbol: p.instrument.symbol,
+            pillar: p.pillar,
+            marketValue: p.marketValue,
+            shares: p.longQuantity,
+            unrealizedGL: p.longOpenProfitLoss ?? 0,
+          })),
+        }).catch((e) => console.warn('[snapshot] save failed:', e));
+
         return result;
       }))
     );

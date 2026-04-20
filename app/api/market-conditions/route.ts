@@ -34,8 +34,34 @@ interface AllocationRecommendation {
   riskLevel: 'low' | 'medium' | 'high';
 }
 
+// Symbol maps: Yahoo Finance uses ^ prefix for indices, Polygon uses I: prefix
+const YAHOO_SYMBOLS: Record<string, string> = { VIX: '^VIX', SPX: '^GSPC', NDX: '^NDX' };
+const POLYGON_SYMBOLS: Record<string, string> = { VIX: 'I:VIX', SPX: 'I:SPX', NDX: 'I:NDX' };
+
+async function polygonQuote(key: string): Promise<{ price: number; change: number; changePct: number }> {
+  const apiKey = process.env.POLYGON_API_KEY;
+  if (!apiKey) throw new Error('No POLYGON_API_KEY');
+  const sym = POLYGON_SYMBOLS[key];
+  const url = `https://api.polygon.io/v2/last/trade/${encodeURIComponent(sym)}?apiKey=${apiKey}`;
+  const res = await fetch(url, { next: { revalidate: 0 } });
+  if (!res.ok) throw new Error(`Polygon ${sym}: HTTP ${res.status}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json: any = await res.json();
+  const price = json?.results?.p ?? 0;
+  // Polygon last-trade doesn't include prev close — fetch prev close separately
+  const snapUrl = `https://api.polygon.io/v2/snapshot/locale/us/markets/indices/tickers/${encodeURIComponent(sym)}?apiKey=${apiKey}`;
+  const snapRes = await fetch(snapUrl, { next: { revalidate: 0 } });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const snap: any = snapRes.ok ? await snapRes.json() : {};
+  const prevClose = snap?.results?.prevDay?.c ?? price;
+  const change    = price - prevClose;
+  const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+  return { price, change, changePct };
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-async function yahooQuote(symbol: string): Promise<{ price: number; change: number; changePct: number }> {
+async function yahooQuote(key: string): Promise<{ price: number; change: number; changePct: number }> {
+  const symbol = YAHOO_SYMBOLS[key] ?? key;
   const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
   const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 0 } });
   if (!res.ok) throw new Error(`Yahoo Finance ${symbol}: HTTP ${res.status}`);
@@ -50,14 +76,21 @@ async function yahooQuote(symbol: string): Promise<{ price: number; change: numb
   return { price, change, changePct };
 }
 
+async function getQuote(key: string): Promise<{ price: number; change: number; changePct: number }> {
+  if (process.env.POLYGON_API_KEY) {
+    return polygonQuote(key).catch(() => yahooQuote(key));
+  }
+  return yahooQuote(key);
+}
+
 async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: string }> {
   const now = new Date();
 
   try {
     const [vixRes, spxRes, ndxRes] = await Promise.all([
-      yahooQuote('^VIX'),
-      yahooQuote('^GSPC'),
-      yahooQuote('^NDX'),
+      getQuote('VIX'),
+      getQuote('SPX'),
+      getQuote('NDX'),
     ]);
 
     const vix = vixRes.price;
