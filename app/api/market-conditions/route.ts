@@ -1,13 +1,11 @@
 /**
  * Market Conditions API Endpoint
  *
- * Fetches live VIX, S&P 500 (SPY), and Nasdaq 100 (QQQ) from Schwab quotes API.
- * Falls back to neutral defaults if the quote fetch fails (e.g. outside market hours).
+ * Fetches VIX, S&P 500, and Nasdaq 100 from Yahoo Finance (public API, no key needed).
+ * Schwab's quotes endpoint does not support index symbols ($VIX.X, $SPX.X, $NDX.X).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getTokens } from '@/lib/storage';
-import { getQuotes } from '@/lib/schwab/client';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,28 +34,33 @@ interface AllocationRecommendation {
   riskLevel: 'low' | 'medium' | 'high';
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function yahooQuote(symbol: string): Promise<{ price: number; change: number; changePct: number }> {
+  const url = `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?interval=1d&range=1d`;
+  const res = await fetch(url, { headers: { 'User-Agent': 'Mozilla/5.0' }, next: { revalidate: 0 } });
+  if (!res.ok) throw new Error(`Yahoo Finance ${symbol}: HTTP ${res.status}`);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const json: any = await res.json();
+  const meta = json?.chart?.result?.[0]?.meta;
+  if (!meta) throw new Error(`Yahoo Finance ${symbol}: no data`);
+  const price     = meta.regularMarketPrice ?? meta.previousClose ?? 0;
+  const prevClose = meta.chartPreviousClose ?? meta.previousClose ?? price;
+  const change    = price - prevClose;
+  const changePct = prevClose > 0 ? (change / prevClose) * 100 : 0;
+  return { price, change, changePct };
+}
+
 async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: string }> {
   const now = new Date();
 
   try {
-    const tokens = await getTokens();
-    if (!tokens) throw new Error('No Schwab tokens');
+    const [vixRes, spxRes, ndxRes] = await Promise.all([
+      yahooQuote('^VIX'),
+      yahooQuote('^GSPC'),
+      yahooQuote('^NDX'),
+    ]);
 
-    // Use actual indices: $SPX.X = S&P 500, $NDX.X = Nasdaq 100, $VIX.X = VIX
-    const quotes = await getQuotes(tokens, ['$VIX.X', '$SPX.X', '$NDX.X']);
-
-    const vixQ  = quotes['$VIX.X']?.quote;
-    const spxQ  = quotes['$SPX.X']?.quote;
-    const ndxQ  = quotes['$NDX.X']?.quote;
-
-    const vix         = vixQ?.lastPrice  ?? 20;
-    const vixChange   = vixQ?.netChange  ?? 0;
-    const spxPrice    = spxQ?.lastPrice  ?? 0;
-    const spxClose    = spxQ?.closePrice ?? spxPrice;
-    const sp500Change = spxClose > 0 ? ((spxPrice - spxClose) / spxClose) * 100 : 0;
-    const ndxPrice    = ndxQ?.lastPrice  ?? 0;
-    const ndxClose    = ndxQ?.closePrice ?? ndxPrice;
-    const nasdaqChange = ndxClose > 0 ? ((ndxPrice - ndxClose) / ndxClose) * 100 : 0;
+    const vix = vixRes.price;
 
     let volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
     if (vix < 15) volatilityLevel = 'low';
@@ -66,29 +69,20 @@ async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: strin
     else volatilityLevel = 'extreme';
 
     const marketTrend: 'bullish' | 'neutral' | 'bearish' =
-      sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
-
-    const missingSymbols = [
-      !vixQ && '$VIX.X',
-      !spxQ && '$SPX.X',
-      !ndxQ && '$NDX.X',
-    ].filter(Boolean);
+      spxRes.changePct > 0.5 ? 'bullish' : spxRes.changePct < -0.5 ? 'bearish' : 'neutral';
 
     return {
       data: {
         vix,
-        vixChange,
-        sp500Price:      spxPrice,
-        sp500Change,
-        nasdaq100Price:  ndxPrice,
-        nasdaq100Change: nasdaqChange,
+        vixChange:       vixRes.change,
+        sp500Price:      spxRes.price,
+        sp500Change:     spxRes.changePct,
+        nasdaq100Price:  ndxRes.price,
+        nasdaq100Change: ndxRes.changePct,
         marketTrend,
         volatilityLevel,
         lastUpdated: now.toISOString(),
       },
-      fetchError: missingSymbols.length > 0
-        ? `No quote data returned for: ${missingSymbols.join(', ')}`
-        : undefined,
     };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
