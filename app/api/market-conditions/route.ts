@@ -43,17 +43,13 @@ async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: strin
     const tokens = await getTokens();
     if (!tokens) throw new Error('No Schwab tokens');
 
-    // $VIX.X = CBOE VIX index; SPY = S&P 500 proxy; QQQ = Nasdaq 100 proxy
-    const quotes = await getQuotes(tokens, ['$VIX.X', 'SPY', 'QQQ']);
+    // Try multiple VIX symbol formats — Schwab has been inconsistent about $VIX.X vs VIX
+    const VIX_CANDIDATES = ['$VIX.X', 'VIX', 'VIXY'];
+    const quotes = await getQuotes(tokens, [...VIX_CANDIDATES, 'SPY', 'QQQ']);
 
-    const vixQ   = quotes['$VIX.X']?.quote;
+    const vixQ = VIX_CANDIDATES.map((s) => quotes[s]?.quote).find(Boolean);
     const spyQ   = quotes['SPY']?.quote;
     const qqqQ   = quotes['QQQ']?.quote;
-
-    console.log('[market-conditions] quote keys returned:', Object.keys(quotes));
-    console.log('[market-conditions] VIX quote:', JSON.stringify(vixQ));
-    console.log('[market-conditions] SPY quote:', JSON.stringify(spyQ));
-    console.log('[market-conditions] QQQ quote:', JSON.stringify(qqqQ));
 
     const vix        = vixQ?.lastPrice  ?? 20;
     const vixChange  = vixQ?.netChange  ?? 0;
@@ -74,7 +70,7 @@ async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: strin
       sp500Change > 0.5 ? 'bullish' : sp500Change < -0.5 ? 'bearish' : 'neutral';
 
     const missingSymbols = [
-      !vixQ && '$VIX.X',
+      !vixQ && 'VIX',
       !spyQ && 'SPY',
       !qqqQ && 'QQQ',
     ].filter(Boolean);
