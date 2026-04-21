@@ -585,7 +585,7 @@ function ProjectedTab({ positions }: { positions: EnrichedPosition[] }) {
 const FIRE_STORAGE_KEY = 'triple-c-fire-config';
 interface FireConfig { monthlyExpenses: number; monthlyMarginInterest: number; }
 
-function FireTab({ dividends, marginBalance }: { dividends: DividendRecord[]; marginBalance: number }) {
+function FireTab({ projectedMonthly, marginBalance }: { projectedMonthly: number; marginBalance: number }) {
   const [config, setConfig] = useState<FireConfig>(() => {
     try {
       const saved = typeof window !== 'undefined' ? localStorage.getItem(FIRE_STORAGE_KEY) : null;
@@ -595,10 +595,7 @@ function FireTab({ dividends, marginBalance }: { dividends: DividendRecord[]; ma
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(config);
 
-  const months = last12Months();
-  const byMonth = groupByMonth(dividends);
-  const values = months.map((m) => byMonth[m] ?? 0);
-  const monthlyAvg = values.reduce((s, v) => s + v, 0) / 12;
+  const monthlyAvg = projectedMonthly;
   const totalTarget = config.monthlyExpenses + config.monthlyMarginInterest;
   const fireProgress = totalTarget > 0 ? Math.min((monthlyAvg / totalTarget) * 100, 100) : 0;
   const isFire = monthlyAvg >= totalTarget;
@@ -625,7 +622,7 @@ function FireTab({ dividends, marginBalance }: { dividends: DividendRecord[]; ma
             {isFire ? '🎉 Financially Free!' : `${fmt$(gap, true)}/mo gap to FIRE`}
           </div>
           <div className="text-xs text-[#7c82a0] mt-0.5">
-            Avg monthly income {fmt$Dec(monthlyAvg)} vs target {fmt$Dec(totalTarget)}/mo
+            Projected monthly income {fmt$Dec(monthlyAvg)} vs target {fmt$Dec(totalTarget)}/mo
           </div>
         </div>
       </div>
@@ -705,9 +702,9 @@ function FireTab({ dividends, marginBalance }: { dividends: DividendRecord[]; ma
 // ─── Tab: Margin ──────────────────────────────────────────────────────────────
 
 function MarginTab({
-  dividends, marginBalance, totalValue, equity, positions, pillarSummary,
+  projectedMonthly, marginBalance, totalValue, equity, positions, pillarSummary,
 }: {
-  dividends: DividendRecord[];
+  projectedMonthly: number;
   marginBalance: number;
   totalValue: number;
   equity: number;
@@ -715,10 +712,7 @@ function MarginTab({
   pillarSummary: PillarSummary[];
 }) {
   // ── Coverage stats ──────────────────────────────────────────────────────────
-  const byMonth = groupByMonth(dividends);
-  const months = last12Months();
-  const values = months.map((m) => byMonth[m] ?? 0);
-  const monthlyAvg = values.reduce((s, v) => s + v, 0) / 12;
+  const monthlyAvg = projectedMonthly;
   const annualMarginInterest = marginBalance > 0 ? marginBalance * 0.085 : 0;
   const monthlyMarginInterest = annualMarginInterest / 12;
   const coverageRatio = monthlyMarginInterest > 0 ? monthlyAvg / monthlyMarginInterest : Infinity;
@@ -1520,11 +1514,11 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
             ) : activeTab === 'projected' ? (
               <ProjectedTab positions={positions} />
             ) : activeTab === 'fire' ? (
-              <FireTab dividends={dividends} marginBalance={marginDebt} />
+              <FireTab projectedMonthly={projectedAnnual / 12} marginBalance={marginDebt} />
             ) : activeTab === 'expenses' ? (
-              <ExpensesTab monthlyIncome={actualAnnual / 12} />
+              <ExpensesTab monthlyIncome={projectedAnnual / 12} />
             ) : (
-              <MarginTab dividends={dividends} marginBalance={marginDebt} totalValue={totalValue} equity={equity} positions={positions} pillarSummary={pillarSummary} />
+              <MarginTab projectedMonthly={projectedAnnual / 12} marginBalance={marginDebt} totalValue={totalValue} equity={equity} positions={positions} pillarSummary={pillarSummary} />
             )}
           </div>
         </div>
