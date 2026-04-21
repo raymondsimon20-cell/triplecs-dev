@@ -102,6 +102,7 @@ interface AIAnalysisPanelProps {
   dividendsAnnual?: number;
   accountHash?: string;   // needed to place orders — passed from dashboard
   triggerPulse?: number;  // increment to auto-run daily_pulse from parent
+  onIncomeSnapshot?: (monthly: number) => void; // sync AI income estimate back to dashboard
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -340,6 +341,7 @@ export function AIAnalysisPanel({
   dividendsAnnual = 0,
   accountHash = '',
   triggerPulse = 0,
+  onIncomeSnapshot,
 }: AIAnalysisPanelProps) {
   const [open,          setOpen]          = useState(false);
   const [mode,          setMode]          = useState<AnalysisMode>('daily_pulse');
@@ -494,6 +496,8 @@ export function AIAnalysisPanel({
 
       setAnalysis(data);
       if (data.recommendations?.length) saveRecs(data.recommendations);
+      const monthly = data.income_snapshot?.estimated_monthly_income;
+      if (monthly != null && monthly > 0) onIncomeSnapshot?.(monthly);
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         setError('Analysis timed out after 90 seconds. Try again or use a simpler query.');

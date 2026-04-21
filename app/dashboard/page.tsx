@@ -691,6 +691,7 @@ export default function DashboardPage() {
               dividendsAnnual={dividendsTotal}
               accountHash={account.accountHash}
               triggerPulse={aiPulseTrigger}
+              onIncomeSnapshot={setMonthlyIncome}
             />
           </div>
         </CollapsiblePanel>
