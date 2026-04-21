@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
@@ -237,6 +237,25 @@ export default function DashboardPage() {
     .map((p) => p.instrument.symbol)
     .filter((s) => !s.includes(' ')); // skip options
   const { liveQuotes, status: streamStatus } = usePortfolioStream(streamSymbols, streamSymbols.length > 0);
+
+  // Merge live prices into positions so AI gets current market values
+  const livePositions = useMemo(() => {
+    const positions = accounts[selectedIdx]?.positions ?? [];
+    if (!liveQuotes.size) return positions;
+    const updated = positions.map((p) => {
+      const livePrice = liveQuotes.get(p.instrument.symbol);
+      if (!livePrice) return p;
+      const qty = p.longQuantity || p.shortQuantity || 0;
+      const newMarketValue = livePrice * qty;
+      return { ...p, marketValue: newMarketValue };
+    });
+    // Recompute total and portfolioPercent with live values
+    const liveTotalValue = updated.reduce((sum, p) => sum + Math.abs(p.marketValue), 0) || (accounts[selectedIdx]?.totalValue ?? 0);
+    return updated.map((p) => ({
+      ...p,
+      portfolioPercent: liveTotalValue > 0 ? (Math.abs(p.marketValue) / liveTotalValue) * 100 : p.portfolioPercent,
+    }));
+  }, [accounts, selectedIdx, liveQuotes]);
 
   const fetchDividends = useCallback(async () => {
     try {
@@ -618,7 +637,7 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <AIAnalysisPanel
-              positions={account.positions}
+              positions={livePositions}
               totalValue={account.totalValue}
               equity={account.equity}
               marginBalance={account.marginBalance}
