@@ -4,8 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Gauge, History, ClipboardList, Eye, BookOpen,
-  ClipboardCheck,
+  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -29,7 +28,6 @@ import { StrategyGuide } from '@/components/StrategyGuide';
 import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
 import { RebalanceWorkflow } from '@/components/RebalanceWorkflow';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
-import { DailyReviewWizard } from '@/components/DailyReviewWizard';
 import { PortfolioChart } from '@/components/PortfolioChart';
 import { usePortfolioStream } from '@/lib/hooks/usePortfolioStream';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
@@ -148,11 +146,10 @@ const NAV_ITEMS = [
   { id: 'cornerstone',  label: 'Cornerstone',   icon: PieChart    },
   { id: 'margin',       label: 'Margin',        icon: Gauge       },
   { id: 'triples',      label: 'Triples',       icon: Zap         },
-  { id: 'options',      label: 'Options',       icon: Shield      },
+  { id: 'options',      label: 'Options & Puts', icon: Shield      },
   { id: 'ai',           label: 'AI Analysis',   icon: Brain       },
   { id: 'income',       label: 'Income',        icon: DollarSign  },
   { id: 'rebalance',    label: 'Rebalance',     icon: Calculator  },
-  { id: 'puts',         label: 'Open Puts',     icon: ClipboardCheck },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
   { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'positions',    label: 'Positions',     icon: List        },
@@ -210,6 +207,67 @@ function SectionNav() {
   );
 }
 
+// ─── Options + Open Puts tabbed panel ────────────────────────────────────────
+
+function OptionsPutsPanel({
+  positions,
+  totalValue,
+  accountHash,
+}: {
+  positions: EnrichedPosition[];
+  totalValue: number;
+  accountHash: string;
+}) {
+  const [tab, setTab] = useState<'strategy' | 'puts'>('strategy');
+
+  return (
+    <CollapsiblePanel
+      id="options"
+      title="Options & Puts"
+      icon={<Shield className="w-4 h-4 text-blue-400" />}
+      accentClass="border-blue-500/40"
+      defaultOpen={true}
+    >
+      <div className="pt-4 space-y-4">
+        {/* Tab bar */}
+        <div className="flex gap-1 border-b border-[#2d3248] pb-0">
+          <button
+            onClick={() => setTab('strategy')}
+            className={`px-4 py-2 text-xs font-medium rounded-t-lg transition-colors -mb-px border-b-2 ${
+              tab === 'strategy'
+                ? 'text-blue-400 border-blue-500 bg-blue-500/5'
+                : 'text-[#7c82a0] border-transparent hover:text-white'
+            }`}
+          >
+            Strategy &amp; Candidates
+          </button>
+          <button
+            onClick={() => setTab('puts')}
+            className={`px-4 py-2 text-xs font-medium rounded-t-lg transition-colors -mb-px border-b-2 ${
+              tab === 'puts'
+                ? 'text-indigo-400 border-indigo-500 bg-indigo-500/5'
+                : 'text-[#7c82a0] border-transparent hover:text-white'
+            }`}
+          >
+            Open Puts
+          </button>
+        </div>
+
+        {tab === 'strategy' && (
+          <OptionsStrategyPanel
+            positions={positions}
+            totalValue={totalValue}
+            accountHash={accountHash}
+          />
+        )}
+        {tab === 'puts' && (
+          <OpenPutTracker positions={positions} />
+        )}
+      </div>
+    </CollapsiblePanel>
+  );
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -222,7 +280,7 @@ export default function DashboardPage() {
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
   // Estimated monthly income from dividend data (for FIRE pill)
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
-  const [wizardOpen, setWizardOpen] = useState(false);
+  const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
   const strategyTargets = useStrategyTargets();
   const fireTarget = strategyTargets.fireNumber;
@@ -391,12 +449,15 @@ export default function DashboardPage() {
             />
 
             <button
-              onClick={() => setWizardOpen(true)}
-              className="flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/30 px-3 py-1.5 rounded-lg transition-colors"
-              title="Start daily portfolio review"
+              onClick={() => {
+                setAiPulseTrigger((n) => n + 1);
+                document.getElementById('panel-ai')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+              }}
+              className="flex items-center gap-1.5 text-xs font-semibold text-cyan-400 hover:text-cyan-300 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 px-3 py-1.5 rounded-lg transition-colors"
+              title="Run AI daily pulse analysis"
             >
-              <ClipboardCheck className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Daily Review</span>
+              <Zap className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Daily Pulse</span>
             </button>
 
             <SettingsPanel />
@@ -605,22 +666,12 @@ export default function DashboardPage() {
           </div>
         </CollapsiblePanel>
 
-        {/* ── Options / Put Strategy ───────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="options"
-          title="Options & Put Strategy"
-          icon={<Shield className="w-4 h-4 text-blue-400" />}
-          accentClass="border-blue-500/40"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <OptionsStrategyPanel
-              positions={account.positions}
-              totalValue={account.totalValue}
-              accountHash={account.accountHash}
-            />
-          </div>
-        </CollapsiblePanel>
+        {/* ── Options & Open Puts (tabbed) ─────────────────────────────────── */}
+        <OptionsPutsPanel
+          positions={account.positions}
+          totalValue={account.totalValue}
+          accountHash={account.accountHash}
+        />
 
         {/* ── AI Analysis ─────────────────────────────────────────────────── */}
         <CollapsiblePanel
@@ -639,6 +690,7 @@ export default function DashboardPage() {
               pillarSummary={account.pillarSummary}
               dividendsAnnual={dividendsTotal}
               accountHash={account.accountHash}
+              triggerPulse={aiPulseTrigger}
             />
           </div>
         </CollapsiblePanel>
@@ -668,19 +720,6 @@ export default function DashboardPage() {
             strategyTargets={strategyTargets}
           />
         </div>
-
-        {/* ── Open Put Tracker ─────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="puts"
-          title="Open Put Tracker"
-          icon={<History className="w-4 h-4 text-indigo-400" />}
-          accentClass="border-indigo-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <OpenPutTracker positions={account.positions} />
-          </div>
-        </CollapsiblePanel>
 
         {/* ── Watchlist ─────────────────────────────────────────────────────── */}
         <CollapsiblePanel
@@ -746,14 +785,6 @@ export default function DashboardPage() {
         marginLimitPct={strategyTargets.marginLimitPct}
       />
 
-      <DailyReviewWizard
-        isOpen={wizardOpen}
-        onClose={() => setWizardOpen(false)}
-        account={account}
-        strategyTargets={strategyTargets}
-        pendingOrderCount={pendingOrders.size}
-        dividendsAnnual={dividendsTotal}
-      />
     </div>
   );
 }

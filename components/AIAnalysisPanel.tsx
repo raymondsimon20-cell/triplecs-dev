@@ -7,7 +7,7 @@
  * Trade execution: select AI recommendations → review modal → batch place via Schwab API
  */
 
-import { useState, useCallback, useEffect } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import {
   Brain, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, AlertCircle,
   Zap, BarChart2, Shield, TrendingDown, MessageCircle, Loader2, RefreshCw,
@@ -101,6 +101,7 @@ interface AIAnalysisPanelProps {
   pillarSummary: PillarSummary[];
   dividendsAnnual?: number;
   accountHash?: string;   // needed to place orders — passed from dashboard
+  triggerPulse?: number;  // increment to auto-run daily_pulse from parent
 }
 
 // ─── Constants ──────────────────────────────────────────────────────────────────
@@ -338,6 +339,7 @@ export function AIAnalysisPanel({
   pillarSummary,
   dividendsAnnual = 0,
   accountHash = '',
+  triggerPulse = 0,
 }: AIAnalysisPanelProps) {
   const [open,          setOpen]          = useState(false);
   const [mode,          setMode]          = useState<AnalysisMode>('daily_pulse');
@@ -399,8 +401,9 @@ export function AIAnalysisPanel({
 
   // ── Analysis ────────────────────────────────────────────────────────────────
 
-  const runAnalysis = useCallback(async () => {
-    if (mode === 'open_question' && !question.trim()) return;
+  const runAnalysis = useCallback(async (overrideMode?: AnalysisMode) => {
+    const activeMode = overrideMode ?? mode;
+    if (activeMode === 'open_question' && !question.trim()) return;
 
     setLoading(true);
     setError(null);
@@ -441,8 +444,8 @@ export function AIAnalysisPanel({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          mode, portfolio: snapshot,
-          question: mode === 'open_question' ? question : undefined,
+          mode: activeMode, portfolio: snapshot,
+          question: activeMode === 'open_question' ? question : undefined,
         }),
         signal: controller.signal,
       });
@@ -502,6 +505,18 @@ export function AIAnalysisPanel({
       setLoading(false);
     }
   }, [mode, question, positions, totalValue, equity, marginBalance, pillarSummary, dividendsAnnual]);
+
+  // ── Auto-run daily_pulse when parent increments triggerPulse ───────────────
+
+  const triggerPulseRef = useRef(0);
+  useEffect(() => {
+    if (triggerPulse === 0) return;
+    if (triggerPulse === triggerPulseRef.current) return;
+    triggerPulseRef.current = triggerPulse;
+    setMode('daily_pulse');
+    setOpen(true);
+    runAnalysis('daily_pulse');
+  }, [triggerPulse, runAnalysis]);
 
   // ── Order flow ──────────────────────────────────────────────────────────────
 
@@ -649,7 +664,7 @@ export function AIAnalysisPanel({
             {/* Run + status row */}
             <div className="flex items-center gap-3 flex-wrap">
               <button
-                onClick={runAnalysis}
+                onClick={() => runAnalysis()}
                 disabled={loading || (mode === 'open_question' && !question.trim())}
                 className="flex items-center gap-2 bg-violet-600 hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed text-white px-5 py-2.5 rounded-lg text-sm font-medium transition-colors"
               >
@@ -658,7 +673,7 @@ export function AIAnalysisPanel({
               </button>
 
               {analysis && !loading && (
-                <button onClick={runAnalysis} className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors">
+                <button onClick={() => runAnalysis()} className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors">
                   <RefreshCw className="w-3.5 h-3.5" /> Refresh
                 </button>
               )}
