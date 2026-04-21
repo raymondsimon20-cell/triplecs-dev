@@ -50,6 +50,7 @@ interface Props {
   equity: number;
   marginBalance?: number;
   pillarSummary?: PillarSummary[];
+  onProjectedMonthly?: (monthly: number) => void;
 }
 
 type Tab = 'historical' | 'projected' | 'fire' | 'expenses' | 'margin';
@@ -1397,7 +1398,7 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [] }: Props) {
+export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [], onProjectedMonthly }: Props) {
   const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('historical');
   const [data, setData] = useState<DividendData | null>(null);
@@ -1435,6 +1436,10 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
     }
     return total;
   }, [positions]);
+
+  useEffect(() => {
+    if (projectedAnnual > 0) onProjectedMonthly?.(projectedAnnual / 12);
+  }, [projectedAnnual, onProjectedMonthly]);
 
   const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'historical', label: 'Historical', icon: <BarChart2 className="w-3.5 h-3.5" /> },

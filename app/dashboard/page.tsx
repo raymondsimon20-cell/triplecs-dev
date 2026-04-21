@@ -706,6 +706,7 @@ export default function DashboardPage() {
             equity={account.equity}
             marginBalance={account.marginBalance}
             pillarSummary={account.pillarSummary}
+            onProjectedMonthly={setMonthlyIncome}
           />
         </div>
 
