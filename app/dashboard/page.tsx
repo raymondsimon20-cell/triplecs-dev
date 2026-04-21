@@ -16,9 +16,6 @@ import { IncomeHub } from '@/components/IncomeHub';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHub } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
-import { FundFamilyMonitor } from '@/components/FundFamilyMonitor';
-import { YmagDripTracker } from '@/components/YmagDripTracker';
-import { HedgePairTracker } from '@/components/HedgePairTracker';
 import { PositionsTable } from '@/components/PositionsTable';
 import { usePendingOrderSymbols } from '@/components/TradeHub';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
@@ -33,7 +30,6 @@ import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboar
 import { RebalanceWorkflow } from '@/components/RebalanceWorkflow';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
 import { DailyReviewWizard } from '@/components/DailyReviewWizard';
-import { DistributionCalendar } from '@/components/DistributionCalendar';
 import { PortfolioChart } from '@/components/PortfolioChart';
 import { usePortfolioStream } from '@/lib/hooks/usePortfolioStream';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
@@ -157,7 +153,6 @@ const NAV_ITEMS = [
   { id: 'income',       label: 'Income',        icon: DollarSign  },
   { id: 'rebalance',    label: 'Rebalance',     icon: Calculator  },
   { id: 'puts',         label: 'Open Puts',     icon: ClipboardCheck },
-  { id: 'families',     label: 'Fund Families', icon: List        },
   { id: 'orders',       label: 'Orders',        icon: ClipboardList },
   { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
   { id: 'positions',    label: 'Positions',     icon: List        },
@@ -652,10 +647,6 @@ export default function DashboardPage() {
         <div id="panel-income" className="scroll-mt-20 space-y-4">
           <div id="panel-calendar" />
           <div id="panel-simulator" />
-          <DistributionCalendar
-            positions={account.positions}
-            totalValue={account.totalValue}
-          />
           <IncomeHub
             positions={account.positions}
             totalValue={account.totalValue}
@@ -688,48 +679,6 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <OpenPutTracker positions={account.positions} />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Fund Family Monitor ──────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="families"
-          title="Fund Family Concentration"
-          icon={<List className="w-4 h-4 text-teal-400" />}
-          accentClass="border-teal-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <FundFamilyMonitor
-              positions={account.positions}
-              totalValue={account.totalValue}
-            />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── YMAG DRIP Tracker ────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="ymag"
-          title="YMAG DRIP Tracker"
-          icon={<RefreshCw className="w-4 h-4 text-violet-400" />}
-          accentClass="border-violet-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <YmagDripTracker positions={account.positions} />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Hedge Pair Tracker ────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="hedgepairs"
-          title="Hedge Pair Tracker"
-          icon={<Shield className="w-4 h-4 text-blue-400" />}
-          accentClass="border-blue-500/30"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <HedgePairTracker positions={account.positions} />
           </div>
         </CollapsiblePanel>
 
