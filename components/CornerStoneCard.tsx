@@ -1,8 +1,9 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { AlertTriangle, TrendingUp, Info, RefreshCw, Check, ExternalLink, Clock, ChevronDown, ChevronUp } from 'lucide-react';
+import { AlertTriangle, TrendingUp, Info, RefreshCw, Check, ExternalLink, Clock, ChevronDown, ChevronUp, Scissors } from 'lucide-react';
 import { Skeleton } from './Skeleton';
+import type { EnrichedPosition } from '@/lib/schwab/types';
 
 interface CEFData {
   ticker: string;
@@ -243,16 +244,81 @@ function NAVEntryForm({ ticker, onSave }: { ticker: string; onSave: () => void }
   );
 }
 
+function ROSellDownButton({
+  ticker, shares, accountHash,
+}: { ticker: string; shares: number; accountHash: string }) {
+  const toSell = shares - 3;
+  const [placing, setPlacing] = useState(false);
+  const [result,  setResult]  = useState<'ok' | 'err' | null>(null);
+
+  if (toSell <= 0) return null;
+
+  const execute = async () => {
+    setPlacing(true);
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountHash,
+          orders: [{
+            orderType: 'MARKET',
+            session: 'NORMAL',
+            duration: 'DAY',
+            orderStrategyType: 'SINGLE',
+            orderLegCollection: [{
+              instruction: 'SELL',
+              quantity: toSell,
+              instrument: { symbol: ticker, assetType: 'EQUITY' },
+            }],
+          }],
+        }),
+      });
+      setResult(res.ok ? 'ok' : 'err');
+    } catch {
+      setResult('err');
+    } finally {
+      setPlacing(false);
+    }
+  };
+
+  if (result === 'ok') {
+    return (
+      <div className="flex items-center gap-1 text-xs text-emerald-400">
+        <Check className="w-3 h-3" /> Sell order placed for {toSell} shares
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        onClick={execute}
+        disabled={placing}
+        className="flex items-center gap-1.5 text-xs px-3 py-1.5 rounded bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 transition-colors disabled:opacity-50"
+      >
+        <Scissors className="w-3 h-3" />
+        {placing ? 'Placing…' : `Sell ${toSell} shares (keep 3)`}
+      </button>
+      {result === 'err' && <span className="text-xs text-red-400">Order failed — check Schwab</span>}
+    </div>
+  );
+}
+
 function FundCard({
   fund,
   roStatus,
   onRefresh,
   onROUpdate,
+  position,
+  accountHash,
 }: {
   fund: CEFData;
   roStatus: ROStatus | null;
   onRefresh: () => void;
   onROUpdate: (updated: ROStatus) => void;
+  position?: EnrichedPosition;
+  accountHash?: string;
 }) {
   const isLive = fund.source !== 'unavailable' && fund.source !== 'manual';
   const [showNavEntry, setShowNavEntry] = useState(fund.source === 'unavailable');
@@ -268,6 +334,7 @@ function FundCard({
   const roMeta = RO_STAGE_META[roStage];
   const roGuidance = hasNAV && hasPrice ? roStrategyGuidance(roStage, fund.premiumDiscount) : null;
   const hasActiveRO = roStage !== 'none';
+  const sharesHeld = position?.longQuantity ?? 0;
 
   return (
     <div className="bg-[#22263a] rounded-xl p-4 space-y-3 border border-[#2d3248]">
@@ -275,6 +342,15 @@ function FundCard({
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2 flex-wrap">
           <span className="font-bold text-white font-mono">{fund.ticker}</span>
+          {sharesHeld > 0 && (
+            <span className={`text-[10px] px-1.5 py-0.5 rounded border ${
+              sharesHeld < 3
+                ? 'bg-red-500/20 text-red-400 border-red-500/30'
+                : 'bg-[#2d3248] text-[#7c82a0] border-[#3d4260]'
+            }`}>
+              {sharesHeld} shares {sharesHeld < 3 ? '⚠️ below floor' : ''}
+            </span>
+          )}
           {hasNAV && hasPrice && <PremiumBadge pct={fund.premiumDiscount} />}
           {isLive && (
             <span className="text-[10px] text-emerald-500 bg-emerald-500/10 px-1.5 py-0.5 rounded border border-emerald-500/20">
@@ -387,6 +463,20 @@ function FundCard({
           </div>
         )}
 
+        {/* RO sell-down action: shown when RO is active and user holds > 3 shares */}
+        {(roStage === 'announced' || roStage === 'subscription_open') &&
+          sharesHeld > 3 && accountHash && (
+          <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3 space-y-1.5">
+            <div className="text-xs text-red-300 font-medium">
+              RO Sell-Down — You hold {sharesHeld} shares
+            </div>
+            <div className="text-xs text-[#7c82a0]">
+              Sell {sharesHeld - 3} shares, keep 3 to retain DRIP eligibility
+            </div>
+            <ROSellDownButton ticker={fund.ticker} shares={sharesHeld} accountHash={accountHash} />
+          </div>
+        )}
+
         {/* RO update form */}
         {showROForm && (
           <ROUpdateForm
@@ -411,7 +501,13 @@ function FundCard({
   );
 }
 
-export function CornerStoneCard() {
+export function CornerStoneCard({
+  positions = [],
+  accountHash = '',
+}: {
+  positions?: EnrichedPosition[];
+  accountHash?: string;
+}) {
   const [funds, setFunds] = useState<CEFData[]>([]);
   const [roStatuses, setROStatuses] = useState<Record<string, ROStatus>>({});
   const [loading, setLoading] = useState(true);
@@ -542,6 +638,8 @@ export function CornerStoneCard() {
               roStatus={roStatuses[f.ticker] ?? null}
               onRefresh={() => fetchData(true)}
               onROUpdate={handleROUpdate}
+              position={positions.find((p) => p.instrument.symbol === f.ticker)}
+              accountHash={accountHash}
             />
           ))}
         </div>

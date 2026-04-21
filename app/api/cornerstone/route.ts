@@ -16,6 +16,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
 import { getStore } from '@netlify/blobs';
+import { saveCornerstoneSnapshot } from '@/lib/storage';
 
 export const dynamic = 'force-dynamic';
 
@@ -266,6 +267,10 @@ export async function GET(req: Request) {
   );
 
   await setCache(funds, csvResult?.dateStr, source);
+  // Persist latest NAV data so daily-alert can check premiums without auth
+  saveCornerstoneSnapshot({ savedAt: Date.now(), funds: funds.map((f) => ({
+    ticker: f.ticker, nav: f.nav, marketPrice: f.marketPrice, premiumDiscount: f.premiumDiscount,
+  })) }).catch(() => {});
   return NextResponse.json({ funds, fromCache: false, source, dataDate: csvResult?.dateStr ?? null });
 }
 

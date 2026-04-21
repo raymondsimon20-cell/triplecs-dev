@@ -33,6 +33,9 @@ import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboar
 import { RebalanceWorkflow } from '@/components/RebalanceWorkflow';
 import { updateStrategyTargets } from '@/components/SettingsPanel';
 import { DailyReviewWizard } from '@/components/DailyReviewWizard';
+import { DistributionCalendar } from '@/components/DistributionCalendar';
+import { PortfolioChart } from '@/components/PortfolioChart';
+import { usePortfolioStream } from '@/lib/hooks/usePortfolioStream';
 import type { RuleAlert, PillarSummary } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import type { StrategyTargets } from '@/lib/utils';
@@ -228,6 +231,12 @@ export default function DashboardPage() {
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
   const strategyTargets = useStrategyTargets();
   const fireTarget = strategyTargets.fireNumber;
+
+  // Live streaming — only activate when we have account data
+  const streamSymbols = (accounts[selectedIdx]?.positions ?? [])
+    .map((p) => p.instrument.symbol)
+    .filter((s) => !s.includes(' ')); // skip options
+  const { liveQuotes, status: streamStatus } = usePortfolioStream(streamSymbols, streamSymbols.length > 0);
 
   const fetchDividends = useCallback(async () => {
     try {
@@ -483,9 +492,26 @@ export default function DashboardPage() {
           <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
-              <span className="text-xs text-[#4a5070]">{account.positions.length} positions</span>
+              <div className="flex items-center gap-2">
+                {streamStatus === 'connected' && (
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                    live
+                  </span>
+                )}
+                <span className="text-xs text-[#4a5070]">{account.positions.length} positions</span>
+              </div>
             </div>
             <PillarAllocationBar summaries={account.pillarSummary} targets={strategyTargets} />
+          </div>
+
+          {/* Portfolio performance chart */}
+          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <BarChart2 className="w-4 h-4 text-blue-400" />
+              <h2 className="text-sm font-semibold text-white">Portfolio History</h2>
+            </div>
+            <PortfolioChart />
           </div>
         </div>
 
@@ -514,7 +540,10 @@ export default function DashboardPage() {
           defaultOpen={true}
         >
           <div className="pt-4">
-            <CornerStoneCard />
+            <CornerStoneCard
+              positions={account.positions}
+              accountHash={account.accountHash}
+            />
           </div>
         </CollapsiblePanel>
 
@@ -601,9 +630,13 @@ export default function DashboardPage() {
         </CollapsiblePanel>
 
         {/* ── Income Hub (Historical + Projected + FIRE + Margin + Simulator) ── */}
-        <div id="panel-income" className="scroll-mt-20">
+        <div id="panel-income" className="scroll-mt-20 space-y-4">
           <div id="panel-calendar" />
           <div id="panel-simulator" />
+          <DistributionCalendar
+            positions={account.positions}
+            totalValue={account.totalValue}
+          />
           <IncomeHub
             positions={account.positions}
             totalValue={account.totalValue}

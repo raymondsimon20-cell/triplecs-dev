@@ -19,6 +19,7 @@ import Anthropic from '@anthropic-ai/sdk';
 import { requireAuth } from '@/lib/session';
 import { getSystemPrompt, buildUserMessage } from '@/lib/ai/system-prompt';
 import { getLatestPortfolioSnapshot } from '@/lib/storage';
+import { createClient } from '@/lib/schwab/client';
 
 export const dynamic = 'force-dynamic';
 
@@ -95,7 +96,29 @@ export async function POST(req: Request) {
   }
 
   // ── Build snapshot ────────────────────────────────────────────────────────
-  const previousSnapshot = await getLatestPortfolioSnapshot().catch(() => null);
+  const [previousSnapshot, recentSells] = await Promise.all([
+    getLatestPortfolioSnapshot().catch(() => null),
+    // Fetch recent sell transactions for wash-sale guard (best-effort, non-blocking)
+    (async () => {
+      const accountHash = (body.portfolio as Record<string, unknown>)?.accountHash as string | undefined;
+      if (!accountHash) return [];
+      try {
+        const client = await createClient();
+        const endDate   = new Date();
+        const startDate = new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const txns = await client.getTransactions(accountHash, startDate.toISOString(), endDate.toISOString(), 'TRADE');
+        return txns
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .filter((t: any) => (t?.transferItems?.[0]?.amount ?? t?.netAmount ?? 0) < 0)
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          .map((t: any) => ({
+            symbol:   t?.transferItems?.[0]?.instrument?.symbol ?? t?.description ?? '',
+            soldDate: t?.tradeDate ?? t?.transactionDate ?? '',
+          }))
+          .filter((s: { symbol: string }) => s.symbol);
+      } catch { return []; }
+    })(),
+  ]);
 
   const enrichedSnapshot = {
     ...portfolio,
@@ -116,6 +139,7 @@ export async function POST(req: Request) {
       marginMaxPct:         50,
       fireMonthlyTarget:    10000,
     },
+    recent_sells_30d: recentSells,
     analysis_mode: mode,
     timestamp: new Date().toISOString(),
   };

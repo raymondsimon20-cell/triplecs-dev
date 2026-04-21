@@ -250,6 +250,24 @@ export async function getTransactions(
   return Array.isArray(result) ? (result as import('./types').SchwabTransaction[]) : [];
 }
 
+// ─── User Preference / Streamer Info ─────────────────────────────────────────
+
+export interface StreamerInfo {
+  streamerSocketUrl:          string;
+  schwabClientCustomerId:     string;
+  schwabClientCorrelId:       string;
+  schwabClientChannel:        string;
+  schwabClientFunctionId:     string;
+}
+
+export interface UserPreference {
+  streamerInfo: StreamerInfo[];
+}
+
+export async function getUserPreference(tokens: SchwabTokens): Promise<UserPreference> {
+  return schwabFetch<UserPreference>(`${TRADER_BASE}/userPreference`, tokens);
+}
+
 // ─── Token-aware client factory ───────────────────────────────────────────────
 
 /**
@@ -267,5 +285,7 @@ export async function createClient() {
     getQuotes: (symbols: string[]) => getQuotes(tokens, symbols),
     getTransactions: (hash: string, start: string, end: string, types?: string) =>
       getTransactions(tokens, hash, start, end, types),
+    getUserPreference: () => getUserPreference(tokens),
+    getAccessToken: () => tokens.access_token,
   };
 }

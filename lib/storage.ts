@@ -102,11 +102,32 @@ export interface PortfolioSnapshot {
 }
 
 export async function savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promise<void> {
-  await getStore('portfolio-snapshots').setJSON('latest', snapshot);
+  const store = getStore('portfolio-snapshots');
+  // Save both 'latest' (for AI context) and a date-keyed entry (for chart history)
+  const dayKey = `day-${new Date(snapshot.savedAt).toISOString().slice(0, 10)}`;
+  await Promise.all([
+    store.setJSON('latest', snapshot),
+    store.setJSON(dayKey, snapshot),
+  ]);
 }
 
 export async function getLatestPortfolioSnapshot(): Promise<PortfolioSnapshot | null> {
   return getStore('portfolio-snapshots').get('latest', { type: 'json' });
+}
+
+/** Returns up to `limit` daily snapshots sorted newest-first. */
+export async function getSnapshotHistory(limit = 90): Promise<PortfolioSnapshot[]> {
+  const store  = getStore('portfolio-snapshots');
+  const { blobs } = await store.list({ prefix: 'day-' });
+  const sorted = blobs
+    .map((b) => b.key)
+    .sort()          // lexicographic = chronological for YYYY-MM-DD keys
+    .reverse()
+    .slice(0, limit);
+  const records = await Promise.all(
+    sorted.map((key) => store.get(key, { type: 'json' }) as Promise<PortfolioSnapshot | null>)
+  );
+  return records.filter((r): r is PortfolioSnapshot => r !== null);
 }
 
 // ─── Recommendation tracking ──────────────────────────────────────────────────
@@ -170,6 +191,21 @@ export async function getAlerts(): Promise<StoredAlert[]> {
 export async function markAlertsRead(): Promise<void> {
   const alerts = await getAlerts();
   await saveAlerts(alerts.map((a) => ({ ...a, read: true })));
+}
+
+// ─── Cornerstone NAV snapshot (for daily-alert premium check) ────────────────
+
+export interface CornerstoneNavSnapshot {
+  savedAt: number;
+  funds: Array<{ ticker: string; nav: number; marketPrice: number; premiumDiscount: number }>;
+}
+
+export async function saveCornerstoneSnapshot(snap: CornerstoneNavSnapshot): Promise<void> {
+  await getStore('cornerstone-nav-snapshot').setJSON('latest', snap);
+}
+
+export async function getCornerstoneSnapshot(): Promise<CornerstoneNavSnapshot | null> {
+  return getStore('cornerstone-nav-snapshot').get('latest', { type: 'json' });
 }
 
 // ─── User expenses ────────────────────────────────────────────────────────────

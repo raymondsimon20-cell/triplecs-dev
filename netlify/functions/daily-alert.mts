@@ -5,11 +5,14 @@
  */
 
 import type { Config } from '@netlify/functions';
-import { getLatestPortfolioSnapshot, saveAlerts } from '../../lib/storage';
+import { getLatestPortfolioSnapshot, saveAlerts, getCornerstoneSnapshot } from '../../lib/storage';
 import type { StoredAlert } from '../../lib/storage';
 
 export default async function handler() {
-  const snapshot = await getLatestPortfolioSnapshot().catch(() => null);
+  const [snapshot, cornerstoneSnap] = await Promise.all([
+    getLatestPortfolioSnapshot().catch(() => null),
+    getCornerstoneSnapshot().catch(() => null),
+  ]);
   if (!snapshot) return new Response('No snapshot available', { status: 200 });
 
   const alerts: StoredAlert[] = [];
@@ -58,6 +61,22 @@ export default async function handler() {
     } else if (pos.shares < 3) {
       alerts.push({ id: `${sym}-floor-${now}`, createdAt: now, level: 'danger', read: false,
         rule: `${sym} below 3-share floor`, detail: `${sym} has ${pos.shares} shares — buy to restore DRIP eligibility.` });
+    }
+  }
+
+  // CLM/CRF premium alerts from stored cornerstone NAV snapshot
+  if (cornerstoneSnap) {
+    for (const fund of cornerstoneSnap.funds) {
+      const p = fund.premiumDiscount;
+      if (p >= 30) {
+        alerts.push({ id: `${fund.ticker}-premium-${now}`, createdAt: now, level: 'danger', read: false,
+          rule: `${fund.ticker} premium ≥30%`,
+          detail: `${fund.ticker} trading at ${p.toFixed(1)}% premium to NAV — RO likely. Consider selling down to 3 shares.` });
+      } else if (p >= 20) {
+        alerts.push({ id: `${fund.ticker}-premium-${now}`, createdAt: now, level: 'warn', read: false,
+          rule: `${fund.ticker} premium ≥20%`,
+          detail: `${fund.ticker} at ${p.toFixed(1)}% premium — boxing trigger reached. Review position.` });
+      }
     }
   }
 

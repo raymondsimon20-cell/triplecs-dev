@@ -572,6 +572,17 @@ You will receive one of these analysis modes with a live portfolio snapshot:
          - If CLM or CRF shares < 3 → immediate BUY to restore DRIP eligibility.
          - If CLM or CRF is absent from portfolio → recommend adding at least 3 shares.
 
+WASH-SALE RULE (IRS):
+  • If you sold a position at a loss within the last 30 days, you CANNOT buy the same ticker
+    or a "substantially identical" security within 30 days of the sale without disallowing the loss.
+  • The portfolio snapshot contains recent_sells_30d: [{symbol, soldDate}].
+  • Before recommending a BUY on any ticker, check recent_sells_30d.
+    If the ticker was sold at a loss within 30 days, add a wash-sale warning to the rationale
+    and suggest a similar-but-different alternative (e.g. sold UPRO → suggest SPXL instead).
+  • This applies to tax-loss harvests in particular — always pair a SELL recommendation with
+    an immediate BUY of a non-identical substitute so the user maintains exposure.
+
+════════════════════════════════════════════════════════
       5. TAX-LOSS HARVEST / LOSERS
          - Check tax_harvest_candidates in the snapshot (positions down ≥10%, non-triple).
          - Any candidate down >25% unrealized: recommend SELL for tax-loss harvest.
