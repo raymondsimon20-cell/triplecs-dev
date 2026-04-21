@@ -17,51 +17,53 @@ export const dynamic = 'force-dynamic';
  *   - `transferItems` or `transactionItems` for instrument details
  */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractDividends(txns: any[]): { date: string; description: string; amount: number; symbol: string; rawType: string }[] {
-  const results: { date: string; description: string; amount: number; symbol: string; rawType: string }[] = [];
+function extractDividends(txns: any[]): { activityId: string; date: string; description: string; amount: number; symbol: string; rawType: string }[] {
+  const results: { activityId: string; date: string; description: string; amount: number; symbol: string; rawType: string }[] = [];
 
   for (const t of txns) {
-    // ── Determine transaction type from whichever field Schwab uses ──
     const txType: string = (
       t.type ?? t.activityType ?? t.transactionType ?? ''
     ).toUpperCase();
 
     const desc: string = t.description ?? t.transactionDescription ?? '';
 
-    // ── Check if this looks like a dividend/interest transaction ──
     const isDividendType =
       txType.includes('DIVIDEND') ||
       txType.includes('INTEREST') ||
-      txType === 'DIVIDEND_OR_INTEREST' ||
-      txType === 'RECEIVE_AND_DELIVER';
+      txType === 'DIVIDEND_OR_INTEREST';
 
-    const isDividendDesc = /dividend|distribution|interest|reinvest|drip/i.test(desc);
+    const isDripDelivery =
+      txType === 'RECEIVE_AND_DELIVER' &&
+      /dividend|distribution|interest|reinvest|drip/i.test(desc);
 
-    if (!isDividendType && !isDividendDesc) continue;
+    if (!isDividendType && !isDripDelivery) continue;
 
-    // ── Extract amount ──
-    const amount = t.netAmount ?? t.amount ?? t.totalAmount ?? 0;
-    if (amount <= 0) continue; // skip debits/negative amounts
+    // For DRIP reinvestment, netAmount is 0 (cash → shares immediately).
+    // Extract the dollar value from transferItems cost instead.
+    let amount = t.netAmount ?? t.amount ?? t.totalAmount ?? 0;
+    if (amount === 0 && isDripDelivery) {
+      const items = t.transferItems ?? t.transactionItems ?? [];
+      for (const item of items) {
+        const cost = Math.abs(item?.cost ?? 0);
+        if (cost > 0) { amount = cost; break; }
+      }
+    }
 
-    // ── Extract date ──
+    if (amount <= 0) continue;
+
     const dateStr: string = t.time ?? t.transactionDate ?? t.tradeDate ?? t.settlementDate ?? '';
     const date = dateStr ? dateStr.split('T')[0] : 'UNKNOWN';
 
-    // ── Extract symbol from transferItems or transactionItems ──
     const items = t.transferItems ?? t.transactionItems ?? [];
     let symbol = 'UNKNOWN';
-
     if (Array.isArray(items) && items.length > 0) {
       const inst = items[0]?.instrument ?? items[0]?.asset ?? {};
       symbol = inst.symbol ?? inst.cusip ?? 'UNKNOWN';
     }
+    if (symbol === 'UNKNOWN' && t.symbol) symbol = t.symbol;
 
-    // Fall back to a symbol field on the transaction itself
-    if (symbol === 'UNKNOWN' && t.symbol) {
-      symbol = t.symbol;
-    }
-
-    results.push({ date, description: desc, amount, symbol, rawType: txType });
+    const activityId: string = t.activityId ?? t.transactionId ?? `${date}-${symbol}-${amount}`;
+    results.push({ activityId, date, description: desc, amount, symbol, rawType: txType });
   }
 
   return results;
@@ -91,32 +93,26 @@ export async function GET(req: Request) {
     const allDividends = await Promise.all(
       accountNums.map(async ({ hashValue }) => {
         try {
-          // Strategy: try DIVIDEND_OR_INTEREST type first, then fall back to
-          // fetching ALL transaction types and filtering client-side.
-          let txns = await client.getTransactions(hashValue, startDate, endDate, 'DIVIDEND_OR_INTEREST');
-          console.log(`[Dividends] Account ${hashValue.slice(0, 6)}… DIVIDEND_OR_INTEREST returned ${txns.length} txns`);
+          // Always fetch both types in parallel: DIVIDEND_OR_INTEREST covers
+          // cash dividends; RECEIVE_AND_DELIVER covers DRIP reinvestments where
+          // netAmount === 0 (cash immediately converted to shares).
+          const [divTxns, dripTxns] = await Promise.all([
+            client.getTransactions(hashValue, startDate, endDate, 'DIVIDEND_OR_INTEREST'),
+            client.getTransactions(hashValue, startDate, endDate, 'RECEIVE_AND_DELIVER'),
+          ]);
+          console.log(`[Dividends] Account ${hashValue.slice(0, 6)}… DIV=${divTxns.length} DRIP=${dripTxns.length}`);
 
-          // If Schwab returned nothing with the specific type, try fetching ALL types
-          if (txns.length === 0) {
-            console.log(`[Dividends] No DIVIDEND_OR_INTEREST txns — trying ALL types for account ${hashValue.slice(0, 6)}…`);
-            txns = await client.getTransactions(hashValue, startDate, endDate, 'TRADE,DIVIDEND_OR_INTEREST,RECEIVE_AND_DELIVER,JOURNAL,OTHER');
+          const combined = extractDividends([...divTxns, ...dripTxns]);
 
-            console.log(`[Dividends] ALL types returned ${txns.length} txns`);
-            if (txns.length > 0) {
-              // Log all unique type values to help debug
-              const uniqueTypes = [...new Set(txns.map(t =>
-                t.type ?? t.activityType ?? t.transactionType ?? 'NO_TYPE'
-              ))];
-              console.log(`[Dividends] Unique transaction types found: ${uniqueTypes.join(', ')}`);
-            }
-          }
+          // Deduplicate by activityId in case the same txn appears in both fetches
+          const seen = new Set<string>();
+          const divs = combined.filter(d => {
+            if (seen.has(d.activityId)) return false;
+            seen.add(d.activityId);
+            return true;
+          });
 
-          const divs = extractDividends(txns);
-          console.log(`[Dividends] → ${divs.length} dividend/interest transactions extracted`);
-          if (divs.length > 0) {
-            console.log(`[Dividends] First dividend: ${JSON.stringify(divs[0])}`);
-          }
-
+          console.log(`[Dividends] → ${divs.length} dividend/distribution transactions`);
           return divs;
         } catch (err) {
           console.error(`[Dividends] Error fetching account ${hashValue.slice(0, 6)}…:`, err);
