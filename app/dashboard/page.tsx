@@ -34,6 +34,8 @@ import type { RuleAlert, PillarSummary } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import type { StrategyTargets } from '@/lib/utils';
 import { fmt$, gainLossColor } from '@/lib/utils';
+import { AnimatedNumber } from '@/components/AnimatedNumber';
+import { motion } from 'framer-motion';
 
 interface AccountData {
   accountNumber: string;
@@ -62,24 +64,38 @@ const ALERT_ICON = {
 // ─── Metric card ──────────────────────────────────────────────────────────────
 
 function MetricCard({
-  label, value, colorClass = 'text-white', sub, trend,
+  label, value, rawValue, colorClass = 'text-white', sub, trend, gradientClass, hoverShadow,
 }: {
   label: string;
   value: string;
+  rawValue?: number;
   colorClass?: string;
   sub?: string;
   trend?: 'up' | 'down' | null;
+  /** Tailwind gradient classes for value text, e.g. "from-amber-400 to-orange-500". Overrides colorClass. */
+  gradientClass?: string;
+  /** Optional colored hover shadow override */
+  hoverShadow?: string;
 }) {
+  const valueClass = gradientClass
+    ? `bg-gradient-to-r ${gradientClass} bg-clip-text text-transparent`
+    : colorClass;
   return (
-    <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-4 flex flex-col gap-1 hover:border-[#3d4468] transition-colors">
-      <div className="text-[11px] text-[#7c82a0] font-medium tracking-wide uppercase">{label}</div>
-      <div className={`text-xl font-bold tabular-nums ${colorClass} flex items-center gap-1`}>
-        {value}
-        {trend === 'up'   && <TrendingUp   className="w-3.5 h-3.5 text-emerald-400 opacity-70" />}
-        {trend === 'down' && <TrendingUp   className="w-3.5 h-3.5 text-red-400 opacity-70 rotate-180" />}
+    <motion.div
+      className="card-glass border border-[#252840] rounded-xl p-4 flex flex-col gap-1.5 shadow-card cursor-default"
+      whileHover={{ y: -2, boxShadow: hoverShadow ?? '0 8px 28px rgba(0,0,0,0.5)', borderColor: 'rgba(53,56,96,1)' }}
+      transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+    >
+      <div className="text-[11px] text-[#7c82a0] font-semibold tracking-widest uppercase">{label}</div>
+      <div className="text-2xl font-extrabold tabular-nums tracking-tight flex items-center gap-1.5 leading-none">
+        {rawValue !== undefined
+          ? <AnimatedNumber value={rawValue} format={fmt$} className={valueClass} />
+          : <span className={valueClass}>{value}</span>}
+        {trend === 'up'   && <TrendingUp className="w-3.5 h-3.5 text-emerald-400 opacity-80" />}
+        {trend === 'down' && <TrendingUp className="w-3.5 h-3.5 text-red-400 opacity-80 rotate-180" />}
       </div>
       {sub && <div className="text-[11px] text-[#4a5070] leading-snug">{sub}</div>}
-    </div>
+    </motion.div>
   );
 }
 
@@ -132,8 +148,8 @@ function DataAge({ updated }: { updated: Date }) {
 
   return (
     <span className="hidden sm:flex items-center gap-1.5">
-      <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />
-      <span className="tabular-nums">{label}</span>
+      <span className={`w-2 h-2 rounded-full ${dotColor} dot-live shadow-[0_0_6px_currentColor]`} />
+      <span className="tabular-nums text-[#7c82a0]">{label}</span>
     </span>
   );
 }
@@ -186,7 +202,7 @@ function SectionNav() {
   }
 
   return (
-    <nav className="w-full overflow-x-auto border-b border-[#2d3248] bg-[#0f1117] sticky top-[57px] z-30">
+    <nav className="w-full overflow-x-auto border-b border-[#252840] card-glass sticky top-[57px] z-30">
       <div className="max-w-7xl mx-auto px-4 flex gap-0.5 py-1.5">
         {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
           <button
@@ -226,6 +242,9 @@ function OptionsPutsPanel({
       title="Options & Puts"
       icon={<Shield className="w-4 h-4 text-blue-400" />}
       accentClass="border-blue-500/40"
+      tintClass="from-blue-500/[0.04]"
+      iconContainerClass="bg-blue-500/10 border border-blue-500/20"
+      glowColor="cornerstone"
       defaultOpen={true}
     >
       <div className="pt-4 space-y-4">
@@ -420,10 +439,10 @@ export default function DashboardPage() {
   const warnAlerts          = account.marginAlerts.filter((a) => a.level === 'warn');
 
   return (
-    <div className="min-h-screen bg-[#0f1117]">
+    <div className="min-h-screen bg-[#0a0c14]">
 
       {/* ── Top header ────────────────────────────────────────────────────── */}
-      <header className="border-b border-[#2d3248] bg-[#1a1d27] sticky top-0 z-40">
+      <header className="border-b border-[#252840] card-glass sticky top-0 z-40">
         <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
 
           {/* Brand */}
@@ -507,15 +526,16 @@ export default function DashboardPage() {
 
         {/* ── Danger banner ───────────────────────────────────────────────── */}
         {dangerAlerts.length > 0 && (
-          <div className="bg-red-500/10 border border-red-500/30 rounded-xl p-4 space-y-2">
+          <div className="bg-red-500/10 border border-red-500/40 rounded-xl p-4 space-y-2 shadow-[0_0_24px_rgba(239,68,68,0.12)]">
             <div className="flex items-center gap-2 mb-1">
+              <span className="w-2 h-2 rounded-full bg-red-400 dot-live shadow-[0_0_8px_#ef4444]" />
               <AlertTriangle className="w-4 h-4 text-red-400" />
               <span className="text-sm font-semibold text-red-300">
                 {dangerAlerts.length} Rule Violation{dangerAlerts.length > 1 ? 's' : ''}
               </span>
             </div>
             {dangerAlerts.map((a, i) => (
-              <div key={i} className="flex items-start gap-2 text-sm text-red-300 ml-6">
+              <div key={i} className="flex items-start gap-2 text-sm text-red-300 ml-8">
                 <span>•</span>
                 <span><strong>{a.rule}:</strong> {a.detail}</span>
               </div>
@@ -524,7 +544,8 @@ export default function DashboardPage() {
         )}
 
         {warnAlerts.length > 0 && dangerAlerts.length === 0 && (
-          <div className="bg-orange-500/10 border border-orange-500/25 rounded-xl px-4 py-3 flex items-center gap-2">
+          <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3 flex items-center gap-2.5 shadow-[0_0_20px_rgba(249,115,22,0.10)]">
+            <span className="w-2 h-2 rounded-full bg-orange-400 dot-live shadow-[0_0_6px_#f97316]" />
             {ALERT_ICON.warn}
             <span className="text-sm text-orange-300">
               {warnAlerts.length} warning{warnAlerts.length > 1 ? 's' : ''} — review Margin &amp; Risk below
@@ -536,41 +557,61 @@ export default function DashboardPage() {
         <div id="panel-overview" className="scroll-mt-20 space-y-4">
           {/* Metric cards */}
           <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <MetricCard label="Portfolio Value" value={fmt$(account.totalValue)} />
-            <MetricCard label="Equity"          value={fmt$(account.equity)} />
             <MetricCard
-              label="Day P&amp;L"
+              label="Portfolio Value"
+              value={fmt$(account.totalValue)}
+              rawValue={account.totalValue}
+              gradientClass="from-amber-300 via-amber-400 to-orange-500"
+              hoverShadow="0 0 28px rgba(245,158,11,0.20), 0 10px 32px rgba(0,0,0,0.5)"
+            />
+            <MetricCard
+              label="Equity"
+              value={fmt$(account.equity)}
+              rawValue={account.equity}
+              gradientClass="from-blue-400 via-sky-400 to-cyan-400"
+              hoverShadow="0 0 28px rgba(59,130,246,0.20), 0 10px 32px rgba(0,0,0,0.5)"
+            />
+            <MetricCard
+              label="Day P&L"
               value={fmt$(dayGL)}
+              rawValue={dayGL}
               colorClass={gainLossColor(dayGL)}
               trend={dayGL > 0 ? 'up' : dayGL < 0 ? 'down' : null}
             />
             <MetricCard
               label="Unrealized Return"
               value={fmt$(totalReturn)}
+              rawValue={totalReturn}
               colorClass={gainLossColor(totalReturn)}
               sub={`Includes $${dividendsTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} dividends`}
             />
             <MetricCard
               label="Available Cash"
               value={fmt$(availableForWithdrawal)}
+              rawValue={availableForWithdrawal}
               colorClass="text-blue-400"
               sub="Cash + money market"
             />
             <MetricCard
               label="Buying Power"
               value={fmt$(account.buyingPower)}
+              rawValue={account.buyingPower}
               colorClass="text-purple-400"
             />
           </div>
 
           {/* Pillar allocation bar */}
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5 space-y-4">
+          <motion.div
+            className="card-glass border border-[#252840] rounded-xl p-5 space-y-4 shadow-card bg-gradient-to-br from-blue-500/[0.04] to-transparent"
+            whileHover={{ y: -2, boxShadow: '0 0 32px rgba(59,130,246,0.22), 0 12px 36px rgba(0,0,0,0.5)' }}
+            transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+          >
             <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white">Pillar Allocation</h2>
+              <h2 className="text-sm font-semibold text-white tracking-tight">Pillar Allocation</h2>
               <div className="flex items-center gap-2">
                 {streamStatus === 'connected' && (
-                  <span className="text-[10px] text-emerald-400 flex items-center gap-1">
-                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-1.5 font-semibold">
+                    <span className="w-2 h-2 rounded-full bg-emerald-400 dot-live shadow-[0_0_6px_#10b981]" />
                     live
                   </span>
                 )}
@@ -578,16 +619,22 @@ export default function DashboardPage() {
               </div>
             </div>
             <PillarAllocationBar summaries={account.pillarSummary} targets={strategyTargets} />
-          </div>
+          </motion.div>
 
           {/* Portfolio performance chart */}
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl p-5">
-            <div className="flex items-center gap-2 mb-3">
-              <BarChart2 className="w-4 h-4 text-blue-400" />
-              <h2 className="text-sm font-semibold text-white">Portfolio History</h2>
+          <motion.div
+            className="card-glass border border-[#252840] rounded-xl p-5 shadow-card"
+            whileHover={{ y: -2, boxShadow: '0 0 32px rgba(6,182,212,0.20), 0 12px 36px rgba(0,0,0,0.5)' }}
+            transition={{ type: 'spring', stiffness: 300, damping: 24 }}
+          >
+            <div className="flex items-center gap-2.5 mb-3">
+              <span className="p-1.5 rounded-md bg-blue-500/10 border border-blue-500/20">
+                <BarChart2 className="w-4 h-4 text-blue-400" />
+              </span>
+              <h2 className="text-sm font-semibold text-white tracking-tight">Portfolio History</h2>
             </div>
             <PortfolioChart />
-          </div>
+          </motion.div>
         </div>
 
         {/* ── Market Conditions & Recommendations ──────────────────────────── */}
@@ -596,6 +643,9 @@ export default function DashboardPage() {
           title="Market Conditions & AI Recommendations"
           icon={<TrendingUp className="w-4 h-4 text-cyan-400" />}
           accentClass="border-cyan-500/40"
+          tintClass="from-cyan-500/[0.04]"
+          iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
+          glowColor="cyan"
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -612,6 +662,9 @@ export default function DashboardPage() {
           title="Cornerstone — CLM / CRF"
           icon={<PieChart className="w-4 h-4 text-amber-400" />}
           accentClass="border-amber-500/60"
+          tintClass="from-amber-500/[0.05]"
+          iconContainerClass="bg-amber-500/10 border border-amber-500/25"
+          glowColor="triples"
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -629,12 +682,16 @@ export default function DashboardPage() {
           icon={<Gauge className="w-4 h-4 text-orange-400" />}
           badge={
             dangerAlerts.length > 0 ? (
-              <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/40 shadow-[0_0_10px_rgba(239,68,68,0.25)]">
+                <span className="w-1.5 h-1.5 rounded-full bg-red-400 dot-live" />
                 {dangerAlerts.length} ALERT{dangerAlerts.length > 1 ? 'S' : ''}
               </span>
             ) : undefined
           }
           accentClass={dangerAlerts.length > 0 ? 'border-red-500/60' : 'border-orange-500/40'}
+          tintClass={dangerAlerts.length > 0 ? 'from-red-500/[0.05]' : 'from-orange-500/[0.04]'}
+          iconContainerClass={dangerAlerts.length > 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-orange-500/10 border border-orange-500/20'}
+          glowColor={dangerAlerts.length > 0 ? 'red' : 'orange'}
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -656,6 +713,9 @@ export default function DashboardPage() {
           title="Triple ETF Tactical Engine"
           icon={<Zap className="w-4 h-4 text-violet-400" />}
           accentClass="border-violet-500/40"
+          tintClass="from-violet-500/[0.04]"
+          iconContainerClass="bg-violet-500/10 border border-violet-500/20"
+          glowColor="hedge"
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -679,6 +739,9 @@ export default function DashboardPage() {
           title="AI Portfolio Analysis"
           icon={<Brain className="w-4 h-4 text-cyan-400" />}
           accentClass="border-cyan-500/40"
+          tintClass="from-cyan-500/[0.04]"
+          iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
+          glowColor="cyan"
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -729,6 +792,9 @@ export default function DashboardPage() {
           title="Watchlist"
           icon={<Eye className="w-4 h-4 text-purple-400" />}
           accentClass="border-purple-500/30"
+          tintClass="from-purple-500/[0.03]"
+          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+          glowColor="purple"
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -747,6 +813,7 @@ export default function DashboardPage() {
           id="positions"
           title={`All Positions (${account.positions.length})`}
           icon={<BarChart2 className="w-4 h-4 text-[#7c82a0]" />}
+          iconContainerClass="bg-white/[0.06] border border-white/10"
           defaultOpen={true}
         >
           <div className="pt-4">
@@ -760,6 +827,9 @@ export default function DashboardPage() {
           title="Triple C's Strategy Guide"
           icon={<BookOpen className="w-4 h-4 text-blue-400" />}
           accentClass="border-blue-500/30"
+          tintClass="from-blue-500/[0.03]"
+          iconContainerClass="bg-blue-500/10 border border-blue-500/20"
+          glowColor="cornerstone"
           defaultOpen={false}
         >
           <div className="pt-4">

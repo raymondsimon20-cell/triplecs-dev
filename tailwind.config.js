@@ -33,6 +33,40 @@ module.exports = {
         warn: '#f97316',
         safe: '#22c55e',
       },
+      boxShadow: {
+        'glow-triples':     '0 0 20px rgba(245,158,11,0.12), 0 4px 24px rgba(0,0,0,0.4)',
+        'glow-cornerstone': '0 0 20px rgba(59,130,246,0.12), 0 4px 24px rgba(0,0,0,0.4)',
+        'glow-income':      '0 0 20px rgba(16,185,129,0.12), 0 4px 24px rgba(0,0,0,0.4)',
+        'glow-hedge':       '0 0 20px rgba(139,92,246,0.12),  0 4px 24px rgba(0,0,0,0.4)',
+        'glow-cyan':        '0 0 20px rgba(6,182,212,0.12),   0 4px 24px rgba(0,0,0,0.4)',
+        'glow-orange':      '0 0 20px rgba(249,115,22,0.12),  0 4px 24px rgba(0,0,0,0.4)',
+        'glow-red':         '0 0 20px rgba(239,68,68,0.15),   0 4px 24px rgba(0,0,0,0.4)',
+        'glow-purple':      '0 0 20px rgba(168,85,247,0.12),  0 4px 24px rgba(0,0,0,0.4)',
+        'card':             '0 4px 24px rgba(0,0,0,0.35)',
+        'card-hover':       '0 8px 32px rgba(0,0,0,0.5)',
+      },
+      keyframes: {
+        shimmer: {
+          '0%':   { backgroundPosition: '-200% 0' },
+          '100%': { backgroundPosition:  '200% 0' },
+        },
+        'glow-pulse': {
+          '0%, 100%': { opacity: '1', boxShadow: '0 0 4px 2px currentColor' },
+          '50%':      { opacity: '0.5', boxShadow: '0 0 8px 4px currentColor' },
+        },
+        'dot-pulse': {
+          '0%, 100%': { opacity: '1',   transform: 'scale(1)' },
+          '50%':      { opacity: '0.4', transform: 'scale(0.75)' },
+        },
+      },
+      animation: {
+        shimmer:     'shimmer 2.4s linear infinite',
+        'glow-pulse': 'glow-pulse 2s ease-in-out infinite',
+        'dot-pulse':  'dot-pulse 2s ease-in-out infinite',
+      },
+      fontFamily: {
+        sans: ['var(--font-jakarta)', '-apple-system', 'BlinkMacSystemFont', 'Segoe UI', 'sans-serif'],
+      },
     },
   },
   plugins: [],
