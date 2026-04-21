@@ -21,7 +21,7 @@ interface Props {
   marginBalance: number;
   totalValue: number;
   positions: EnrichedPosition[];
-  dividendsAnnual: number;   // from /api/dividends
+  dividendsAnnual: number;   // projected annual income from current holdings
   marginRate?: number;        // e.g. 0.0775 for 7.75% (decimal, from settings)
   familyCapPct?: number;      // fund family concentration cap (default 25%)
 }
@@ -152,7 +152,7 @@ function InterestCoverageSection({
         <div className="bg-[#22263a] rounded-lg p-3 space-y-1">
           <div className="text-xs text-[#4a5070]">Monthly Dividends</div>
           <div className="text-base font-mono font-semibold text-emerald-400">{fmtDollar(monthlyDividends)}</div>
-          <div className="text-xs text-[#4a5070]">{fmtDollar(dividendsAnnual)}/yr (trailing)</div>
+          <div className="text-xs text-[#4a5070]">{fmtDollar(dividendsAnnual)}/yr (projected)</div>
         </div>
       </div>
 

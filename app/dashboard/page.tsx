@@ -643,7 +643,7 @@ export default function DashboardPage() {
               marginBalance={account.marginBalance}
               totalValue={account.totalValue}
               positions={account.positions}
-              dividendsAnnual={dividendsTotal}
+              dividendsAnnual={monthlyIncome * 12}
               marginRate={strategyTargets.marginRatePct / 100}
               familyCapPct={strategyTargets.familyCapPct}
             />
