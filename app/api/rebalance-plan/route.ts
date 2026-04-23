@@ -496,9 +496,14 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
             return { ...o, violations: block?.violations ?? [] };
           });
 
-        // ── Stage both allowed and blocked into the trade inbox ───────────────
-        // Additive: existing OrderReviewModal flow keeps working; the inbox is a
-        // second surface where the user can approve in bulk across sources.
+        // Emit the result FIRST so the client always gets it — staging follows
+        // and is bounded by a timeout so a slow blob write can never block
+        // the response. If staging fails, the inbox just doesn't show these
+        // entries this round; the existing OrderReviewModal flow is unaffected.
+        const result = JSON.stringify({ orders: finalOrders, blockedOrders, summary, drifts });
+        controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
+        controller.enqueue(encoder.encode('\n__DONE__'));
+
         try {
           const stageInputs: AppendInput[] = [
             ...finalOrders.map((o) => {
@@ -529,14 +534,15 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
               violations:  o.violations,
             })),
           ];
-          if (stageInputs.length > 0) await appendInbox(stageInputs);
+          if (stageInputs.length > 0) {
+            await Promise.race([
+              appendInbox(stageInputs),
+              new Promise((_, reject) => setTimeout(() => reject(new Error('staging timeout')), 5000)),
+            ]);
+          }
         } catch (err) {
           console.warn('[rebalance-plan] inbox staging failed:', err);
         }
-
-        const result = JSON.stringify({ orders: finalOrders, blockedOrders, summary, drifts });
-        controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
-        controller.enqueue(encoder.encode('\n__DONE__'));
         controller.close();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

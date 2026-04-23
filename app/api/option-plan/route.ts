@@ -406,26 +406,8 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
         finalPlan.limitPrice = +Math.max(selectedContract.bid, Math.min(selectedContract.ask, finalPlan.limitPrice)).toFixed(2);
         finalPlan.contracts  = Math.max(1, Math.min(3, Math.floor(finalPlan.contracts)));
 
-        // Stage into inbox (additive — Options panel still shows the plan inline).
-        try {
-          await appendInbox([{
-            source:      'option',
-            symbol:      symbol.toUpperCase(),
-            instruction: finalPlan.instruction,
-            quantity:    finalPlan.contracts,
-            orderType:   'LIMIT',
-            occSymbol:   finalPlan.occSymbol,
-            limitPrice:  finalPlan.limitPrice,
-            price:       finalPlan.limitPrice,
-            pillar:      position?.pillar,
-            rationale:   finalPlan.rationale,
-            aiMode:      mode,
-            violations:  [],
-          }]);
-        } catch (err) {
-          console.warn('[option-plan] inbox staging failed:', err);
-        }
-
+        // Emit result first so the client always gets it; staging follows with
+        // a timeout so a slow blob write can never block the response.
         const result = JSON.stringify({
           occSymbol: finalPlan.occSymbol, instruction: finalPlan.instruction,
           contracts: finalPlan.contracts, limitPrice: finalPlan.limitPrice,
@@ -434,6 +416,28 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
         });
         controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
         controller.enqueue(encoder.encode('\n__DONE__'));
+
+        try {
+          await Promise.race([
+            appendInbox([{
+              source:      'option',
+              symbol:      symbol.toUpperCase(),
+              instruction: finalPlan.instruction,
+              quantity:    finalPlan.contracts,
+              orderType:   'LIMIT',
+              occSymbol:   finalPlan.occSymbol,
+              limitPrice:  finalPlan.limitPrice,
+              price:       finalPlan.limitPrice,
+              pillar:      position?.pillar,
+              rationale:   finalPlan.rationale,
+              aiMode:      mode,
+              violations:  [],
+            }]),
+            new Promise((_, reject) => setTimeout(() => reject(new Error('staging timeout')), 5000)),
+          ]);
+        } catch (err) {
+          console.warn('[option-plan] inbox staging failed:', err);
+        }
         controller.close();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
