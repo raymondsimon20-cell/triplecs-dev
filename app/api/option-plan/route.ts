@@ -219,8 +219,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Kill switch — must use stream sentinel format, the client reads the body
+  // as a stream and parses after __RESULT__.
   if (await isAutomationPaused()) {
-    return NextResponse.json({ paused: true, error: 'Automation paused' }, { status: 200 });
+    const payload = JSON.stringify({ paused: true, error: 'Automation paused' });
+    const body = `__RESULT__${payload}\n__DONE__`;
+    return new Response(body, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-cache',
+      },
+    });
   }
 
   let body: OptionPlanRequest;

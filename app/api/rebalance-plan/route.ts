@@ -122,9 +122,19 @@ async function handlePost(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Kill switch — short-circuit before calling Claude
+  // Kill switch — short-circuit before calling Claude. Must use the stream
+  // sentinel format because the client always reads the body as a stream and
+  // looks for __RESULT__; a plain JSON response would never deliver a result.
   if (await isAutomationPaused()) {
-    return NextResponse.json({ paused: true, orders: [], blockedOrders: [], summary: 'Automation paused.', drifts: [] });
+    const payload = JSON.stringify({ paused: true, orders: [], blockedOrders: [], summary: 'Automation paused.', drifts: [] });
+    const body = `__RESULT__${payload}\n__DONE__`;
+    return new Response(body, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'X-Accel-Buffering': 'no',
+        'Cache-Control': 'no-cache',
+      },
+    });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
