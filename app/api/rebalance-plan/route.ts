@@ -37,6 +37,7 @@ import { requireAuth } from '@/lib/session';
 import { TRIPLE_C_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
 import { validateBatch, isAutomationPaused, type ProposedTrade, type GuardrailContext } from '@/lib/guardrails';
 import { getSnapshotHistory } from '@/lib/storage';
+import { appendInbox, type AppendInput } from '@/lib/inbox';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import type { TradeHistoryEntry } from '../orders/route';
 
@@ -494,6 +495,44 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
             const block = blocked.find((b) => b.symbol === o.symbol && b.instruction === o.instruction);
             return { ...o, violations: block?.violations ?? [] };
           });
+
+        // ── Stage both allowed and blocked into the trade inbox ───────────────
+        // Additive: existing OrderReviewModal flow keeps working; the inbox is a
+        // second surface where the user can approve in bulk across sources.
+        try {
+          const stageInputs: AppendInput[] = [
+            ...finalOrders.map((o) => {
+              const violations = allowed.find((a) => a.symbol === o.symbol && a.instruction === o.instruction)?.violations ?? [];
+              return {
+                source:      'rebalance' as const,
+                symbol:      o.symbol,
+                instruction: o.instruction,
+                quantity:    o.shares,
+                orderType:   'MARKET' as const,
+                price:       o.currentPrice,
+                pillar:      o.pillar,
+                rationale:   o.rationale,
+                aiMode:      'rebalance_plan',
+                violations,
+              };
+            }),
+            ...blockedOrders.map((o) => ({
+              source:      'rebalance' as const,
+              symbol:      o.symbol,
+              instruction: o.instruction,
+              quantity:    o.shares,
+              orderType:   'MARKET' as const,
+              price:       o.currentPrice,
+              pillar:      o.pillar,
+              rationale:   o.rationale,
+              aiMode:      'rebalance_plan',
+              violations:  o.violations,
+            })),
+          ];
+          if (stageInputs.length > 0) await appendInbox(stageInputs);
+        } catch (err) {
+          console.warn('[rebalance-plan] inbox staging failed:', err);
+        }
 
         const result = JSON.stringify({ orders: finalOrders, blockedOrders, summary, drifts });
         controller.enqueue(encoder.encode(`\n__RESULT__${result}`));

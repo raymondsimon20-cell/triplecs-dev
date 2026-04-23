@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
+  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target, Inbox,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -23,6 +23,7 @@ import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
+import { TradeInbox } from '@/components/TradeInbox';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
 import { WatchlistPanel } from '@/components/WatchlistPanel';
@@ -653,6 +654,25 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <PerformancePanel />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Trade Inbox — unified one-click approval queue ────────────────── */}
+        <CollapsiblePanel
+          id="inbox"
+          title="Trade Inbox"
+          icon={<Inbox className="w-4 h-4 text-cyan-400" />}
+          accentClass="border-cyan-500/40"
+          tintClass="from-cyan-500/[0.04]"
+          iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
+          glowColor="cyan"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <TradeInbox
+              accountHash={account.accountHash}
+              onChanged={() => fetchAccounts(true)}
+            />
           </div>
         </CollapsiblePanel>
 
