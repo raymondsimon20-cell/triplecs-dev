@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers } from '@/lib/schwab/client';
 import { getCachedPortfolio, cachePortfolio, getTokens, savePortfolioSnapshot } from '@/lib/storage';
 import { enrichPositions, summarizeByPillar, checkMarginRules, getTaxHarvestCandidates } from '@/lib/classify';
+import { buildSnapshot } from '@/lib/portfolio/fetch';
 import type { SchwabAccountWrapper } from '@/lib/schwab/types';
 
 export const dynamic = 'force-dynamic';
@@ -140,27 +141,16 @@ export async function GET(req: Request) {
         await cachePortfolio(acct.accountNumber, result);
 
         // Persist snapshot for AI history and proactive alerts (fire-and-forget)
-        const equity    = acct.currentBalances.equity;
         const marginBal = Math.abs(acct.currentBalances.marginBalance ?? 0);
-        savePortfolioSnapshot({
-          savedAt: Date.now(),
+        savePortfolioSnapshot(buildSnapshot([{
+          accountNumber: acct.accountNumber,
           totalValue,
-          equity,
+          equity: acct.currentBalances.equity,
           marginBalance: marginBal,
           marginUtilizationPct: totalValue > 0 ? (marginBal / totalValue) * 100 : 0,
-          pillarSummary: pillarSummary.map((p) => ({
-            pillar: p.pillar,
-            portfolioPercent: p.portfolioPercent,
-            totalValue: p.totalValue,
-          })),
-          positions: enrichedPositions.map((p) => ({
-            symbol: p.instrument.symbol,
-            pillar: p.pillar,
-            marketValue: p.marketValue,
-            shares: p.longQuantity,
-            unrealizedGL: p.longOpenProfitLoss ?? 0,
-          })),
-        }).catch((e) => console.warn('[snapshot] save failed:', e));
+          pillarSummary,
+          positions: enrichedPositions,
+        }])).catch((e) => console.warn('[snapshot] save failed:', e));
 
         return result;
       }))

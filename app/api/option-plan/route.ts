@@ -41,6 +41,7 @@ import { requireAuth } from '@/lib/session';
 import { getTokens } from '@/lib/storage';
 import { getOptionsChain } from '@/lib/schwab/client';
 import { TRIPLE_C_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
+import { isAutomationPaused } from '@/lib/guardrails';
 
 export const dynamic = 'force-dynamic';
 
@@ -215,6 +216,10 @@ function extractJSON(text: string): string {
 export async function POST(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  if (await isAutomationPaused()) {
+    return NextResponse.json({ paused: true, error: 'Automation paused' }, { status: 200 });
   }
 
   let body: OptionPlanRequest;

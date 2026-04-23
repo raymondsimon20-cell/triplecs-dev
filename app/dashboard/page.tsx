@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen,
+  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -21,6 +21,8 @@ import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
+import { AutomationToggle } from '@/components/AutomationToggle';
+import { PerformancePanel } from '@/components/PerformancePanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
 import { WatchlistPanel } from '@/components/WatchlistPanel';
@@ -480,6 +482,7 @@ export default function DashboardPage() {
             </button>
 
             <SettingsPanel />
+            <AutomationToggle />
             <ThemeToggle />
             <PortfolioExport
               positions={account.positions}
@@ -636,6 +639,22 @@ export default function DashboardPage() {
             <PortfolioChart />
           </motion.div>
         </div>
+
+        {/* ── Performance vs 40% target ────────────────────────────────────── */}
+        <CollapsiblePanel
+          id="performance"
+          title="Performance — vs 40% Target"
+          icon={<Target className="w-4 h-4 text-emerald-400" />}
+          accentClass="border-emerald-500/40"
+          tintClass="from-emerald-500/[0.04]"
+          iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+          glowColor="income"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <PerformancePanel />
+          </div>
+        </CollapsiblePanel>
 
         {/* ── Market Conditions & Recommendations ──────────────────────────── */}
         <CollapsiblePanel

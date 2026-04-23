@@ -99,12 +99,23 @@ export interface PortfolioSnapshot {
     shares: number;
     unrealizedGL: number;
   }>;
+  /** SPY closing price on the snapshot date — used as benchmark for alpha calc. */
+  spyClose?: number;
+  /** True when the snapshot was reconstructed by the backfill routine, not captured live. */
+  synthetic?: boolean;
 }
 
 export async function savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promise<void> {
   const store = getStore('portfolio-snapshots');
   // Save both 'latest' (for AI context) and a date-keyed entry (for chart history)
   const dayKey = `day-${new Date(snapshot.savedAt).toISOString().slice(0, 10)}`;
+  // Synthetic backfill writes never clobber a real snapshot for the same day.
+  if (snapshot.synthetic) {
+    const existing = await store.get(dayKey, { type: 'json' }) as PortfolioSnapshot | null;
+    if (existing && !existing.synthetic) return;
+    await store.setJSON(dayKey, snapshot);
+    return;
+  }
   await Promise.all([
     store.setJSON('latest', snapshot),
     store.setJSON(dayKey, snapshot),
@@ -128,6 +139,59 @@ export async function getSnapshotHistory(limit = 90): Promise<PortfolioSnapshot[
     sorted.map((key) => store.get(key, { type: 'json' }) as Promise<PortfolioSnapshot | null>)
   );
   return records.filter((r): r is PortfolioSnapshot => r !== null);
+}
+
+// ─── Cash-flow events (for TWR calculation) ──────────────────────────────────
+
+/**
+ * A capital movement that crosses the account boundary — money in or out.
+ * Used to segment time-weighted return so deposits/withdrawals don't get
+ * counted as portfolio performance.
+ *
+ * `direction`: 'in' for deposits / journals received / dividend cash credit,
+ * 'out' for withdrawals / journals sent / margin interest / fees.
+ *
+ * `amount` is always positive; sign is encoded in `direction`.
+ */
+export interface CashFlowEvent {
+  id: string;                 // stable id from Schwab activityId, or synthetic
+  date: string;               // YYYY-MM-DD (event date, normalised)
+  direction: 'in' | 'out';
+  amount: number;             // positive number, USD
+  kind: 'deposit' | 'withdrawal' | 'journal' | 'dividend' | 'interest' | 'fee' | 'other';
+  description?: string;
+  source: 'schwab' | 'manual';
+  /** Original Schwab activityId, when available — used for de-dupe. */
+  activityId?: string;
+}
+
+const CASH_FLOWS_KEY = 'log';
+
+export async function getCashFlows(): Promise<CashFlowEvent[]> {
+  const data = await getStore('cash-flows').get(CASH_FLOWS_KEY, { type: 'json' });
+  return Array.isArray(data) ? data : [];
+}
+
+/**
+ * Append new cash-flow events. De-dupes on `id` (and `activityId` if present)
+ * so re-running the daily sync is idempotent.
+ */
+export async function appendCashFlows(events: CashFlowEvent[]): Promise<number> {
+  if (events.length === 0) return 0;
+  const existing = await getCashFlows();
+  const seenIds = new Set(existing.map((e) => e.id));
+  const seenActivity = new Set(
+    existing.map((e) => e.activityId).filter((x): x is string => Boolean(x)),
+  );
+  const fresh = events.filter((e) => {
+    if (seenIds.has(e.id)) return false;
+    if (e.activityId && seenActivity.has(e.activityId)) return false;
+    return true;
+  });
+  if (fresh.length === 0) return 0;
+  const merged = [...existing, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+  await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
+  return fresh.length;
 }
 
 // ─── Recommendation tracking ──────────────────────────────────────────────────

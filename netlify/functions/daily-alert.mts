@@ -5,10 +5,79 @@
  */
 
 import type { Config } from '@netlify/functions';
-import { getLatestPortfolioSnapshot, saveAlerts, getCornerstoneSnapshot } from '../../lib/storage';
+import {
+  getLatestPortfolioSnapshot,
+  saveAlerts,
+  getCornerstoneSnapshot,
+  savePortfolioSnapshot,
+  appendCashFlows,
+  getCashFlows,
+  getTokens,
+} from '../../lib/storage';
 import type { StoredAlert } from '../../lib/storage';
+import { getAccountNumbers, createClient } from '../../lib/schwab/client';
+import { fetchAccountState, buildSnapshot } from '../../lib/portfolio/fetch';
+import { fetchCashFlows } from '../../lib/schwab/transactions';
+
+/**
+ * Capture today's portfolio snapshot + SPY benchmark + any new cash flows.
+ * Runs before the alert pipeline so the alerts can read fresh data.
+ * Failures are logged but do not abort the alert run.
+ */
+async function captureDailySnapshot(): Promise<void> {
+  const tokens = await getTokens();
+  if (!tokens) {
+    console.warn('[daily-alert] No Schwab tokens — skipping snapshot capture');
+    return;
+  }
+
+  try {
+    const accounts = await getAccountNumbers(tokens);
+    if (accounts.length === 0) return;
+
+    // Fetch all account states in parallel
+    const states = await Promise.all(
+      accounts.map(({ hashValue }) => fetchAccountState(hashValue)),
+    );
+
+    // SPY benchmark close — use Schwab's quote (closePrice = previous session close).
+    let spyClose: number | undefined;
+    try {
+      const client = await createClient();
+      const quotes = await client.getQuotes(['SPY']);
+      const q      = quotes['SPY']?.quote;
+      spyClose     = q?.closePrice ?? q?.lastPrice;
+    } catch (err) {
+      console.warn('[daily-alert] SPY quote fetch failed:', err);
+    }
+
+    await savePortfolioSnapshot(buildSnapshot(states, { spyClose }));
+    console.log(`[daily-alert] Snapshot saved (totalValue=${states.reduce((s, x) => s + x.totalValue, 0)}, spy=${spyClose ?? 'n/a'})`);
+  } catch (err) {
+    console.error('[daily-alert] snapshot capture failed:', err);
+  }
+
+  // Sync cash flows since the last recorded event (or last 7 days if first run).
+  try {
+    const existing = await getCashFlows();
+    const lastDate = existing.length > 0 ? existing[existing.length - 1].date : null;
+    const start = lastDate
+      ? new Date(`${lastDate}T00:00:00.000Z`).toISOString()
+      : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const end  = new Date().toISOString();
+
+    const events = await fetchCashFlows(start, end);
+    const added  = await appendCashFlows(events);
+    console.log(`[daily-alert] Cash flows: scanned ${events.length}, added ${added} new`);
+  } catch (err) {
+    console.error('[daily-alert] cash-flow sync failed:', err);
+  }
+}
 
 export default async function handler() {
+  // Capture snapshot + cash flows BEFORE running alerts so alerts use fresh data.
+  await captureDailySnapshot();
+
   const [snapshot, cornerstoneSnap] = await Promise.all([
     getLatestPortfolioSnapshot().catch(() => null),
     getCornerstoneSnapshot().catch(() => null),

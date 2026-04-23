@@ -32,9 +32,13 @@
 
 import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
+import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
 import { TRIPLE_C_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
+import { validateBatch, isAutomationPaused, type ProposedTrade, type GuardrailContext } from '@/lib/guardrails';
+import { getSnapshotHistory } from '@/lib/storage';
 import type { EnrichedPosition } from '@/lib/schwab/types';
+import type { TradeHistoryEntry } from '../orders/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -115,6 +119,11 @@ export async function POST(req: Request) {
 async function handlePost(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  // Kill switch — short-circuit before calling Claude
+  if (await isAutomationPaused()) {
+    return NextResponse.json({ paused: true, orders: [], blockedOrders: [], summary: 'Automation paused.', drifts: [] });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;
@@ -424,7 +433,69 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
           })
           .filter((o) => o.shares >= 1);
 
-        const result = JSON.stringify({ orders: validatedOrders, summary, drifts });
+        // ── Guardrail validation ──────────────────────────────────────────────
+        let recentTrades: { timestamp: string; symbol: string; instruction: ProposedTrade['instruction']; shares: number; price?: number }[] = [];
+        try {
+          const log = await getStore('trade-history').get('log', { type: 'json' }) as TradeHistoryEntry[] | null;
+          if (Array.isArray(log)) {
+            recentTrades = log
+              .filter((t) => t.status === 'placed')
+              .map((t) => ({
+                timestamp: t.timestamp,
+                symbol: t.symbol,
+                instruction: t.instruction,
+                shares: t.quantity,
+                price: t.price,
+              }));
+          }
+        } catch (err) {
+          console.warn('[rebalance-plan] trade-history load failed:', err);
+        }
+
+        let snapshotHistory: Awaited<ReturnType<typeof getSnapshotHistory>> = [];
+        try { snapshotHistory = await getSnapshotHistory(30); }
+        catch (err) { console.warn('[rebalance-plan] snapshots load failed:', err); }
+
+        const guardrailCtx: GuardrailContext = {
+          totalValue,
+          equity,
+          marginBalance: Math.max(0, totalValue - equity),
+          positions: equityPositions.map((p) => ({
+            symbol: p.instrument.symbol,
+            pillar: p.pillar,
+            marketValue: p.marketValue,
+            shares: p.longQuantity,
+          })),
+          pillars: drifts.map((d) => ({
+            pillar: d.pillar,
+            currentPct: d.currentPct,
+            targetPct: d.targetPct,
+          })),
+          recentTrades,
+          snapshots: snapshotHistory,
+        };
+
+        const proposed: ProposedTrade[] = validatedOrders.map((o) => ({
+          symbol: o.symbol,
+          instruction: o.instruction,
+          shares: o.shares,
+          price: o.currentPrice,
+          pillar: o.pillar,
+        }));
+
+        const { allowed, blocked } = validateBatch(proposed, guardrailCtx);
+        const allowedSymbols = new Set(allowed.map((a) => `${a.symbol}|${a.instruction}`));
+        const finalOrders = validatedOrders.filter(
+          (o) => allowedSymbols.has(`${o.symbol}|${o.instruction}`),
+        );
+        const blockedOrders = validatedOrders
+          .filter((o) => !allowedSymbols.has(`${o.symbol}|${o.instruction}`))
+          .map((o) => {
+            const block = blocked.find((b) => b.symbol === o.symbol && b.instruction === o.instruction);
+            return { ...o, violations: block?.violations ?? [] };
+          });
+
+        const result = JSON.stringify({ orders: finalOrders, blockedOrders, summary, drifts });
         controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
         controller.enqueue(encoder.encode('\n__DONE__'));
         controller.close();
