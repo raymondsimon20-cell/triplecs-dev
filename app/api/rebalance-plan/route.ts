@@ -34,7 +34,8 @@ import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
 import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
-import { TRIPLE_C_SYSTEM_PROMPT } from '@/lib/ai/system-prompt';
+import { cachedSystemPrompt, withFeedback } from '@/lib/ai/prompt-cache';
+import { loadFeedbackBlock } from '@/lib/ai/recap-loader';
 import { validateBatch, isAutomationPaused, type ProposedTrade, type GuardrailContext } from '@/lib/guardrails';
 import { getSnapshotHistory } from '@/lib/storage';
 import { appendInbox, type AppendInput } from '@/lib/inbox';
@@ -389,11 +390,12 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
     async start(controller) {
       try {
         const client = new Anthropic({ apiKey });
+        const feedbackBlock = await loadFeedbackBlock();
         const stream = await client.messages.stream({
           model:      'claude-sonnet-4-6',
           max_tokens: 2048,
-          system:     TRIPLE_C_SYSTEM_PROMPT,
-          messages:   [{ role: 'user', content: prompt }],
+          system:     cachedSystemPrompt(),
+          messages:   [{ role: 'user', content: withFeedback(feedbackBlock, prompt) }],
         });
 
         let fullText = '';

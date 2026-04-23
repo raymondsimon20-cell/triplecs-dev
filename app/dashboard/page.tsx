@@ -24,6 +24,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
 import { TradeInbox } from '@/components/TradeInbox';
+import { PerformanceReviewPanel } from '@/components/PerformanceReviewPanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
 import { WatchlistPanel } from '@/components/WatchlistPanel';
@@ -161,6 +162,7 @@ function DataAge({ updated }: { updated: Date }) {
 
 const NAV_ITEMS = [
   { id: 'overview',     label: 'Overview',      icon: BarChart2   },
+  { id: 'review',       label: 'AI Review',     icon: Brain       },
   { id: 'market',       label: 'Market',        icon: TrendingUp  },
   { id: 'cornerstone',  label: 'Cornerstone',   icon: PieChart    },
   { id: 'margin',       label: 'Margin',        icon: Gauge       },
@@ -673,6 +675,22 @@ export default function DashboardPage() {
               accountHash={account.accountHash}
               onChanged={() => fetchAccounts(true)}
             />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── AI Performance Review — Phase 3 feedback loop ─────────────────── */}
+        <CollapsiblePanel
+          id="review"
+          title="AI Performance Review"
+          icon={<Brain className="w-4 h-4 text-purple-400" />}
+          accentClass="border-purple-500/40"
+          tintClass="from-purple-500/[0.04]"
+          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+          glowColor="purple"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <PerformanceReviewPanel currentTargets={strategyTargets} />
           </div>
         </CollapsiblePanel>
 
