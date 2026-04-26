@@ -90,11 +90,14 @@ export async function POST(req: Request) {
   const recap = await loadRecap(90);
   if (!recap) return NextResponse.json({ error: 'Recap unavailable' }, { status: 503 });
 
-  if (recap.outcomes.length < 3) {
+  // Only count decided outcomes (win !== null). Flat outcomes (|pnl| < 1%)
+  // carry no signal, so they shouldn't satisfy the gate.
+  const decidedCount = recap.outcomes.filter((o) => o.win !== null).length;
+  if (decidedCount < 3) {
     return NextResponse.json({
       recap,
       proposed: {},
-      rationale: 'Not enough decided recommendations in the 90-day window to propose target changes. Keep accumulating data — at least 5–10 outcomes are needed for a meaningful review.',
+      rationale: `Not enough decided recommendations in the 90-day window to propose target changes (${decidedCount} decided, need ≥3). Keep accumulating data — at least 5–10 outcomes are needed for a meaningful review.`,
       keyFindings: [],
     });
   }
