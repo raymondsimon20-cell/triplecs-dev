@@ -166,17 +166,30 @@ function sanitizeRec(rec: Recommendation): Recommendation {
   };
 }
 
-/** Estimate shares from a recommendation + live positions */
-function estimateShares(rec: Recommendation, positions: EnrichedPosition[]): number {
+/**
+ * Estimate shares from a recommendation + live positions, optionally
+ * augmented with a `extraPrices` map (live quotes for symbols the user
+ * does not already hold). Returns 0 when we genuinely cannot compute
+ * the count — e.g. a BUY into a brand-new position with no quote data
+ * yet — so callers can render "size unavailable" rather than a
+ * fabricated number based on a $1 fallback.
+ */
+function estimateShares(
+  rec: Recommendation,
+  positions: EnrichedPosition[],
+  extraPrices: Record<string, number> = {},
+): number {
   const safe = sanitizeRec(rec);
+  const symbol = safe.ticker.toUpperCase();
   const pos = positions.find(
-    (p) => p.instrument?.symbol?.toUpperCase() === safe.ticker.toUpperCase()
+    (p) => p.instrument?.symbol?.toUpperCase() === symbol
   );
   const maxShares = pos ? (pos.longQuantity || pos.shortQuantity || 999_999) : 999_999;
 
   if (safe.action === 'BUY' && safe.dollar_amount && safe.dollar_amount > 0) {
-    const price = pos ? (pos.marketValue / (pos.longQuantity || 1)) : 1;
-    if (price <= 0) return 1;
+    const heldPrice = pos ? pos.marketValue / (pos.longQuantity || 1) : 0;
+    const price = heldPrice > 0 ? heldPrice : (extraPrices[symbol] ?? 0);
+    if (price <= 0) return 0; // unknown price for a new position — refuse to guess
     return Math.min(999_999, Math.max(1, Math.floor(safe.dollar_amount / price)));
   }
 
@@ -188,7 +201,7 @@ function estimateShares(rec: Recommendation, positions: EnrichedPosition[]): num
     return pos.longQuantity; // default: sell all
   }
 
-  return 1;
+  return 0;
 }
 
 // ─── Pillar Bar ─────────────────────────────────────────────────────────────────
@@ -368,6 +381,11 @@ export function AIAnalysisPanel({
   const [stagedCount,   setStagedCount]   = useState<number | null>(null);
   const [stageError,    setStageError]    = useState<string | null>(null);
 
+  // Live quotes for tickers in recommendations that the user does NOT
+  // already hold. Without this, BUYs for new positions fell back to a
+  // $1 fictional price and produced wildly oversized share counts.
+  const [extraPrices, setExtraPrices] = useState<Record<string, number>>({});
+
   // ── Recommendation history ──────────────────────────────────────────────────
 
   useEffect(() => {
@@ -376,6 +394,43 @@ export function AIAnalysisPanel({
       .then((d) => setRecHistory(d.recommendations ?? []))
       .catch(() => {});
   }, []);
+
+  // ── Fetch live prices for new-position tickers in the latest analysis ──────
+  // BUY recs for symbols NOT in `positions` need a real quote so estimateShares
+  // can compute a correct share count instead of returning 0 ("size unavailable").
+  useEffect(() => {
+    if (!analysis?.recommendations?.length) return;
+
+    const heldSymbols = new Set(
+      positions
+        .map((p) => p.instrument?.symbol?.toUpperCase())
+        .filter((s): s is string => !!s),
+    );
+    const missing = Array.from(
+      new Set(
+        analysis.recommendations
+          .filter((r) => r.action === 'BUY')
+          .map((r) => r.ticker?.toUpperCase())
+          .filter((s): s is string => !!s && !heldSymbols.has(s) && !(s in extraPrices)),
+      ),
+    );
+    if (missing.length === 0) return;
+
+    let cancelled = false;
+    fetch('/api/quotes', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbols: missing }),
+    })
+      .then((r) => r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`)))
+      .then((d: { prices?: Record<string, number> }) => {
+        if (cancelled) return;
+        if (d.prices) setExtraPrices((prev) => ({ ...prev, ...d.prices }));
+      })
+      .catch((err) => console.warn('[/api/quotes] fetch failed:', err));
+
+    return () => { cancelled = true; };
+  }, [analysis, positions, extraPrices]);
 
   const saveRecs = useCallback((recs: AIAnalysis['recommendations']) => {
     if (!recs?.length) return;
@@ -543,7 +598,7 @@ export function AIAnalysisPanel({
     if (!analysis) return;
     const rows: OrderRow[] = [...selectedRecs]
       .sort((a, b) => a - b)
-      .map((idx) => {
+      .map((idx): OrderRow => {
         const rec = analysis.recommendations[idx];
         const instruction: 'BUY' | 'SELL' =
           rec.action === 'BUY' ? 'BUY' : 'SELL';
@@ -551,17 +606,21 @@ export function AIAnalysisPanel({
           recIdx:      idx,
           ticker:      rec.ticker,
           instruction,
-          shares:      estimateShares(rec, positions),
+          shares:      estimateShares(rec, positions, extraPrices),
           orderType:   'MARKET',
           rationale:   rec.rationale,
           size_hint:   rec.size_hint ?? '',
           aiMode:      analysis.mode,
         };
-      });
+      })
+      // Drop rows we couldn't size — never send a 0-share order.
+      // The user will see them missing from the modal and can retry once
+      // /api/quotes lands a price (the rec card shows "fetching price…").
+      .filter((r) => r.shares > 0);
     setOrderRows(rows);
     setOrderResults([]);
     setShowModal(true);
-  }, [analysis, selectedRecs, positions]);
+  }, [analysis, selectedRecs, positions, extraPrices]);
 
   const placeOrders = useCallback(async () => {
     if (!accountHash) return;
@@ -599,23 +658,36 @@ export function AIAnalysisPanel({
    */
   const stageRecsToInbox = useCallback(async () => {
     if (!analysis) return;
-    const items = [...selectedRecs]
+    const candidates = [...selectedRecs]
       .filter((idx) => EXECUTABLE_ACTIONS.has(analysis.recommendations[idx]?.action))
       .map((idx) => {
         const rec = analysis.recommendations[idx];
         const instruction: 'BUY' | 'SELL' = rec.action === 'BUY' ? 'BUY' : 'SELL';
         return {
+          ticker: rec.ticker,
           source:      'ai-rec' as const,
           symbol:      rec.ticker,
           instruction,
-          quantity:    estimateShares(rec, positions),
+          quantity:    estimateShares(rec, positions, extraPrices),
           orderType:   'MARKET' as const,
           rationale:   rec.rationale,
           aiMode:      analysis.mode,
         };
       });
 
-    if (items.length === 0) return;
+    // Only stage rows where we know the size. Recs that need a quote will be
+    // surfaced to the user so they know what didn't go through.
+    const items   = candidates.filter((c) => c.quantity > 0).map(({ ticker, ...rest }) => rest);
+    const skipped = candidates.filter((c) => c.quantity <= 0).map((c) => c.ticker);
+
+    if (items.length === 0) {
+      setStageError(
+        skipped.length > 0
+          ? `Can't stage yet — still fetching prices for ${skipped.join(', ')}. Try again in a moment.`
+          : null,
+      );
+      return;
+    }
 
     setStaging(true);
     setStageError(null);
@@ -628,6 +700,9 @@ export function AIAnalysisPanel({
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json() as { staged?: unknown[]; count?: number };
       setStagedCount(data.count ?? items.length);
+      if (skipped.length > 0) {
+        setStageError(`Staged ${items.length}; skipped ${skipped.join(', ')} (price not yet loaded — retry in a sec).`);
+      }
       // Clear selection so the same recs aren't accidentally re-staged
       setSelectedRecs(new Set());
     } catch (e) {
@@ -635,7 +710,7 @@ export function AIAnalysisPanel({
     } finally {
       setStaging(false);
     }
-  }, [analysis, selectedRecs, positions]);
+  }, [analysis, selectedRecs, positions, extraPrices]);
 
   const copyJSON = useCallback(() => {
     if (!analysis) return;
@@ -887,12 +962,23 @@ export function AIAnalysisPanel({
                               {rec.dollar_amount && <span className="text-[#7c82a0] ml-2">(${rec.dollar_amount.toLocaleString()})</span>}
                               {rec.sell_pct      && <span className="text-[#7c82a0] ml-2">({rec.sell_pct}% of position)</span>}
                               {isExecutable && (() => {
-                                const shares = estimateShares(rec, positions);
-                                return shares > 0 ? (
-                                  <span className="text-emerald-300 ml-2 font-semibold tabular-nums">
-                                    ≈ {shares.toLocaleString()} share{shares === 1 ? '' : 's'}
-                                  </span>
-                                ) : null;
+                                const shares = estimateShares(rec, positions, extraPrices);
+                                if (shares > 0) {
+                                  return (
+                                    <span className="text-emerald-300 ml-2 font-semibold tabular-nums">
+                                      ≈ {shares.toLocaleString()} share{shares === 1 ? '' : 's'}
+                                    </span>
+                                  );
+                                }
+                                // BUY into a new position whose quote hasn't arrived yet — be honest.
+                                if (rec.action === 'BUY' && rec.dollar_amount) {
+                                  return (
+                                    <span className="text-yellow-400/80 ml-2 italic">
+                                      (fetching price…)
+                                    </span>
+                                  );
+                                }
+                                return null;
                               })()}
                             </div>
                           )}
