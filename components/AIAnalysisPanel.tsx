@@ -361,6 +361,13 @@ export function AIAnalysisPanel({
   const [placing,       setPlacing]       = useState(false);
   const [orderResults,  setOrderResults]  = useState<OrderResult[]>([]);
 
+  // Stage-to-Inbox state — alternative path that routes selected recs through
+  // the Trade Inbox (consistent with Rebalance/Option plans) instead of
+  // placing directly via Schwab.
+  const [staging,       setStaging]       = useState(false);
+  const [stagedCount,   setStagedCount]   = useState<number | null>(null);
+  const [stageError,    setStageError]    = useState<string | null>(null);
+
   // ── Recommendation history ──────────────────────────────────────────────────
 
   useEffect(() => {
@@ -584,6 +591,51 @@ export function AIAnalysisPanel({
       setPlacing(false);
     }
   }, [accountHash, orderRows]);
+
+  /**
+   * Stage selected executable recommendations to the Trade Inbox.
+   * Maps each rec to the inbox AppendInput shape, POSTs to /api/inbox.
+   * /api/inbox de-dupes within the TTL window so re-staging is safe.
+   */
+  const stageRecsToInbox = useCallback(async () => {
+    if (!analysis) return;
+    const items = [...selectedRecs]
+      .filter((idx) => EXECUTABLE_ACTIONS.has(analysis.recommendations[idx]?.action))
+      .map((idx) => {
+        const rec = analysis.recommendations[idx];
+        const instruction: 'BUY' | 'SELL' = rec.action === 'BUY' ? 'BUY' : 'SELL';
+        return {
+          source:      'ai-rec' as const,
+          symbol:      rec.ticker,
+          instruction,
+          quantity:    estimateShares(rec, positions),
+          orderType:   'MARKET' as const,
+          rationale:   rec.rationale,
+          aiMode:      analysis.mode,
+        };
+      });
+
+    if (items.length === 0) return;
+
+    setStaging(true);
+    setStageError(null);
+    try {
+      const res = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json() as { staged?: unknown[]; count?: number };
+      setStagedCount(data.count ?? items.length);
+      // Clear selection so the same recs aren't accidentally re-staged
+      setSelectedRecs(new Set());
+    } catch (e) {
+      setStageError(e instanceof Error ? e.message : 'Failed to stage to inbox');
+    } finally {
+      setStaging(false);
+    }
+  }, [analysis, selectedRecs, positions]);
 
   const copyJSON = useCallback(() => {
     if (!analysis) return;
@@ -871,15 +923,61 @@ export function AIAnalysisPanel({
                       );
                     })}
 
-                    {/* Floating batch trade button below list */}
-                    {executableSelected > 0 && accountHash && (
-                      <button
-                        onClick={openOrderModal}
-                        className="w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white py-3 rounded-lg text-sm font-medium transition-colors mt-2"
-                      >
-                        <ShoppingCart className="w-4 h-4" />
-                        Review & Place {executableSelected} Trade{executableSelected !== 1 ? 's' : ''}
-                      </button>
+                    {/* Floating batch trade buttons below list */}
+                    {executableSelected > 0 && (
+                      <div className="space-y-2 mt-2">
+                        {/* Primary: Stage to Trade Inbox (consistent with Rebalance/Option plans) */}
+                        <button
+                          onClick={stageRecsToInbox}
+                          disabled={staging}
+                          className="w-full flex items-center justify-center gap-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white py-3 rounded-lg text-sm font-medium transition-colors"
+                        >
+                          {staging ? (
+                            <>
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                              Staging to Inbox…
+                            </>
+                          ) : (
+                            <>
+                              <Send className="w-4 h-4" />
+                              Stage {executableSelected} to Trade Inbox
+                            </>
+                          )}
+                        </button>
+
+                        {/* Secondary: place directly via Schwab (legacy fast path) */}
+                        {accountHash && (
+                          <button
+                            onClick={openOrderModal}
+                            className="w-full flex items-center justify-center gap-2 bg-[#1a1d27] hover:bg-[#2d3248] text-[#7c82a0] hover:text-white border border-[#2d3248] py-2.5 rounded-lg text-xs font-medium transition-colors"
+                          >
+                            <ShoppingCart className="w-3.5 h-3.5" />
+                            Or review & place {executableSelected} directly
+                          </button>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Stage result banner */}
+                    {stagedCount !== null && (
+                      <div className="bg-emerald-500/5 border border-emerald-500/25 rounded-xl p-3 flex items-start gap-2 mt-2">
+                        <CheckCircle className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                        <div className="text-xs text-emerald-200 leading-relaxed flex-1">
+                          <span className="font-semibold">Staged.</span> {stagedCount} recommendation{stagedCount === 1 ? '' : 's'} are waiting in your Trade Inbox for one-click approval.
+                        </div>
+                        <button
+                          onClick={() => setStagedCount(null)}
+                          className="text-emerald-400/60 hover:text-emerald-300 transition-colors flex-shrink-0"
+                          aria-label="Dismiss"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
+                    {stageError && (
+                      <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2 mt-2">
+                        Staging failed: {stageError}
+                      </div>
                     )}
                   </div>
                 )}
