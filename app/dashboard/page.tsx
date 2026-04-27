@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target, Inbox,
+  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target, Inbox, X,
 } from 'lucide-react';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
@@ -395,6 +395,103 @@ export default function DashboardPage() {
 
   const account = accounts[selectedIdx];
 
+  // ── Drift>2% auto-rebalance ──────────────────────────────────────────────
+  // On dashboard load, if any pillar has drifted >2% from its target AND no
+  // pending rebalance items already sit in the inbox, automatically run a
+  // rebalance plan. The route auto-stages to the inbox; we just surface a
+  // banner so the user knows trades were prepared. Fires at most once per
+  // session via the ref guard. Skips on automation pause (the route returns
+  // { paused: true } and we treat that as a no-op for the banner).
+  const driftRebalanceFiredRef = useRef(false);
+  const [driftRebalanceBanner, setDriftRebalanceBanner] = useState<
+    | { kind: 'staging'; maxDriftPct: number }
+    | { kind: 'staged';  count: number; summary: string }
+    | { kind: 'skipped_existing' }
+    | { kind: 'paused' }
+    | { kind: 'error'; message: string }
+    | null
+  >(null);
+
+  useEffect(() => {
+    if (driftRebalanceFiredRef.current) return;
+    if (!account || !account.pillarSummary?.length || !account.totalValue) return;
+    if (!strategyTargets) return;
+
+    const targetMap: Record<string, number> = {
+      triples:     strategyTargets.triplesPct,
+      cornerstone: strategyTargets.cornerstonePct,
+      income:      strategyTargets.incomePct,
+      hedge:       strategyTargets.hedgePct,
+    };
+    const drifts = account.pillarSummary
+      .filter((p) => p.pillar !== 'other')
+      .map((p) => Math.abs(p.portfolioPercent - (targetMap[p.pillar] ?? 0)));
+    const maxDrift = drifts.length ? Math.max(...drifts) : 0;
+    if (maxDrift <= 2) return; // threshold from spec — chosen to match the wizard's "warn" level
+
+    driftRebalanceFiredRef.current = true; // claim the slot before async work
+
+    (async () => {
+      try {
+        // Skip if the inbox already has pending rebalance orders so we don't
+        // duplicate work the user hasn't decided on yet.
+        const inboxRes = await fetch('/api/inbox?status=pending&source=rebalance');
+        if (inboxRes.ok) {
+          const data = await inboxRes.json() as { items?: unknown[] };
+          if (Array.isArray(data.items) && data.items.length > 0) {
+            setDriftRebalanceBanner({ kind: 'skipped_existing' });
+            return;
+          }
+        }
+
+        setDriftRebalanceBanner({ kind: 'staging', maxDriftPct: maxDrift });
+
+        const res = await fetch('/api/rebalance-plan', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            totalValue:    account.totalValue,
+            equity:        account.equity,
+            positions:     account.positions,
+            pillarSummary: account.pillarSummary,
+            targets:       strategyTargets,
+          }),
+        });
+        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulated = '';
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          accumulated += decoder.decode(value, { stream: true });
+          if (accumulated.includes('__DONE__')) break;
+        }
+
+        const match = accumulated.match(/__RESULT__([\s\S]*?)\n__DONE__/);
+        if (!match) throw new Error('No result in stream');
+        const parsed = JSON.parse(match[1].trim()) as {
+          orders?:  { symbol: string }[];
+          summary?: string;
+          paused?:  boolean;
+          error?:   string;
+        };
+        if (parsed.error)  throw new Error(parsed.error);
+        if (parsed.paused) { setDriftRebalanceBanner({ kind: 'paused' }); return; }
+
+        const count = parsed.orders?.length ?? 0;
+        if (count > 0) {
+          setDriftRebalanceBanner({ kind: 'staged', count, summary: parsed.summary ?? '' });
+        } else {
+          setDriftRebalanceBanner(null); // nothing actionable; don't pester
+        }
+      } catch (err) {
+        setDriftRebalanceBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Auto-rebalance failed' });
+      }
+    })();
+  }, [account, strategyTargets]);
+
   // ── Loading / error states ──────────────────────────────────────────────────
 
   if (loading) {
@@ -529,6 +626,58 @@ export default function DashboardPage() {
       <SectionNav />
 
       <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+
+        {/* ── Auto-rebalance banner (drift>2%) ────────────────────────────── */}
+        {driftRebalanceBanner && driftRebalanceBanner.kind !== 'skipped_existing' && (
+          <div
+            className={`rounded-xl border p-3 flex items-start gap-2 ${
+              driftRebalanceBanner.kind === 'staged'  ? 'bg-blue-500/10 border-blue-500/40 text-blue-200'  :
+              driftRebalanceBanner.kind === 'staging' ? 'bg-blue-500/5 border-blue-500/25 text-blue-200'   :
+              driftRebalanceBanner.kind === 'paused'  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200' :
+              'bg-red-500/10 border-red-500/30 text-red-200'
+            }`}
+          >
+            {driftRebalanceBanner.kind === 'staging' && <RefreshCw className="w-4 h-4 mt-0.5 flex-shrink-0 animate-spin" />}
+            {driftRebalanceBanner.kind === 'staged'  && <Inbox      className="w-4 h-4 mt-0.5 flex-shrink-0" />}
+            {driftRebalanceBanner.kind === 'paused'  && <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
+            {driftRebalanceBanner.kind === 'error'   && <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
+            <div className="text-xs leading-relaxed flex-1 min-w-0">
+              {driftRebalanceBanner.kind === 'staging' && (
+                <>
+                  <span className="font-semibold">Drift detected ({driftRebalanceBanner.maxDriftPct.toFixed(1)}%).</span>{' '}
+                  Generating rebalance trades…
+                </>
+              )}
+              {driftRebalanceBanner.kind === 'staged' && (
+                <>
+                  <span className="font-semibold">Rebalance staged.</span>{' '}
+                  {driftRebalanceBanner.count} order{driftRebalanceBanner.count === 1 ? '' : 's'} ready in your Trade Inbox for one-click approval.
+                  {driftRebalanceBanner.summary && (
+                    <span className="block text-blue-200/70 mt-0.5">{driftRebalanceBanner.summary}</span>
+                  )}
+                </>
+              )}
+              {driftRebalanceBanner.kind === 'paused' && (
+                <>
+                  <span className="font-semibold">Automation paused.</span>{' '}
+                  Drift was detected but no trades were generated. Re-enable automation to run rebalance.
+                </>
+              )}
+              {driftRebalanceBanner.kind === 'error' && (
+                <>
+                  <span className="font-semibold">Auto-rebalance failed:</span> {driftRebalanceBanner.message}
+                </>
+              )}
+            </div>
+            <button
+              onClick={() => setDriftRebalanceBanner(null)}
+              className="text-current/60 hover:text-current transition-colors flex-shrink-0"
+              aria-label="Dismiss"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        )}
 
         {/* ── Danger banner ───────────────────────────────────────────────── */}
         {dangerAlerts.length > 0 && (

@@ -87,6 +87,13 @@ interface RebalancePlanRequest {
   positions:     EnrichedPosition[];
   pillarSummary: PillarSummary[];
   targets:       Targets;
+  /**
+   * When true, run the full plan (Claude → validate → guardrails → emit __RESULT__)
+   * but SKIP the appendInbox staging step. Used by the Daily Pulse preview flow:
+   * the wizard shows the orders inline and the user explicitly stages them via
+   * a follow-up POST to /api/inbox. Default false (legacy auto-stage behavior).
+   */
+  preview?:      boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -146,7 +153,7 @@ async function handlePost(req: Request) {
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
 
-  const { totalValue, equity, positions, pillarSummary, targets } = body;
+  const { totalValue, equity, positions, pillarSummary, targets, preview = false } = body;
 
   if (!totalValue || !positions?.length || !pillarSummary?.length || !targets)
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -512,9 +519,15 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
         // and is bounded by a timeout so a slow blob write can never block
         // the response. If staging fails, the inbox just doesn't show these
         // entries this round; the existing OrderReviewModal flow is unaffected.
-        const result = JSON.stringify({ orders: finalOrders, blockedOrders, summary, drifts });
+        const result = JSON.stringify({ orders: finalOrders, blockedOrders, summary, drifts, preview });
         controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
         controller.enqueue(encoder.encode('\n__DONE__'));
+
+        // Preview mode: caller will stage via /api/inbox after user reviews.
+        if (preview) {
+          controller.close();
+          return;
+        }
 
         try {
           const stageInputs: AppendInput[] = [

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import {
   TrendingUp, BarChart2, Gauge, ClipboardList,
   CheckCircle, AlertTriangle, AlertCircle, X, ChevronRight,
-  ExternalLink, RefreshCw, Brain, Loader2, Zap,
+  ExternalLink, RefreshCw, Brain, Loader2, Zap, Inbox, Send,
 } from 'lucide-react';
 import { PendingOrdersPanel } from '@/components/PendingOrdersPanel';
 import type { PillarType, EnrichedPosition } from '@/lib/schwab/types';
@@ -54,6 +54,17 @@ interface Recommendation {
   };
   confidence: number;
   riskLevel: 'low' | 'medium' | 'high';
+}
+
+/** Subset of the rebalance-plan response we render inline for the Apply preview. */
+interface PreviewOrder {
+  symbol:         string;
+  instruction:    'BUY' | 'SELL';
+  shares:         number;
+  currentPrice:   number;
+  estimatedValue: number;
+  pillar:         string;
+  rationale:      string;
 }
 
 export interface DailyReviewWizardProps {
@@ -179,6 +190,8 @@ const ALERT_ICON: Record<string, React.ReactNode> = {
 function StepMarket({
   marketData, recommendation, loading, strategyTargets, onApply, onNext,
   aiPulse, aiPulseLoading, aiPulseError, onGetAIPulse,
+  previewOrders, previewSummary, previewLoading, previewError,
+  previewStaging, previewStaged, onStagePreview,
 }: {
   marketData: MarketData | null;
   recommendation: Recommendation | null;
@@ -190,6 +203,13 @@ function StepMarket({
   aiPulseLoading: boolean;
   aiPulseError: string | null;
   onGetAIPulse: () => void;
+  previewOrders: PreviewOrder[];
+  previewSummary: string;
+  previewLoading: boolean;
+  previewError: string | null;
+  previewStaging: boolean;
+  previewStaged: boolean;
+  onStagePreview: () => void;
 }) {
   if (loading || !marketData) {
     return (
@@ -326,21 +346,96 @@ function StepMarket({
       )}
 
       <div className="flex gap-2 pt-1">
-        {hasChanges && (
+        {hasChanges && previewOrders.length === 0 && !previewStaged && (
           <button
-            onClick={() => { onApply(); onNext(status); }}
-            className="flex-1 bg-blue-600 hover:bg-blue-700 text-white text-sm font-semibold py-2.5 rounded-lg transition-colors"
+            onClick={onApply}
+            disabled={previewLoading}
+            className="flex-1 bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-semibold py-2.5 rounded-lg transition-colors flex items-center justify-center gap-2"
           >
-            Apply Recommendation
+            {previewLoading ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Building trade preview…
+              </>
+            ) : (
+              'Apply & Preview Trades'
+            )}
           </button>
         )}
         <button
           onClick={() => onNext(status)}
-          className={`flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg transition-colors ${hasChanges ? 'px-4 text-[#7c82a0] hover:text-white hover:bg-white/5' : 'flex-1 bg-[#1a1d27] hover:bg-[#2d3248] text-white border border-[#2d3248]'}`}
+          className={`flex items-center justify-center gap-1.5 text-sm font-semibold py-2.5 rounded-lg transition-colors ${(hasChanges && previewOrders.length === 0 && !previewStaged) ? 'px-4 text-[#7c82a0] hover:text-white hover:bg-white/5' : 'flex-1 bg-[#1a1d27] hover:bg-[#2d3248] text-white border border-[#2d3248]'}`}
         >
-          {hasChanges ? 'Skip' : 'Looks Good'} <ChevronRight className="w-4 h-4" />
+          {(hasChanges && previewOrders.length === 0 && !previewStaged) ? 'Skip' : previewStaged ? 'Continue' : 'Looks Good'} <ChevronRight className="w-4 h-4" />
         </button>
       </div>
+
+      {/* Apply preview — proposed trades from rebalance-plan with preview:true */}
+      {previewError && (
+        <div className="text-xs text-red-300 bg-red-500/10 border border-red-500/25 rounded-lg px-3 py-2">
+          {previewError}
+        </div>
+      )}
+
+      {previewOrders.length > 0 && !previewStaged && (
+        <div className="bg-blue-500/5 border border-blue-500/25 rounded-xl p-4 space-y-3">
+          <div className="flex items-center gap-2">
+            <ClipboardList className="w-4 h-4 text-blue-400 flex-shrink-0" />
+            <p className="text-xs font-semibold text-blue-300 uppercase tracking-wide">
+              Proposed Trades · {previewOrders.length}
+            </p>
+          </div>
+          {previewSummary && (
+            <p className="text-xs text-blue-100/80 leading-relaxed">{previewSummary}</p>
+          )}
+          <div className="space-y-1.5 max-h-44 overflow-y-auto pr-1">
+            {previewOrders.map((o, i) => (
+              <div
+                key={i}
+                className="flex items-center justify-between bg-[#0f1117] border border-[#2d3248] rounded-lg px-2.5 py-1.5 text-xs"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className={`font-bold ${o.instruction === 'BUY' ? 'text-emerald-400' : 'text-red-400'}`}>
+                    {o.instruction}
+                  </span>
+                  <span className="font-semibold text-white tabular-nums">{o.shares}</span>
+                  <span className="font-semibold text-white truncate">{o.symbol}</span>
+                  <span className="text-[10px] text-[#4a5070] uppercase">{o.pillar}</span>
+                </div>
+                <span className="text-white/80 tabular-nums flex-shrink-0">
+                  {fmt$(o.estimatedValue)}
+                </span>
+              </div>
+            ))}
+          </div>
+          <button
+            onClick={onStagePreview}
+            disabled={previewStaging}
+            className="w-full flex items-center justify-center gap-2 py-2.5 rounded-lg bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white text-sm font-semibold transition-colors"
+          >
+            {previewStaging ? (
+              <>
+                <Loader2 className="w-4 h-4 animate-spin" />
+                Staging…
+              </>
+            ) : (
+              <>
+                <Send className="w-4 h-4" />
+                Stage to Trade Inbox
+              </>
+            )}
+          </button>
+        </div>
+      )}
+
+      {previewStaged && (
+        <div className="bg-emerald-500/5 border border-emerald-500/25 rounded-xl p-3 flex items-start gap-2">
+          <Inbox className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+          <div className="text-xs text-emerald-200 leading-relaxed">
+            <span className="font-semibold">Staged.</span> {previewOrders.length} order{previewOrders.length === 1 ? '' : 's'} are waiting in your Trade Inbox for one-click approval.
+          </div>
+        </div>
+      )}
     </StepCard>
   );
 }
@@ -594,6 +689,17 @@ export function DailyReviewWizard({
   const [aiPulseLoading, setAiPulseLoading] = useState(false);
   const [aiPulseError,   setAiPulseError]   = useState<string | null>(null);
 
+  // Apply-and-preview flow state — populated when user clicks "Apply & Preview"
+  // on Step 1. Orders are returned by /api/rebalance-plan with preview:true and
+  // are NOT yet staged to the inbox; staging happens when user clicks
+  // "Stage to Trade Inbox", which POSTs to /api/inbox.
+  const [previewOrders,  setPreviewOrders]  = useState<PreviewOrder[]>([]);
+  const [previewSummary, setPreviewSummary] = useState<string>('');
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const [previewError,   setPreviewError]   = useState<string | null>(null);
+  const [previewStaging, setPreviewStaging] = useState(false);
+  const [previewStaged,  setPreviewStaged]  = useState(false);
+
   useEffect(() => {
     if (!isOpen) {
       setStep(1);
@@ -602,6 +708,10 @@ export function DailyReviewWizard({
       setRecommendation(null);
       setAiPulse(null);
       setAiPulseError(null);
+      setPreviewOrders([]);
+      setPreviewSummary('');
+      setPreviewError(null);
+      setPreviewStaged(false);
       return;
     }
     setMarketLoading(true);
@@ -696,7 +806,12 @@ export function DailyReviewWizard({
     scrollToPanel(id);
   }
 
-  function handleApplyRecommendation() {
+  /**
+   * Apply Daily Pulse recommendation, then immediately fetch a rebalance
+   * preview against the NEW targets. Orders are rendered inline; they only
+   * stage to the inbox when the user clicks "Stage to Trade Inbox".
+   */
+  async function handleApplyAndPreview() {
     if (!recommendation?.suggestedChanges) return;
     const newTargets: StrategyTargets = {
       ...strategyTargets,
@@ -706,6 +821,87 @@ export function DailyReviewWizard({
       hedgePct:       recommendation.suggestedChanges.hedgePct       ?? strategyTargets.hedgePct,
     };
     updateStrategyTargets(newTargets);
+
+    setPreviewLoading(true);
+    setPreviewError(null);
+    setPreviewOrders([]);
+    setPreviewSummary('');
+    setPreviewStaged(false);
+
+    try {
+      const res = await fetch('/api/rebalance-plan', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          totalValue:    account.totalValue,
+          equity:        account.equity,
+          positions:     account.positions,
+          pillarSummary: account.pillarSummary,
+          targets:       newTargets,
+          preview:       true,
+        }),
+      });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let accumulated = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        accumulated += decoder.decode(value, { stream: true });
+        if (accumulated.includes('__DONE__')) break;
+      }
+
+      const resultMatch = accumulated.match(/__RESULT__([\s\S]*?)\n__DONE__/);
+      if (!resultMatch) throw new Error('No result in response stream');
+      const parsed = JSON.parse(resultMatch[1].trim()) as {
+        orders?:  PreviewOrder[];
+        summary?: string;
+        paused?:  boolean;
+        error?:   string;
+      };
+      if (parsed.error)  throw new Error(parsed.error);
+      if (parsed.paused) throw new Error('Automation paused — re-enable to generate trades');
+
+      setPreviewOrders(parsed.orders ?? []);
+      setPreviewSummary(parsed.summary ?? '');
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : 'Failed to generate preview');
+    } finally {
+      setPreviewLoading(false);
+    }
+  }
+
+  /** Stage the previewed orders into the Trade Inbox via POST /api/inbox. */
+  async function handleStagePreview() {
+    if (previewOrders.length === 0) return;
+    setPreviewStaging(true);
+    setPreviewError(null);
+    try {
+      const items = previewOrders.map((o) => ({
+        source:      'rebalance' as const,
+        symbol:      o.symbol,
+        instruction: o.instruction,
+        quantity:    o.shares,
+        orderType:   'MARKET' as const,
+        price:       o.currentPrice,
+        pillar:      o.pillar,
+        rationale:   o.rationale,
+        aiMode:      'rebalance_plan',
+      }));
+      const res = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      setPreviewStaged(true);
+    } catch (e) {
+      setPreviewError(e instanceof Error ? e.message : 'Failed to stage to inbox');
+    } finally {
+      setPreviewStaging(false);
+    }
   }
 
   const stepTitles: Record<number, string> = {
@@ -769,12 +965,19 @@ export function DailyReviewWizard({
               recommendation={recommendation}
               loading={marketLoading}
               strategyTargets={strategyTargets}
-              onApply={handleApplyRecommendation}
+              onApply={handleApplyAndPreview}
               onNext={advance}
               aiPulse={aiPulse}
               aiPulseLoading={aiPulseLoading}
               aiPulseError={aiPulseError}
               onGetAIPulse={handleGetAIPulse}
+              previewOrders={previewOrders}
+              previewSummary={previewSummary}
+              previewLoading={previewLoading}
+              previewError={previewError}
+              previewStaging={previewStaging}
+              previewStaged={previewStaged}
+              onStagePreview={handleStagePreview}
             />
           )}
           {step === 2 && (
