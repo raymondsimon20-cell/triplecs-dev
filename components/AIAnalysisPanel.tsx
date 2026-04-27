@@ -886,6 +886,14 @@ export function AIAnalysisPanel({
                               Size: {rec.size_hint}
                               {rec.dollar_amount && <span className="text-[#7c82a0] ml-2">(${rec.dollar_amount.toLocaleString()})</span>}
                               {rec.sell_pct      && <span className="text-[#7c82a0] ml-2">({rec.sell_pct}% of position)</span>}
+                              {isExecutable && (() => {
+                                const shares = estimateShares(rec, positions);
+                                return shares > 0 ? (
+                                  <span className="text-emerald-300 ml-2 font-semibold tabular-nums">
+                                    ≈ {shares.toLocaleString()} share{shares === 1 ? '' : 's'}
+                                  </span>
+                                ) : null;
+                              })()}
                             </div>
                           )}
 
