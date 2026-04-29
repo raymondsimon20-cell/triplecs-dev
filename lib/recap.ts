@@ -274,9 +274,21 @@ export function computeRegime(snapshots: PortfolioSnapshot[], lookbackDays: numb
   const startDate = start ? new Date(start.savedAt).toISOString().slice(0, 10) : '';
   const endDate   = end   ? new Date(end.savedAt).toISOString().slice(0, 10)   : startDate;
 
+  // Filter to snapshots that actually carry spyClose — the field is optional
+  // and may be missing on snapshots saved off-hours or before SPY tracking
+  // landed. Fall back to the most recent pre-window snapshot with spyClose
+  // when the window is sparse, so we still produce a number instead of —.
+  const withSpyInWindow = inWindow.filter((s) => typeof s.spyClose === 'number' && s.spyClose! > 0);
+  const preWindowAnchor = snapshots
+    .filter((s) => s.savedAt < cutoff && typeof s.spyClose === 'number' && s.spyClose! > 0)
+    .sort((a, b) => a.savedAt - b.savedAt)
+    .at(-1);
+  const spyStart = withSpyInWindow[0] ?? preWindowAnchor;
+  const spyEnd   = withSpyInWindow.at(-1) ?? spyStart;
+
   let spyReturnPct: number | null = null;
-  if (start?.spyClose && end?.spyClose && start.spyClose > 0) {
-    spyReturnPct = +(((end.spyClose - start.spyClose) / start.spyClose) * 100).toFixed(2);
+  if (spyStart && spyEnd && spyStart !== spyEnd && spyStart.spyClose && spyStart.spyClose > 0 && spyEnd.spyClose) {
+    spyReturnPct = +(((spyEnd.spyClose - spyStart.spyClose) / spyStart.spyClose) * 100).toFixed(2);
   }
 
   // Peak-to-current drawdown (magnitude, positive number)
