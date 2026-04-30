@@ -352,7 +352,16 @@ function HistoricalTab({ dividends }: { dividends: DividendRecord[] }) {
   const values = months.map((m) => byMonth[m] ?? 0);
   const maxVal = Math.max(...values, 1);
   const totalAnnual = values.reduce((s, v) => s + v, 0);
-  const monthlyAvg = totalAnnual / 12;
+  // Monthly avg is taken over the span from the first month with data through
+  // the last month with data — not the full 12-month window. Otherwise a
+  // brand-new account with one month of $570 reads "Monthly Avg $47", which
+  // averages in 11 months that didn't exist yet.
+  const firstActiveIdx = values.findIndex((v) => v > 0);
+  const lastActiveIdx  = firstActiveIdx === -1
+    ? -1
+    : values.length - 1 - [...values].reverse().findIndex((v) => v > 0);
+  const monthsActive = firstActiveIdx === -1 ? 0 : lastActiveIdx - firstActiveIdx + 1;
+  const monthlyAvg = monthsActive > 0 ? totalAnnual / monthsActive : 0;
   const lastMonth = values[values.length - 1];
   const prevMonth = values[values.length - 2];
 
@@ -369,7 +378,9 @@ function HistoricalTab({ dividends }: { dividends: DividendRecord[] }) {
           <div className="text-lg font-bold text-emerald-400">{fmt$(totalAnnual, true)}</div>
         </div>
         <div className="bg-[#0f1117] rounded-lg p-3 text-center">
-          <div className="text-xs text-[#7c82a0] mb-0.5">Monthly Avg</div>
+          <div className="text-xs text-[#7c82a0] mb-0.5">
+            Monthly Avg{monthsActive > 0 && monthsActive < 12 ? ` (${monthsActive}-mo)` : ''}
+          </div>
           <div className="text-lg font-bold text-blue-400">{fmt$(monthlyAvg, true)}</div>
         </div>
         <div className="bg-[#0f1117] rounded-lg p-3 text-center">
