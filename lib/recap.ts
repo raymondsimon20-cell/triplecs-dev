@@ -136,13 +136,14 @@ export function computeExecutedOutcomes(
     if (t.status !== 'placed') continue;
     if (!withinWindow(t.timestamp, lookbackDays, now)) continue;
 
-    const entry = t.price ?? 0;
+    // /api/orders only persists `price` on LIMIT orders — MARKET orders
+    // arrive here with price=undefined. Fall back to the current snapshot
+    // mark so the trade still counts toward N (with pnl=0, classified flat).
+    // If neither is available we genuinely can't score it; skip.
+    const markFromSnap = marks.get(t.symbol);
+    const entry = (t.price && t.price > 0) ? t.price : (markFromSnap ?? 0);
     if (entry <= 0) continue;
 
-    // For options we don't have a clean current mark in the snapshot.
-    // Skip pnl for option legs but still include them in the count by setting
-    // mark = entry (pnl = 0, classified as flat).
-    const markFromSnap = marks.get(t.symbol);
     const mark = isOption(t.instruction) ? entry : (markFromSnap ?? entry);
 
     const direction = isBuy(t.instruction) ? 1 : -1;     // SELL profits when price drops
