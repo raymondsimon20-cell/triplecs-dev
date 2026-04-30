@@ -18,6 +18,7 @@ import type { StoredAlert } from '../../lib/storage';
 import { getAccountNumbers, createClient } from '../../lib/schwab/client';
 import { fetchAccountState, buildSnapshot } from '../../lib/portfolio/fetch';
 import { fetchCashFlows } from '../../lib/schwab/transactions';
+import { checkROFilings } from '../../lib/ro-watch';
 
 /**
  * Capture today's portfolio snapshot + SPY benchmark + any new cash flows.
@@ -156,6 +157,14 @@ export default async function handler() {
       alerts.push({ id: `conc-${pos.symbol}-${now}`, createdAt: now, level: 'danger', read: false,
         rule: `${pos.symbol} >20% concentration`, detail: `${pos.symbol} is ${pct.toFixed(1)}% of portfolio — exceeds 20% cap. Trim required.` });
     }
+  }
+
+  // CLM/CRF rights-offering filing watch (EDGAR N-2 / 497 / 424B*)
+  try {
+    const roAlerts = await checkROFilings(now);
+    alerts.push(...roAlerts);
+  } catch (err) {
+    console.warn('[daily-alert] RO filing check failed:', err);
   }
 
   if (alerts.length === 0) {
