@@ -19,6 +19,7 @@ import { getAccountNumbers, createClient } from '../../lib/schwab/client';
 import { fetchAccountState, buildSnapshot } from '../../lib/portfolio/fetch';
 import { fetchCashFlows } from '../../lib/schwab/transactions';
 import { checkROFilings } from '../../lib/ro-watch';
+import { reconcileSchwabTrades } from '../../lib/reconcile-trades';
 
 /**
  * Capture today's portfolio snapshot + SPY benchmark + any new cash flows.
@@ -72,6 +73,14 @@ async function captureDailySnapshot(): Promise<void> {
     console.log(`[daily-alert] Cash flows: scanned ${events.length}, added ${added} new`);
   } catch (err) {
     console.error('[daily-alert] cash-flow sync failed:', err);
+  }
+
+  // Reconcile Schwab trade fills into trade-history so the AI Performance
+  // Review picks up trades placed outside the app's order flow.
+  try {
+    await reconcileSchwabTrades();
+  } catch (err) {
+    console.error('[daily-alert] trade reconciliation failed:', err);
   }
 }
 
