@@ -168,6 +168,132 @@ function matchExistingEntry(parsed: ParsedFill, history: TradeHistoryEntry[]): n
   return bestIdx;
 }
 
+/**
+ * One-time-ish cleanup pass over an in-memory trade-history array.
+ *
+ * Earlier versions of reconcileSchwabTrades blindly added a schwab-prefixed
+ * entry for every Schwab TRADE fill, even when the underlying order already
+ * existed in trade-history as a /api/orders entry. The result: each user
+ * trade was double-counted in the AI Performance Review — once under its
+ * real aiMode (price missing) and once under aiMode='unknown' (price present).
+ *
+ * This pass walks every /api/orders entry and tries to find a matching
+ * group of schwab-prefixed entries (same symbol + direction, within 24h).
+ * Matches in three priorities:
+ *   1. Exact quantity match (single fill)
+ *   2. Aggregated quantity match (partial fills summing to the order qty
+ *      within 0.5% tolerance — Schwab's smart router commonly splits MARKET
+ *      orders into 2-7 fills)
+ *
+ * On a match, the order entry inherits a volume-weighted price from its
+ * fills, and the matched schwab entries are dropped. Schwab entries that
+ * never match anything (DRIP reinvestments, manual Schwab-UI trades,
+ * fractional dividend cash) are kept as-is — they're real trades and
+ * deserve to count, just under aiMode='unknown'.
+ */
+const QTY_TOLERANCE_PCT = 0.005;
+const DEDUPE_TIME_TOLERANCE_MS = 86_400_000;
+
+interface DedupeStats {
+  ordersScanned:    number;
+  exactMerges:      number;
+  aggregateMerges:  number;
+  schwabConsumed:   number;
+  schwabKept:       number;     // orphan schwab entries (no /api/orders match)
+}
+
+export function dedupeTradeHistory(history: TradeHistoryEntry[]): { cleaned: TradeHistoryEntry[]; stats: DedupeStats } {
+  const stats: DedupeStats = { ordersScanned: 0, exactMerges: 0, aggregateMerges: 0, schwabConsumed: 0, schwabKept: 0 };
+
+  const orderEntries  = history.filter((e) => !e.id.startsWith('schwab-'));
+  const schwabEntries = history.filter((e) =>  e.id.startsWith('schwab-'));
+  const consumed = new Set<string>();
+  const out: TradeHistoryEntry[] = [];
+
+  for (const order of orderEntries) {
+    if (order.status !== 'placed') {
+      out.push(order);
+      continue;
+    }
+    stats.ordersScanned++;
+
+    const orderMs = new Date(order.timestamp).getTime();
+    if (!Number.isFinite(orderMs)) { out.push(order); continue; }
+    const orderIsBuy = isBuySide(order.instruction);
+
+    // Pool of unconsumed schwab fills with same symbol+direction within tolerance.
+    const pool = schwabEntries.filter((s) => {
+      if (consumed.has(s.id)) return false;
+      if (s.symbol !== order.symbol) return false;
+      if (isBuySide(s.instruction) !== orderIsBuy) return false;
+      const sMs = new Date(s.timestamp).getTime();
+      if (!Number.isFinite(sMs)) return false;
+      return Math.abs(orderMs - sMs) <= DEDUPE_TIME_TOLERANCE_MS;
+    });
+
+    if (pool.length === 0) { out.push(order); continue; }
+
+    // Priority 1: a single fill that matches exactly.
+    const exact = pool.find((s) => Math.abs(s.quantity - order.quantity) <= order.quantity * QTY_TOLERANCE_PCT);
+    if (exact) {
+      const needsPrice = !order.price || order.price <= 0;
+      out.push(needsPrice ? { ...order, price: exact.price, message: appendNote(order.message, `merged with Schwab ${exact.id}`) } : order);
+      consumed.add(exact.id);
+      stats.exactMerges++;
+      stats.schwabConsumed++;
+      continue;
+    }
+
+    // Priority 2: greedy aggregation. Pick fills closest in time first, accumulate
+    // until the running total either matches the order qty (within tolerance) or
+    // overshoots. If matched, merge with VWAP. If overshoots, give up — better
+    // to leave both intact than to mis-merge.
+    const sortedPool = [...pool].sort((a, b) =>
+      Math.abs(orderMs - new Date(a.timestamp).getTime()) -
+      Math.abs(orderMs - new Date(b.timestamp).getTime()),
+    );
+    const picked: TradeHistoryEntry[] = [];
+    let runningQty = 0;
+    const target  = order.quantity;
+    const slack   = target * QTY_TOLERANCE_PCT;
+    for (const s of sortedPool) {
+      if (runningQty + s.quantity > target + slack) continue;       // would overshoot — skip this fill
+      picked.push(s);
+      runningQty += s.quantity;
+      if (Math.abs(runningQty - target) <= slack) break;             // exact aggregate hit
+    }
+
+    if (picked.length > 1 && Math.abs(runningQty - target) <= slack) {
+      const totalCost = picked.reduce((sum, p) => sum + p.quantity * (p.price ?? 0), 0);
+      const vwap = runningQty > 0 ? totalCost / runningQty : 0;
+      const needsPrice = !order.price || order.price <= 0;
+      out.push(needsPrice && vwap > 0
+        ? { ...order, price: +vwap.toFixed(4), message: appendNote(order.message, `merged with ${picked.length} Schwab fills`) }
+        : order);
+      for (const p of picked) consumed.add(p.id);
+      stats.aggregateMerges++;
+      stats.schwabConsumed += picked.length;
+      continue;
+    }
+
+    out.push(order);
+  }
+
+  // Append unconsumed schwab entries (true orphans).
+  for (const s of schwabEntries) {
+    if (!consumed.has(s.id)) {
+      out.push(s);
+      stats.schwabKept++;
+    }
+  }
+
+  return { cleaned: out, stats };
+}
+
+function appendNote(existing: string | undefined, note: string): string {
+  return existing ? `${existing} [${note}]` : `[${note}]`;
+}
+
 async function loadTradeHistory(): Promise<TradeHistoryEntry[]> {
   const data = await getStore('trade-history').get('log', { type: 'json' });
   return Array.isArray(data) ? (data as TradeHistoryEntry[]) : [];
@@ -286,9 +412,20 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
     }
   }
 
-  if (additions.length > 0 || result.backfilled > 0) {
-    await saveTradeHistory([...additions, ...updatedHistory]);
+  // After processing new fills, run a dedupe pass to merge any pre-existing
+  // /api/orders ↔ schwab-prefixed pairs that an earlier (non-deduping) version
+  // of this function created. This is idempotent — running it on already-clean
+  // data is a no-op.
+  const merged = [...additions, ...updatedHistory];
+  const { cleaned, stats: dedupeStats } = dedupeTradeHistory(merged);
+  const changedByDedupe = dedupeStats.exactMerges + dedupeStats.aggregateMerges > 0;
+
+  if (additions.length > 0 || result.backfilled > 0 || changedByDedupe) {
+    await saveTradeHistory(cleaned);
     result.added = additions.length;
+  }
+  if (changedByDedupe) {
+    console.log(`[reconcile-trades] dedupe: exactMerges=${dedupeStats.exactMerges} aggregateMerges=${dedupeStats.aggregateMerges} schwabConsumed=${dedupeStats.schwabConsumed} schwabKept=${dedupeStats.schwabKept}`);
   }
 
   // Mark matched pending inbox items as executed so they don't re-match next run.
