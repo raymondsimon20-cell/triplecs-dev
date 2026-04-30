@@ -36,11 +36,12 @@ interface ParsedFill {
 }
 
 interface ReconcileResult {
-  scanned:   number;
-  added:     number;
-  matched:   number;          // back-filled with inbox aiMode
-  unmatched: number;          // recorded as aiMode='unknown'
-  skipped:   number;          // already present in trade-history
+  scanned:    number;
+  added:      number;          // new schwab-prefixed entries
+  backfilled: number;          // existing entries that gained a fill price
+  matched:    number;          // new entries back-filled with inbox aiMode
+  unmatched:  number;          // new entries recorded as aiMode='unknown'
+  skipped:    number;          // schwab activityId already present
 }
 
 /**
@@ -130,6 +131,43 @@ function matchInbox(parsed: ParsedFill, inbox: InboxItem[]): InboxItem | null {
   return candidates[0];
 }
 
+/**
+ * Find an existing /api/orders trade-history entry that plausibly produced
+ * this Schwab fill — match by symbol + direction + quantity, with the entry's
+ * placed timestamp within ±24h of the Schwab fill time. Used both to dedupe
+ * (don't re-add a fill the user already recorded) and to backfill a price
+ * onto entries that came in without one (MARKET orders).
+ *
+ * Returns the index into `history`, or -1 if no match. Closest-in-time wins.
+ * Skips schwab-prefixed entries (those are handled by activityId dedupe).
+ */
+function matchExistingEntry(parsed: ParsedFill, history: TradeHistoryEntry[]): number {
+  const fillMs = new Date(parsed.timestamp).getTime();
+  if (!Number.isFinite(fillMs)) return -1;
+  const parsedIsBuy = isBuySide(parsed.instruction);
+  const TOLERANCE_MS = 86_400_000;
+
+  let bestIdx = -1;
+  let bestDelta = Infinity;
+  for (let i = 0; i < history.length; i++) {
+    const e = history[i];
+    if (e.id.startsWith('schwab-')) continue;
+    if (e.status !== 'placed') continue;
+    if (e.symbol !== parsed.symbol) continue;
+    if (e.quantity !== parsed.quantity) continue;
+    if (isBuySide(e.instruction) !== parsedIsBuy) continue;
+    const eMs = new Date(e.timestamp).getTime();
+    if (!Number.isFinite(eMs)) continue;
+    const delta = Math.abs(fillMs - eMs);
+    if (delta > TOLERANCE_MS) continue;
+    if (delta < bestDelta) {
+      bestDelta = delta;
+      bestIdx = i;
+    }
+  }
+  return bestIdx;
+}
+
 async function loadTradeHistory(): Promise<TradeHistoryEntry[]> {
   const data = await getStore('trade-history').get('log', { type: 'json' });
   return Array.isArray(data) ? (data as TradeHistoryEntry[]) : [];
@@ -149,7 +187,7 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
   const start = new Date(now - lookbackDays * 86_400_000).toISOString();
   const end   = new Date(now).toISOString();
 
-  const result: ReconcileResult = { scanned: 0, added: 0, matched: 0, unmatched: 0, skipped: 0 };
+  const result: ReconcileResult = { scanned: 0, added: 0, backfilled: 0, matched: 0, unmatched: 0, skipped: 0 };
 
   const tokens = await getTokens();
   if (!tokens) {
@@ -168,6 +206,9 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
     history.filter((e) => e.id.startsWith('schwab-')).map((e) => e.id.slice('schwab-'.length)),
   );
 
+  // Mutable working copy so we can backfill prices on existing entries
+  // in place without producing duplicates.
+  const updatedHistory: TradeHistoryEntry[] = [...history];
   const additions: TradeHistoryEntry[] = [];
   const inboxItemsToMark: { id: string; orderId: string | null; message: string }[] = [];
 
@@ -190,9 +231,30 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
         continue;
       }
 
-      const match = matchInbox(parsed, inbox);
-      const aiMode    = match?.aiMode ?? 'unknown';
-      const rationale = match?.rationale;
+      // First: see if an existing /api/orders entry matches this fill. If so,
+      // backfill its price (when missing) and treat the Schwab activity as
+      // accounted-for — don't add a duplicate schwab-prefixed entry.
+      const existingIdx = matchExistingEntry(parsed, updatedHistory);
+      if (existingIdx >= 0) {
+        const existing = updatedHistory[existingIdx];
+        const needsPrice = !existing.price || existing.price <= 0;
+        if (needsPrice) {
+          const note = `[price backfilled from Schwab activity ${parsed.activityId}]`;
+          updatedHistory[existingIdx] = {
+            ...existing,
+            price: parsed.price,
+            message: existing.message ? `${existing.message} ${note}` : note,
+          };
+          result.backfilled++;
+        }
+        continue;
+      }
+
+      // No existing match — record the Schwab fill as a new entry, attributing
+      // it to a still-pending inbox item if one matches.
+      const inboxMatch = matchInbox(parsed, inbox);
+      const aiMode    = inboxMatch?.aiMode ?? 'unknown';
+      const rationale = inboxMatch?.rationale;
 
       additions.push({
         id:          `schwab-${parsed.activityId}`,
@@ -200,7 +262,7 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
         symbol:      parsed.symbol,
         instruction: parsed.instruction,
         quantity:    parsed.quantity,
-        orderType:   'MARKET',          // unknown without order metadata; market is the safe default
+        orderType:   'MARKET',
         price:       parsed.price,
         orderId:     null,
         status:      'placed',
@@ -209,11 +271,11 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
         aiMode,
       });
 
-      if (match) {
+      if (inboxMatch) {
         result.matched++;
-        if (match.status === 'pending') {
+        if (inboxMatch.status === 'pending') {
           inboxItemsToMark.push({
-            id: match.id,
+            id: inboxMatch.id,
             orderId: null,
             message: `Reconciled from Schwab activity ${parsed.activityId}`,
           });
@@ -224,8 +286,8 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
     }
   }
 
-  if (additions.length > 0) {
-    await saveTradeHistory([...additions, ...history]);
+  if (additions.length > 0 || result.backfilled > 0) {
+    await saveTradeHistory([...additions, ...updatedHistory]);
     result.added = additions.length;
   }
 
@@ -238,6 +300,6 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
     }
   }
 
-  console.log(`[reconcile-trades] scanned=${result.scanned} added=${result.added} matched=${result.matched} unmatched=${result.unmatched} skipped=${result.skipped}`);
+  console.log(`[reconcile-trades] scanned=${result.scanned} added=${result.added} backfilled=${result.backfilled} matched=${result.matched} unmatched=${result.unmatched} skipped=${result.skipped}`);
   return result;
 }
