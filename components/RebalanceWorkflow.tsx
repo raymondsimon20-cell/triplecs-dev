@@ -323,7 +323,7 @@ export function RebalanceWorkflow({
             quantity:    o.shares,
             orderType:   'MARKET',
             rationale:   o.rationale,
-            aiMode:      'rebalance',
+            aiMode:      'rebalance_plan',
           })),
         }),
       });

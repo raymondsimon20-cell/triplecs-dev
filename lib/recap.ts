@@ -68,6 +68,24 @@ function isBuy(instr: string): boolean {
   return instr === 'BUY' || instr === 'BUY_TO_OPEN' || instr === 'BUY_TO_CLOSE';
 }
 
+/**
+ * Fold legacy / variant aiMode strings to canonical values so the by-mode
+ * summary doesn't split a single mode across multiple rows. Adding a synonym
+ * here is preferable to a one-shot blob backfill — the data on disk stays
+ * untouched, and the recap shows it correctly. Callers should still write
+ * canonical strings going forward.
+ */
+const MODE_ALIASES: Record<string, string> = {
+  rebalance:           'rebalance_plan',
+  buy_put_protection:  'buy_put',
+  sell_put_income:     'sell_put',
+};
+function normalizeMode(raw: string | undefined | null): string {
+  if (!raw) return 'unknown';
+  const lower = raw.toLowerCase();
+  return MODE_ALIASES[lower] ?? lower;
+}
+
 function isOption(instr: string): boolean {
   return instr.includes('_TO_OPEN') || instr.includes('_TO_CLOSE');
 }
@@ -157,7 +175,7 @@ export function computeExecutedOutcomes(
       symbol:      t.symbol,
       instruction: t.instruction,
       quantity:    t.quantity,
-      aiMode:      t.aiMode ?? 'unknown',
+      aiMode:      normalizeMode(t.aiMode),
       source:      'executed',
       kind:        markFromSnap ? 'open' : 'closed',
       entryPrice:  +entry.toFixed(4),
@@ -209,7 +227,7 @@ export function computeDismissedOutcomes(
       symbol:      it.symbol,
       instruction: it.instruction,
       quantity:    it.quantity,
-      aiMode:      it.aiMode ?? 'unknown',
+      aiMode:      normalizeMode(it.aiMode),
       source:      'dismissed',
       kind:        'dismissed',
       entryPrice:  +stagePrice.toFixed(4),

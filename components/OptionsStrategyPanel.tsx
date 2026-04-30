@@ -428,7 +428,7 @@ function PutProtectionSection({
             contracts:   rec.contracts,
             limitPrice:  rec.plan.limitPrice,
             rationale:   rec.plan.rationale,
-            aiMode:      'buy_put_protection',
+            aiMode:      'buy_put',
           }],
         }),
       });
@@ -661,7 +661,7 @@ function SellPutIncomeSection({
             contracts:   rec.contracts,
             limitPrice:  rec.plan.limitPrice,
             rationale:   rec.plan.rationale,
-            aiMode:      'sell_put_income',
+            aiMode:      'sell_put',
           }],
         }),
       });

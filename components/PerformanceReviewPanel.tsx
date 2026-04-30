@@ -85,6 +85,8 @@ const MODE_LABELS: Record<string, string> = {
   sell_put:       'Sell Puts',
   buy_put:        'Buy Puts',
   daily_pulse:    'Daily Pulse',
+  trade_plan:     'Trade Plan',
+  rule_audit:     'Rule Audit',
   what_to_sell:   'What to Sell',
   open_question:  'Open Q&A',
   unknown:        'Unknown',
