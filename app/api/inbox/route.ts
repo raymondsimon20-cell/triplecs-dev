@@ -23,6 +23,22 @@ import {
   type InboxStatus,
 } from '@/lib/inbox';
 
+const EQUITY_INSTRUCTIONS = new Set(['BUY', 'SELL']);
+
+/**
+ * Detect put-option recommendations that have been mis-staged as equity
+ * orders. The hallmark: source='ai-rec', plain BUY/SELL instruction (not
+ * BUY_TO_OPEN / SELL_TO_OPEN), and a rationale that mentions a put. These
+ * would book the underlying ticker as stock instead of opening the put,
+ * so we reject them at the API boundary as a defense-in-depth backstop
+ * to the client-side filter in AIAnalysisPanel.
+ */
+function looksLikePutRecAsEquity(it: AppendInput): boolean {
+  if (it.source !== 'ai-rec') return false;
+  if (!EQUITY_INSTRUCTIONS.has(it.instruction)) return false;
+  return /\bput\b/i.test(it.rationale ?? '');
+}
+
 export const dynamic = 'force-dynamic';
 
 const VALID_STATUSES: InboxStatus[] = ['pending', 'executed', 'dismissed', 'expired'];
@@ -77,8 +93,22 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'No items provided' }, { status: 400 });
   }
 
-  const staged = await appendInbox(inputs);
-  return NextResponse.json({ staged, count: staged.length });
+  const safe     = inputs.filter((it) => !looksLikePutRecAsEquity(it));
+  const rejected = inputs.filter((it) =>  looksLikePutRecAsEquity(it));
+  if (rejected.length > 0) {
+    console.warn(`[inbox] rejected ${rejected.length} put-rec-as-equity item(s):`,
+      rejected.map((r) => `${r.instruction} ${r.symbol}`).join(', '));
+  }
+
+  const staged = await appendInbox(safe);
+  return NextResponse.json({
+    staged,
+    count: staged.length,
+    rejected: rejected.length,
+    rejectedReason: rejected.length > 0
+      ? 'put recommendations cannot be staged as equity orders — use the AI-pick & stage button on the rec card'
+      : undefined,
+  });
 }
 
 // ─── PATCH ───────────────────────────────────────────────────────────────────
@@ -116,9 +146,28 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   try { await requireAuth(); } catch { return unauthorized(); }
 
-  let body: { id?: string; all?: boolean };
+  let body: { id?: string; all?: boolean; cleanup?: 'put-rec-equity' };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+
+  // Targeted cleanup: dismiss pending inbox items that were mis-staged as
+  // equity orders for put recommendations (the same pattern the POST guard
+  // now rejects). Lets the user clean up items the old client created
+  // before they realize what happened.
+  if (body.cleanup === 'put-rec-equity') {
+    const items = await listInbox({ status: 'pending' });
+    const targets = items.filter((it) =>
+      it.source === 'ai-rec' &&
+      EQUITY_INSTRUCTIONS.has(it.instruction) &&
+      /\bput\b/i.test(it.rationale ?? ''),
+    );
+    let dismissed = 0;
+    for (const t of targets) {
+      const r = await dismissItem(t.id);
+      if (r) dismissed++;
+    }
+    return NextResponse.json({ dismissed, scanned: items.length, matched: targets.length });
+  }
 
   if (body.all === true) {
     const dismissed = await dismissAllPending();
