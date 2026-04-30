@@ -118,6 +118,17 @@ const MODES = [
 // Actions that can be turned into real Schwab orders
 const EXECUTABLE_ACTIONS = new Set(['BUY', 'SELL', 'TRIM']);
 
+/**
+ * Detect put-option recommendations. These look like "SELL TQQQ" with a
+ * rationale mentioning a put contract — the ticker action is the underlying,
+ * but the actual trade is an option, not equity. They must NOT flow through
+ * the equity staging path (would create a "SELL 87 TQQQ" stock order); the
+ * dedicated AI-pick button on the rec card stages them via /api/option-plan.
+ */
+function isPutRec(rec: Recommendation): boolean {
+  return /\bput\b/i.test(rec.rationale ?? '');
+}
+
 const ACTION_COLORS: Record<string, string> = {
   BUY:   'bg-emerald-500/20 text-emerald-300 border-emerald-500/30',
   SELL:  'bg-red-500/20    text-red-300    border-red-500/30',
@@ -598,6 +609,8 @@ export function AIAnalysisPanel({
     if (!analysis) return;
     const rows: OrderRow[] = [...selectedRecs]
       .sort((a, b) => a - b)
+      // Skip put recs — equity order modal would book the underlying as stock.
+      .filter((idx) => analysis.recommendations[idx] && !isPutRec(analysis.recommendations[idx]))
       .map((idx): OrderRow => {
         const rec = analysis.recommendations[idx];
         const instruction: 'BUY' | 'SELL' =
@@ -659,7 +672,16 @@ export function AIAnalysisPanel({
   const stageRecsToInbox = useCallback(async () => {
     if (!analysis) return;
     const candidates = [...selectedRecs]
-      .filter((idx) => EXECUTABLE_ACTIONS.has(analysis.recommendations[idx]?.action))
+      .filter((idx) => {
+        const r = analysis.recommendations[idx];
+        if (!r) return false;
+        if (!EXECUTABLE_ACTIONS.has(r.action)) return false;
+        // Put recs go through /api/option-plan (AI-pick button on the card),
+        // not the equity inbox path. Otherwise we'd stage "SELL 87 TQQQ"
+        // (stock) instead of the intended put contract.
+        if (isPutRec(r)) return false;
+        return true;
+      })
       .map((idx) => {
         const rec = analysis.recommendations[idx];
         const instruction: 'BUY' | 'SELL' = rec.action === 'BUY' ? 'BUY' : 'SELL';
@@ -720,7 +742,10 @@ export function AIAnalysisPanel({
   }, [analysis]);
 
   const executableSelected = analysis
-    ? [...selectedRecs].filter((i) => EXECUTABLE_ACTIONS.has(analysis.recommendations[i]?.action)).length
+    ? [...selectedRecs].filter((i) => {
+        const r = analysis.recommendations[i];
+        return r && EXECUTABLE_ACTIONS.has(r.action) && !isPutRec(r);
+      }).length
     : 0;
 
   const selectedMode = MODES.find((m) => m.id === mode)!;
@@ -961,7 +986,7 @@ export function AIAnalysisPanel({
                               Size: {rec.size_hint}
                               {rec.dollar_amount && <span className="text-[#7c82a0] ml-2">(${rec.dollar_amount.toLocaleString()})</span>}
                               {rec.sell_pct      && <span className="text-[#7c82a0] ml-2">({rec.sell_pct}% of position)</span>}
-                              {isExecutable && (() => {
+                              {isExecutable && !isPutRec(rec) && (() => {
                                 const shares = estimateShares(rec, positions, extraPrices);
                                 if (shares > 0) {
                                   return (
@@ -980,6 +1005,11 @@ export function AIAnalysisPanel({
                                 }
                                 return null;
                               })()}
+                              {isPutRec(rec) && (
+                                <span className="text-purple-300 ml-2 italic">
+                                  · option contract — use AI-pick below
+                                </span>
+                              )}
                             </div>
                           )}
 
