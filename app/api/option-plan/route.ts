@@ -120,7 +120,9 @@ function parseChain(
       const bid    = (c.bid  as number) ?? 0;
       const ask    = (c.ask  as number) ?? 0;
       const mid    = +((bid + ask) / 2).toFixed(2);
-      const iv     = +((c.volatility as number ?? 0) * 100).toFixed(1);
+      // Schwab returns volatility already as a percent number (e.g. 59.0 for 59% IV).
+      // Don't multiply by 100 — that produced 5900% in the chain UI.
+      const iv     = +((c.volatility as number ?? 0)).toFixed(1);
       const delta  = +(c.delta as number ?? 0).toFixed(3);
       const itm    = (c.inTheMoney as boolean) ?? false;
       const otmPct = underlyingPrice > 0

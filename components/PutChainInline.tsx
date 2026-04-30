@@ -11,7 +11,8 @@
  */
 
 import { useState } from 'react';
-import { ChevronDown, ChevronUp, Loader2, AlertTriangle, TrendingDown } from 'lucide-react';
+import { ChevronDown, ChevronUp, Loader2, AlertTriangle, TrendingDown, Sparkles, CheckCircle2 } from 'lucide-react';
+import { fetchOptionPlan, type OptionPlanResponse } from '@/lib/option-plan-client';
 
 interface PutContract {
   symbol:           string;
@@ -40,6 +41,13 @@ interface ChainData {
 
 interface PutChainInlineProps {
   ticker: string;
+  /**
+   * When provided, surfaces a "Pick best & stage" button that calls
+   * /api/option-plan in the given mode. The endpoint auto-stages the
+   * selected contract into the Trade Inbox, so success means the trade
+   * is queued for one-click approval — no further action required.
+   */
+  stageMode?: 'sell_put' | 'buy_put';
 }
 
 function fmt2(n: number) { return n.toFixed(2); }
@@ -62,12 +70,31 @@ function probOfProfit(p: PutContract): number {
   return Math.round((1 - Math.abs(p.delta)) * 100);
 }
 
-export function PutChainInline({ ticker }: PutChainInlineProps) {
+export function PutChainInline({ ticker, stageMode }: PutChainInlineProps) {
   const [open,    setOpen]    = useState(false);
   const [loading, setLoading] = useState(false);
   const [data,    setData]    = useState<ChainData | null>(null);
   const [error,   setError]   = useState<string | null>(null);
   const [filter,  setFilter]  = useState<'sweet_spot' | 'all'>('sweet_spot');
+
+  // AI-pick state — only used when stageMode is set.
+  const [picking,    setPicking]   = useState(false);
+  const [plan,       setPlan]      = useState<OptionPlanResponse | null>(null);
+  const [planError,  setPlanError] = useState<string | null>(null);
+
+  const pickAndStage = async () => {
+    if (!stageMode) return;
+    setPicking(true);
+    setPlanError(null);
+    try {
+      const result = await fetchOptionPlan({ symbol: ticker, mode: stageMode, contracts: 1 });
+      setPlan(result);
+    } catch (e) {
+      setPlanError(e instanceof Error ? e.message : 'Failed to pick contract');
+    } finally {
+      setPicking(false);
+    }
+  };
 
   const fetch_ = async () => {
     if (data) { setOpen((v) => !v); return; }  // toggle if already loaded
@@ -101,7 +128,52 @@ export function PutChainInline({ ticker }: PutChainInlineProps) {
   }
 
   return (
-    <div className="mt-2">
+    <div className="mt-2 space-y-2">
+      {stageMode && (
+        <div className="space-y-1.5">
+          {!plan && (
+            <button
+              onClick={pickAndStage}
+              disabled={picking}
+              className="flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded bg-purple-500/15 border border-purple-500/40 text-purple-300 hover:bg-purple-500/25 disabled:opacity-50 transition-colors font-semibold"
+            >
+              {picking ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Sparkles className="w-3.5 h-3.5" />}
+              {picking ? 'AI picking best contract…' : `✨ AI-pick best ${stageMode === 'sell_put' ? 'sell-put' : 'protective put'} & stage to Inbox`}
+            </button>
+          )}
+
+          {planError && (
+            <div className="flex items-center gap-1.5 text-xs text-red-400">
+              <AlertTriangle className="w-3.5 h-3.5" /> {planError}
+            </div>
+          )}
+
+          {plan && (
+            <div className="bg-emerald-500/10 border border-emerald-500/40 rounded px-3 py-2 text-xs space-y-1">
+              <div className="flex items-center gap-1.5 text-emerald-300 font-semibold">
+                <CheckCircle2 className="w-3.5 h-3.5" /> Staged to Inbox
+              </div>
+              <div className="font-mono text-[#e8eaf0]">
+                {plan.instruction === 'SELL_TO_OPEN' ? 'SELL' : 'BUY'} {plan.contracts} × {plan.symbol}{' '}
+                ${plan.selectedContract.strike.toFixed(2)}P{' '}
+                {plan.selectedContract.expiration} ({plan.selectedContract.dte}d) @ ${plan.limitPrice.toFixed(2)} limit
+              </div>
+              <div className="text-[#7c82a0] text-[11px]">
+                Δ {plan.selectedContract.delta.toFixed(2)} · OTM {plan.selectedContract.otmPct.toFixed(1)}%
+                {' · '}Ann.Ret {plan.selectedContract.annualisedReturn.toFixed(1)}%
+                {' · '}Breakeven ${plan.selectedContract.breakeven.toFixed(2)}
+              </div>
+              <div className="text-[#a8aec8] text-[11px] italic leading-relaxed pt-0.5">{plan.rationale}</div>
+              {!plan.validationPassed && (
+                <div className="text-amber-400 text-[10px] pt-0.5">
+                  ⚠ AI selection fell back to scored pick — review carefully.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       <button
         onClick={fetch_}
         className="flex items-center gap-1.5 text-xs text-blue-400 hover:text-blue-300 transition-colors"

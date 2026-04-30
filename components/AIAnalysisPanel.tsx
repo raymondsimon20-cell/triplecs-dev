@@ -1011,7 +1011,10 @@ export function AIAnalysisPanel({
                           {/* Inline put chain — shown when rec involves put selling */}
                           {(rec.action === 'SELL' || rec.action === 'BUY') &&
                             rec.rationale?.toLowerCase().includes('put') && (
-                              <PutChainInline ticker={rec.ticker} />
+                              <PutChainInline
+                                ticker={rec.ticker}
+                                stageMode={rec.action === 'SELL' ? 'sell_put' : 'buy_put'}
+                              />
                             )}
                         </div>
                       );
