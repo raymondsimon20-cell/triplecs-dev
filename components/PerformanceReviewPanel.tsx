@@ -99,6 +99,8 @@ export function PerformanceReviewPanel({ currentTargets }: Props) {
   const [reviewing, setReviewing] = useState(false);
   const [review, setReview]     = useState<ReviewResponse | null>(null);
   const [windowMode, setWindowMode] = useState<'30d' | '90d'>('30d');
+  const [backfilling, setBackfilling] = useState(false);
+  const [backfillSummary, setBackfillSummary] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -135,6 +137,31 @@ export function PerformanceReviewPanel({ currentTargets }: Props) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
       setReviewing(false);
+    }
+  }
+
+  async function backfill90d() {
+    if (backfilling) return;
+    if (!confirm('Pull the last 90 days of Schwab fills into the Performance Review? Trades from before reconciliation shipped will get real prices and proper attribution. Idempotent — safe to run more than once.')) return;
+    setBackfilling(true);
+    setBackfillSummary(null);
+    try {
+      const r = await fetch('/api/reconcile-trades', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ lookbackDays: 90 }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.ok === false) throw new Error(d.error ?? `HTTP ${r.status}`);
+      const res = d.result ?? {};
+      setBackfillSummary(
+        `Scanned ${res.scanned ?? 0}, added ${res.added ?? 0}, backfilled ${res.backfilled ?? 0} prices, matched inbox ${res.matched ?? 0}, skipped ${res.skipped ?? 0}.`,
+      );
+      await load();
+    } catch (err) {
+      setBackfillSummary(`Failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setBackfilling(false);
     }
   }
 
@@ -204,6 +231,15 @@ export function PerformanceReviewPanel({ currentTargets }: Props) {
           >
             <RefreshCw className="w-3 h-3" /> Refresh
           </button>
+          <button
+            onClick={backfill90d}
+            disabled={backfilling}
+            title="Pulls 90 days of Schwab fills, backfills missing prices, and dedupes pre-existing duplicates. Idempotent."
+            className="px-2 py-1 rounded text-[#7c82a0] hover:text-white hover:bg-white/[0.04] disabled:opacity-50 transition-colors flex items-center gap-1 text-[10px]"
+          >
+            {backfilling ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+            {backfilling ? 'Backfilling…' : 'Backfill 90d'}
+          </button>
         </div>
 
         <button
@@ -215,6 +251,12 @@ export function PerformanceReviewPanel({ currentTargets }: Props) {
           {reviewing ? 'Reviewing 90d…' : 'AI Review (90d)'}
         </button>
       </div>
+
+      {backfillSummary && (
+        <div className="text-[11px] text-[#a8aec8] bg-[#1a1d27]/60 border border-[#252840] rounded px-2.5 py-1.5">
+          <span className="text-purple-300 font-semibold">Backfill:</span> {backfillSummary}
+        </div>
+      )}
 
       {/* ── Top-line metrics ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
