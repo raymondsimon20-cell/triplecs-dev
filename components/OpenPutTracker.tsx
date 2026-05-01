@@ -19,8 +19,9 @@
  */
 
 import { useState } from 'react';
-import { TrendingDown, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, Clock } from 'lucide-react';
+import { TrendingDown, ChevronDown, ChevronUp, AlertTriangle, CheckCircle, Clock, Loader2, X, RotateCw } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
+import { fetchOptionPlan } from '@/lib/option-plan-client';
 
 interface ParsedPut {
   symbol:         string;   // full OCC symbol
@@ -141,6 +142,9 @@ const STATUS_CONFIG = {
 
 export function OpenPutTracker({ positions }: Props) {
   const [open, setOpen] = useState(false);
+  // Track in-flight action per OCC symbol so only that row's button spinner.
+  const [pending, setPending] = useState<{ symbol: string; action: 'close' | 'roll' } | null>(null);
+  const [feedback, setFeedback] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const puts: ParsedPut[] = positions
     .map(parsePositionToPut)
@@ -151,6 +155,99 @@ export function OpenPutTracker({ positions }: Props) {
       if (priority[a.status] !== priority[b.status]) return priority[a.status] - priority[b.status];
       return a.dte - b.dte;
     });
+
+  /**
+   * Stage a BUY_TO_CLOSE for an open short put. Limit price = current
+   * cost-to-close per share (Schwab will fill at or better). User can
+   * adjust the limit in the inbox before approving.
+   */
+  async function handleClose(p: ParsedPut) {
+    if (pending) return;
+    setPending({ symbol: p.symbol, action: 'close' });
+    setFeedback(null);
+    try {
+      const limitPerShare = +(p.currentPremium / 100).toFixed(2);
+      const r = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{
+            source:      'option',
+            symbol:      p.underlying,
+            instruction: 'BUY_TO_CLOSE',
+            quantity:    p.quantity,
+            orderType:   'LIMIT',
+            occSymbol:   p.symbol,
+            limitPrice:  Math.max(limitPerShare, 0.01),
+            price:       Math.max(limitPerShare, 0.01),
+            rationale:   `Vol 6 close: ${p.profitPct.toFixed(0)}% profit captured on ${p.underlying} $${p.strike}P (${p.dte}d remaining). Limit = current ask.`,
+            aiMode:      'put_close',
+            violations:  [],
+          }],
+        }),
+      });
+      const d = await r.json();
+      if (!r.ok || d.rejected > 0) throw new Error(d.error ?? d.rejectedReason ?? `HTTP ${r.status}`);
+      setFeedback({ kind: 'ok', text: `Staged BUY_TO_CLOSE ${p.underlying} $${p.strike}P to Trade Inbox.` });
+    } catch (err) {
+      setFeedback({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setPending(null);
+    }
+  }
+
+  /**
+   * Roll: stage a BUY_TO_CLOSE for the current contract AND ask
+   * /api/option-plan to pick + auto-stage a fresh 60–90 DTE / 0.25 delta
+   * SELL_TO_OPEN on the same underlying. Both items end up in the inbox;
+   * user reviews + approves each leg independently.
+   */
+  async function handleRoll(p: ParsedPut) {
+    if (pending) return;
+    setPending({ symbol: p.symbol, action: 'roll' });
+    setFeedback(null);
+    try {
+      // Leg 1: close current contract.
+      const limitPerShare = +(p.currentPremium / 100).toFixed(2);
+      const closeRes = await fetch('/api/inbox', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          items: [{
+            source:      'option',
+            symbol:      p.underlying,
+            instruction: 'BUY_TO_CLOSE',
+            quantity:    p.quantity,
+            orderType:   'LIMIT',
+            occSymbol:   p.symbol,
+            limitPrice:  Math.max(limitPerShare, 0.01),
+            price:       Math.max(limitPerShare, 0.01),
+            rationale:   `Vol 6 roll (close leg): ${p.profitPct.toFixed(0)}% captured on ${p.underlying} $${p.strike}P, ${p.dte}d to expiry. Pairs with new SELL_TO_OPEN.`,
+            aiMode:      'put_roll',
+            violations:  [],
+          }],
+        }),
+      });
+      const closeData = await closeRes.json();
+      if (!closeRes.ok || closeData.rejected > 0) throw new Error(closeData.error ?? closeData.rejectedReason ?? `Close leg: HTTP ${closeRes.status}`);
+
+      // Leg 2: option-plan picks the new contract and auto-stages it.
+      const plan = await fetchOptionPlan({
+        symbol:    p.underlying,
+        mode:      'sell_put',
+        contracts: p.quantity,
+      });
+
+      setFeedback({
+        kind: 'ok',
+        text: `Roll staged: close ${p.underlying} $${p.strike}P + new SELL_TO_OPEN $${plan.selectedContract.strike}P ${plan.selectedContract.dte}d (${plan.selectedContract.delta.toFixed(2)} Δ).`,
+      });
+    } catch (err) {
+      setFeedback({ kind: 'err', text: err instanceof Error ? err.message : String(err) });
+    } finally {
+      setPending(null);
+    }
+  }
 
   const totalReceived  = puts.reduce((s, p) => s + p.premiumReceived, 0);
   const totalCurrent   = puts.reduce((s, p) => s + p.currentValue, 0);
@@ -209,6 +306,16 @@ export function OpenPutTracker({ positions }: Props) {
                 Vol 6 rules: Close at 75% profit · Roll at DTE &lt;21 with 25–74% profit (buy-to-close + sell new 60–90 DTE) · Sell on down days
               </div>
 
+              {feedback && (
+                <div className={`text-[11px] rounded px-3 py-1.5 border ${
+                  feedback.kind === 'ok'
+                    ? 'bg-emerald-500/10 border-emerald-500/40 text-emerald-300'
+                    : 'bg-red-500/10 border-red-500/40 text-red-300'
+                }`}>
+                  {feedback.text}
+                </div>
+              )}
+
               {/* Position table */}
               <div className="overflow-x-auto">
                 <table className="w-full text-xs">
@@ -224,11 +331,15 @@ export function OpenPutTracker({ positions }: Props) {
                       <th className="text-right px-2 py-2 font-medium">Current</th>
                       <th className="text-right px-2 py-2 font-medium">P&L%</th>
                       <th className="text-right px-2 py-2 font-medium">Status</th>
+                      <th className="text-right px-2 py-2 font-medium">Action</th>
                     </tr>
                   </thead>
                   <tbody>
                     {puts.map((p) => {
                       const cfg = STATUS_CONFIG[p.status];
+                      const busy = pending?.symbol === p.symbol;
+                      const closeFeatured = p.status === 'close_now';
+                      const rollFeatured  = p.status === 'roll' || p.status === 'expiry_warning';
                       return (
                         <tr key={p.symbol} className={`border-b border-[#1a1d27] ${
                           p.status === 'close_now' ? 'bg-emerald-500/5' :
@@ -255,6 +366,36 @@ export function OpenPutTracker({ positions }: Props) {
                               {cfg.icon}
                               {cfg.label}
                             </span>
+                          </td>
+                          <td className="text-right px-2 py-2.5">
+                            <div className="inline-flex gap-1">
+                              <button
+                                onClick={() => handleClose(p)}
+                                disabled={busy || pending !== null}
+                                title="Stage BUY_TO_CLOSE to Trade Inbox at current ask"
+                                className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center gap-1 disabled:opacity-50 ${
+                                  closeFeatured
+                                    ? 'bg-emerald-500/20 border-emerald-500/40 text-emerald-300 hover:bg-emerald-500/30'
+                                    : 'bg-[#1a1d27] border-[#2d3248] text-[#7c82a0] hover:text-white hover:bg-[#252840]'
+                                }`}
+                              >
+                                {busy && pending?.action === 'close' ? <Loader2 className="w-3 h-3 animate-spin" /> : <X className="w-3 h-3" />}
+                                Close
+                              </button>
+                              <button
+                                onClick={() => handleRoll(p)}
+                                disabled={busy || pending !== null}
+                                title="Stage BUY_TO_CLOSE + AI-pick a fresh 60–90 DTE SELL_TO_OPEN"
+                                className={`text-[10px] px-2 py-0.5 rounded border transition-colors flex items-center gap-1 disabled:opacity-50 ${
+                                  rollFeatured
+                                    ? 'bg-violet-500/20 border-violet-500/40 text-violet-300 hover:bg-violet-500/30'
+                                    : 'bg-[#1a1d27] border-[#2d3248] text-[#7c82a0] hover:text-white hover:bg-[#252840]'
+                                }`}
+                              >
+                                {busy && pending?.action === 'roll' ? <Loader2 className="w-3 h-3 animate-spin" /> : <RotateCw className="w-3 h-3" />}
+                                Roll
+                              </button>
+                            </div>
                           </td>
                         </tr>
                       );
