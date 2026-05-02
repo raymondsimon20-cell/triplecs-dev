@@ -12,11 +12,14 @@
 import { getStore } from '@netlify/blobs';
 import { listInbox } from '../inbox';
 import {
+  getCashFlows,
   getLatestPortfolioSnapshot,
   getSnapshotHistory,
 } from '../storage';
 import { buildRecap, type FullRecap } from '../recap';
+import { computeProgressVs40, computeTWR } from '../performance';
 import { buildFeedbackBlock } from './feedback-context';
+import { buildPaceBlock, type PaceContext } from './pace-context';
 import type { TradeHistoryEntry } from '@/app/api/orders/route';
 
 const DEFAULT_OPERATIONAL_WINDOW = 14;
@@ -49,6 +52,42 @@ export async function loadFeedbackBlock(lookbackDays = DEFAULT_OPERATIONAL_WINDO
     console.warn('[recap-loader] feedback load failed:', err);
     return null;
   }
+}
+
+/**
+ * Build the pace context (TWR + CAGR + gap vs 40% target). Returns null if
+ * we don't have enough snapshot history (need ≥2) or computation fails.
+ *
+ * Pulled from full snapshot history so the window reflects the longest
+ * measurable horizon — `daysSinceStart` is the actual span between first
+ * and last snapshot, not a fixed lookback.
+ */
+export async function loadPaceContext(): Promise<PaceContext | null> {
+  try {
+    const [snapshots, cashFlows] = await Promise.all([
+      getSnapshotHistory(365),
+      getCashFlows(),
+    ]);
+    if (snapshots.length < 2) return null;
+
+    const twr = computeTWR(snapshots, cashFlows);
+    if (!twr) return null;
+
+    const progress = computeProgressVs40(twr.cagrPct, twr.daysCovered);
+    return { twr, progress, daysSinceStart: twr.daysCovered };
+  } catch (err) {
+    console.warn('[recap-loader] pace context load failed:', err);
+    return null;
+  }
+}
+
+/**
+ * Same as loadPaceContext but returns the rendered prompt block. Returns
+ * null when there's nothing useful to inject — caller skips the block.
+ */
+export async function loadPaceBlock(): Promise<string | null> {
+  const ctx = await loadPaceContext();
+  return buildPaceBlock(ctx);
 }
 
 /** Same as loadFeedbackBlock but returns the raw recap (for the review panel). */

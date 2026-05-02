@@ -18,8 +18,8 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { requireAuth } from '@/lib/session';
 import { buildUserMessage } from '@/lib/ai/system-prompt';
-import { cachedSystemPrompt, withFeedback } from '@/lib/ai/prompt-cache';
-import { loadFeedbackBlock } from '@/lib/ai/recap-loader';
+import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
+import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
 import { getLatestPortfolioSnapshot } from '@/lib/storage';
 import { createClient } from '@/lib/schwab/client';
 
@@ -165,12 +165,15 @@ export async function POST(req: Request) {
       try {
         const client = new Anthropic({ apiKey });
 
-        const feedbackBlock = await loadFeedbackBlock();
+        const [feedbackBlock, paceBlock] = await Promise.all([
+          loadFeedbackBlock(),
+          loadPaceBlock(),
+        ]);
         const stream = await client.messages.stream({
           model,
           max_tokens: maxTokens,
           system: cachedSystemPrompt(mode),
-          messages: [{ role: 'user', content: withFeedback(feedbackBlock, userMessage) }],
+          messages: [{ role: 'user', content: withContext(feedbackBlock, paceBlock, userMessage) }],
         });
 
         for await (const event of stream) {

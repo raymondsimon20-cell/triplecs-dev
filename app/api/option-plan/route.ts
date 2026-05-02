@@ -40,8 +40,8 @@ import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
 import { getTokens } from '@/lib/storage';
 import { getOptionsChain } from '@/lib/schwab/client';
-import { cachedSystemPrompt, withFeedback } from '@/lib/ai/prompt-cache';
-import { loadFeedbackBlock } from '@/lib/ai/recap-loader';
+import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
+import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
 import { isAutomationPaused } from '@/lib/guardrails';
 import { appendInbox } from '@/lib/inbox';
 
@@ -374,12 +374,15 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
     async start(controller) {
       try {
         const client = new Anthropic({ apiKey });
-        const feedbackBlock = await loadFeedbackBlock();
+        const [feedbackBlock, paceBlock] = await Promise.all([
+          loadFeedbackBlock(),
+          loadPaceBlock(),
+        ]);
         const stream = await client.messages.stream({
           model:      'claude-sonnet-4-6',
           max_tokens: 1024,
           system:     cachedSystemPrompt(),
-          messages:   [{ role: 'user', content: withFeedback(feedbackBlock, userMessage) }],
+          messages:   [{ role: 'user', content: withContext(feedbackBlock, paceBlock, userMessage) }],
         });
 
         let fullText = '';

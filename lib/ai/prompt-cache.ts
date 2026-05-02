@@ -35,12 +35,20 @@ export function cachedSystemPrompt(mode = 'default'): Anthropic.Messages.TextBlo
 }
 
 /**
- * Compose a user message with the feedback block prepended. Keeps the
- * "feedback first, task second" ordering consistent across endpoints.
+ * Compose a user message with the feedback block AND pace block prepended,
+ * in that order: feedback (track record) → pace (gap vs 40%) → task.
  *
- * If feedback is empty (no recap available), just returns the task untouched.
+ * Either block may be null; the helper just skips it. Use this from any
+ * endpoint that wants Phase 4 sizing context on top of the feedback loop.
  */
-export function withFeedback(feedbackBlock: string | null, taskMessage: string): string {
-  if (!feedbackBlock) return taskMessage;
-  return `${feedbackBlock}\n\n${taskMessage}`;
+export function withContext(
+  feedbackBlock: string | null,
+  paceBlock: string | null,
+  taskMessage: string,
+): string {
+  const parts: string[] = [];
+  if (feedbackBlock) parts.push(feedbackBlock);
+  if (paceBlock)     parts.push(paceBlock);
+  parts.push(taskMessage);
+  return parts.join('\n\n');
 }
