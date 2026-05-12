@@ -27,6 +27,7 @@ import { loadSignalState, saveSignalState } from '@/lib/signals/state';
 import {
   runSignalEngine,
   type EngineInputs,
+  type EnginePosition,
   type EngineResult,
   type TradeSignal,
 } from '@/lib/signals/engine';
@@ -89,7 +90,7 @@ async function fetchMarketContext(): Promise<{ spyHistory: number[]; vix: number
  * aggregation pattern, this just inlines what we need.
  */
 async function fetchAggregatedPortfolio(): Promise<{
-  positions:  Array<{ symbol: string; shares: number }>;
+  positions:  EnginePosition[];
   cash:       number;
   marginDebt: number;
   prices:     Record<string, number>;
@@ -105,7 +106,7 @@ async function fetchAggregatedPortfolio(): Promise<{
     accountNums.map(({ hashValue }) => client.getAccount(hashValue)),
   );
 
-  const positions: Array<{ symbol: string; shares: number }> = [];
+  const positions: EnginePosition[] = [];
   let cash       = 0;
   let marginDebt = 0;
 
@@ -115,12 +116,17 @@ async function fetchAggregatedPortfolio(): Promise<{
     marginDebt += Math.abs(acct.currentBalances.marginBalance ?? 0);
 
     for (const p of acct.positions ?? []) {
-      // Equity only — skip options (their symbol contains spaces).
-      if (p.instrument.assetType !== 'EQUITY') continue;
+      // Skip options — they're handled by option-plan, not the signal engine.
+      // Schwab classifies CEFs (CLM, CRF) and ETFs (JEPI, QDTE, etc.) as
+      // COLLECTIVE_INVESTMENT or MUTUAL_FUND, not EQUITY, so we filter by
+      // what's NOT-an-option rather than what IS-equity.
+      if (p.instrument.assetType === 'OPTION') continue;
+      if (p.instrument.symbol.includes(' ')) continue;   // option symbols
       if (p.longQuantity <= 0) continue;
       positions.push({
-        symbol: p.instrument.symbol,
-        shares: p.longQuantity,
+        symbol:      p.instrument.symbol,
+        shares:      p.longQuantity,
+        marketValue: p.marketValue ?? 0,
       });
     }
   }

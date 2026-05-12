@@ -64,14 +64,25 @@ export interface PortfolioValuation {
   weightPcts:     Record<string, number>;
 }
 
+export interface EnginePosition {
+  symbol: string;
+  shares: number;
+  /**
+   * Market value of the position from Schwab (authoritative — already includes
+   * dividend accrual and intraday revaluation). The engine prefers this over
+   * `shares × prices[symbol]` so a missing quote doesn't zero out a holding.
+   */
+  marketValue: number;
+}
+
 export interface EngineInputs {
-  /** Positions from Schwab — share counts keyed by ticker. */
-  positions:   Array<{ symbol: string; shares: number }>;
+  /** Positions from Schwab. Caller filters out options upstream. */
+  positions:   EnginePosition[];
   /** Cash balance (USD). */
   cash:        number;
   /** Margin debt as a positive number (USD borrowed). */
   marginDebt:  number;
-  /** Current quote per ticker. SPY required. */
+  /** Current quote per ticker. Used as a fallback when marketValue is 0/missing. */
   prices:      Record<string, number>;
   /** Last ~25 SPY daily closes (chronological). */
   spyHistory:  number[];
@@ -175,7 +186,7 @@ function currentYearMonth(): string {
 // ─── Valuation ───────────────────────────────────────────────────────────────
 
 export function valuePortfolio(
-  positions: Array<{ symbol: string; shares: number }>,
+  positions: EnginePosition[],
   cash: number,
   marginDebt: number,
   prices: Record<string, number>,
@@ -184,8 +195,11 @@ export function valuePortfolio(
   const weightDollars: Record<string, number> = {};
 
   for (const pos of positions) {
-    const price = prices[pos.symbol] ?? 0;
-    const val   = pos.shares * price;
+    // Prefer Schwab's marketValue. Fall back to shares × price only if
+    // Schwab returned 0 or negative (rare — e.g. a position that priced
+    // mid-fetch).
+    const fallback = pos.shares * (prices[pos.symbol] ?? 0);
+    const val      = pos.marketValue > 0 ? pos.marketValue : fallback;
     holdingsValue += val;
     weightDollars[pos.symbol] = (weightDollars[pos.symbol] ?? 0) + val;
   }
