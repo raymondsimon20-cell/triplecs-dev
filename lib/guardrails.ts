@@ -317,3 +317,66 @@ export async function setAutomationPaused(paused: boolean): Promise<void> {
   const { getStore } = await import('@netlify/blobs');
   await getStore('system-state').setJSON(PAUSE_KEY, { paused, updatedAt: Date.now() });
 }
+
+// ─── Combined automation gate (user pause + signal-engine flags) ─────────────
+
+/**
+ * Identifies which gate is currently active. Routes that stage trades use this
+ * to decide whether to bail; the `source` field tells the UI/log WHICH gate
+ * fired, since the three are conceptually different:
+ *   - 'user'         : Raymond toggled the pause flag manually
+ *   - 'kill-switch'  : signal engine tripped the margin kill switch
+ *   - 'defense-mode' : signal engine flipped defense mode (equity ratio breach)
+ *   - null           : nothing active, automation flows normally
+ */
+export type AutomationGateSource = 'user' | 'kill-switch' | 'defense-mode';
+
+export interface AutomationGateState {
+  paused: boolean;
+  source: AutomationGateSource | null;
+  reason: string;
+  /** ms epoch when the gate flipped (null for user-toggle). */
+  since:  number | null;
+}
+
+/**
+ * Combined automation gate. Returns the FIRST gate that's currently active in
+ * priority order (user > kill-switch > defense-mode). Other routes use this
+ * instead of bare `isAutomationPaused()` so they respect signal-engine flags
+ * without needing to know about the engine internals.
+ *
+ * Dynamically imports the signal-engine state module to avoid a hard
+ * dependency — guardrails is broadly imported, signals/state is narrow.
+ */
+export async function getAutomationGate(): Promise<AutomationGateState> {
+  if (await isAutomationPaused()) {
+    return { paused: true, source: 'user', reason: 'Automation paused by user', since: null };
+  }
+
+  try {
+    const { getSignalGates } = await import('./signals/state');
+    const gates = await getSignalGates();
+    if (gates.killSwitch.active) {
+      return {
+        paused: true,
+        source: 'kill-switch',
+        reason: gates.killSwitch.reason || 'Margin kill switch tripped',
+        since:  gates.killSwitch.since,
+      };
+    }
+    if (gates.defenseMode.active) {
+      return {
+        paused: true,
+        source: 'defense-mode',
+        reason: `Defense mode active — equity ratio ${(gates.defenseMode.equityRatio * 100).toFixed(1)}%`,
+        since:  gates.defenseMode.since,
+      };
+    }
+  } catch (err) {
+    // Signal-engine state blob may not exist yet on a fresh install. Treat as
+    // "no gates active" — fall through to normal flow rather than blocking.
+    console.warn('[guardrails] could not read signal-engine gates:', err);
+  }
+
+  return { paused: false, source: null, reason: '', since: null };
+}

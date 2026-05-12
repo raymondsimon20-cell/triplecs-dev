@@ -122,10 +122,23 @@ export interface AppendInput {
   ttlMs?:      number;
 }
 
+/** Cross-source dedup window: skip if a different source already proposed the
+ *  same (symbol, instruction) within this many ms. Tighter than the 24h TTL
+ *  because two planners hitting the same action in the same trading day is
+ *  the case we want to catch — older items are likely stale anyway. */
+const CROSS_SOURCE_DEDUP_MS = 12 * 60 * 60 * 1000;
+
 /**
- * Stage a batch of new items. De-dupes against existing `pending` items by
- * (source, symbol, instruction, quantity) so re-running a plan within the TTL
- * window doesn't fill the inbox with duplicates.
+ * Stage a batch of new items. Two dedup layers:
+ *
+ *   1. SAME-SOURCE dedup by (source, symbol, instruction, quantity). Prevents
+ *      a planner re-staging identical items on repeat runs within the TTL.
+ *
+ *   2. CROSS-SOURCE dedup by (symbol, instruction) within 12h. Prevents two
+ *      different planners (e.g. rebalance-plan AND signal-engine) both
+ *      staging "SELL CLM" the same morning, which would risk a double trim
+ *      if the user approved both. First-write-wins — the second source's
+ *      item is dropped and logged.
  *
  * Returns the items as actually persisted (with assigned ids/timestamps).
  */
@@ -135,21 +148,49 @@ export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
   const existing = await readAll();
   const { items: aged } = expireStale(existing);
 
-  const pendingKey = (it: Pick<InboxItem, 'source' | 'symbol' | 'instruction' | 'quantity'>) =>
+  // Same-source dedup key — exact match including quantity.
+  const sameSourceKey = (it: Pick<InboxItem, 'source' | 'symbol' | 'instruction' | 'quantity'>) =>
     `${it.source}|${it.symbol}|${it.instruction}|${it.quantity}`;
-  const pendingKeys = new Set(
-    aged.filter((it) => it.status === 'pending').map(pendingKey),
-  );
+  // Cross-source dedup key — symbol + instruction only, source-agnostic.
+  const crossSourceKey = (it: Pick<InboxItem, 'symbol' | 'instruction'>) =>
+    `${it.symbol}|${it.instruction}`;
 
   const now = Date.now();
+
+  const sameSourceKeys = new Set(
+    aged.filter((it) => it.status === 'pending').map(sameSourceKey),
+  );
+  // Cross-source map: key → existing pending item, so we can include details
+  // in the skip log (which source preempted, when it was staged).
+  const crossSourceMap = new Map<string, InboxItem>();
+  for (const it of aged) {
+    if (it.status !== 'pending') continue;
+    if (now - it.createdAt > CROSS_SOURCE_DEDUP_MS) continue;
+    crossSourceMap.set(crossSourceKey(it), it);
+  }
+
   const fresh: InboxItem[] = [];
   for (const input of inputs) {
-    const key = pendingKey(input);
-    if (pendingKeys.has(key)) continue;     // duplicate — skip
-    pendingKeys.add(key);
+    // Layer 1: same-source exact-match.
+    const sKey = sameSourceKey(input);
+    if (sameSourceKeys.has(sKey)) continue;
+
+    // Layer 2: cross-source by (symbol, instruction).
+    const cKey = crossSourceKey(input);
+    const preempting = crossSourceMap.get(cKey);
+    if (preempting && preempting.source !== input.source) {
+      console.info(
+        `[inbox] cross-source dedup: dropping ${input.source} ${input.instruction} ${input.symbol} ` +
+        `× ${input.quantity} — already pending from '${preempting.source}' since ` +
+        `${new Date(preempting.createdAt).toISOString()}`,
+      );
+      continue;
+    }
+
+    sameSourceKeys.add(sKey);
     const violations = input.violations ?? [];
     const ttl = input.ttlMs ?? PENDING_TTL_MS;
-    fresh.push({
+    const item: InboxItem = {
       id:          generateId(),
       createdAt:   now,
       expiresAt:   now + ttl,
@@ -167,7 +208,10 @@ export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
       aiMode:      input.aiMode,
       violations,
       blocked:     violations.some((v) => v.severity === 'block'),
-    });
+    };
+    fresh.push(item);
+    // Update cross-source map so duplicates within the same batch are also caught.
+    crossSourceMap.set(cKey, item);
   }
 
   if (fresh.length === 0) {

@@ -36,7 +36,7 @@ import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
 import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
 import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
-import { validateBatch, isAutomationPaused, type ProposedTrade, type GuardrailContext } from '@/lib/guardrails';
+import { validateBatch, getAutomationGate, type ProposedTrade, type GuardrailContext } from '@/lib/guardrails';
 import { getSnapshotHistory } from '@/lib/storage';
 import { appendInbox, type AppendInput } from '@/lib/inbox';
 import type { EnrichedPosition } from '@/lib/schwab/types';
@@ -130,11 +130,23 @@ async function handlePost(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Kill switch — short-circuit before calling Claude. Must use the stream
-  // sentinel format because the client always reads the body as a stream and
-  // looks for __RESULT__; a plain JSON response would never deliver a result.
-  if (await isAutomationPaused()) {
-    const payload = JSON.stringify({ paused: true, orders: [], blockedOrders: [], summary: 'Automation paused.', drifts: [] });
+  // Automation gate — short-circuit before calling Claude. Combines the
+  // user-toggle, the signal-engine margin kill switch, and the signal-engine
+  // defense-mode flag. Must use the stream sentinel format because the client
+  // reads the body as a stream and looks for __RESULT__; a plain JSON response
+  // would never deliver a result.
+  const gate = await getAutomationGate();
+  if (gate.paused) {
+    const payload = JSON.stringify({
+      paused:     true,
+      gateSource: gate.source,
+      gateReason: gate.reason,
+      gateSince:  gate.since,
+      orders:        [],
+      blockedOrders: [],
+      summary:       `Automation paused (${gate.source}): ${gate.reason}`,
+      drifts:        [],
+    });
     const body = `__RESULT__${payload}\n__DONE__`;
     return new Response(body, {
       headers: {
@@ -263,31 +275,25 @@ CURRENT EQUITY POSITIONS (sell/buy candidates):
 symbol | pillar | shares | price | value
 ${positionRows || 'No equity positions found.'}
 
-HEDGE PAIRS (long ↔ short):
+HEDGE PAIRS (long ↔ short — informational only, see rule 11):
   UPRO/SPXL ↔ SPXU  |  TQQQ ↔ SQQQ  |  UDOW ↔ SDOW  |  SOXL ↔ SOXS  |  FNGU ↔ FNGD
 Active short hedge positions (symbols with SHORT above): ${activePairs.join(', ') || 'none'}
-Target size per short hedge: $${perPairTargetDollars.toFixed(0)} (hedge target ${targets.hedgePct}% ÷ ${activePairs.length || 1} active pairs)
 
 STRATEGY RULES (must follow exactly):
 1. 1/3 RULE: When trimming income, route exactly 1/3 of the trimmed dollars into Triples (TQQQ or UPRO preferred). The remaining 2/3 stays as freed capital / cash.
-2. NEVER sell Cornerstone (CLM or CRF). These are long-term DRIP positions — do not touch.
+2. CORNERSTONE: Do not propose CLM or CRF sells here. Cornerstone trims are owned by the signal engine (CLM_CRF_TRIM rule fires when combined weight exceeds 20%). Cornerstone BUYs via pillar drift are fine.
 3. For SELL orders: only sell symbols the user already holds (listed above).
 4. For BUY orders: prefer symbols already held. For new positions choose from the Vol 7 preferred lists:
    - Triples pillar → TQQQ, UPRO, SPXL (index 3×), or SOXL/TECL (sector 3× — use sparingly)
    - Income pillar → YMAG, XDTE, FEPI, AIPI, SPYI, JEPI, JEPQ, QQQY, NVDY, TSLY, YMAX, KLIP
    - Cornerstone pillar → CLM or CRF (DRIP enrolled)
-   - Hedge pillar → SPXU, SQQQ (paired with their bull counterparts SPXL, TQQQ)
 5. Shares MUST be whole numbers: use Math.floor(dollarAmount / pricePerShare).
 6. Minimum 1 share per order. Skip orders where Math.floor gives 0.
 7. Only include orders for pillars with |drift| > 1% AND driftDollars > $500.
 8. Keep individual orders manageable — split large sells across top 2-3 positions if needed.
 9. For income buys: prefer monthly-distribution ETFs with >15% yield (YMAG, XDTE, FEPI) over lower-yield names.
 10. For triples buys: prefer index-linked (TQQQ/UPRO) unless the user already holds significant sector 3×.
-11. SHORT REBALANCE RULE: Whenever a triple long is trimmed or sold, check its paired short hedge
-    (see HEDGE PAIRS above). If the short is above or below its target size ($${perPairTargetDollars.toFixed(0)}),
-    include a BUY TO COVER (SELL instruction on short) or SELL SHORT (BUY instruction flagged as short)
-    to bring it back to target. Use the hedge's current price and Math.floor for share count.
-    If no paired short exists yet and hedges are under target, recommend opening one.
+11. HEDGES — DO NOT PROPOSE. Hedge sizing (SPXU/SQQQ and any other short hedge) is owned by the signal engine's AIRBAG_SCALE rule, which sizes hedges off VIX bands + SPY drawdown, not pillar drift. Do not include SPXU, SQQQ, or any short hedge in your orders — they will be filtered out before staging. Hedge pillar drift is informational only; ignore it.
 
 TASK: Generate the minimum set of orders to move each pillar to within 1% of target.
 Apply the 1/3 rule automatically for income trims.
@@ -436,7 +442,13 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
             if (!o.symbol || !o.instruction || !o.shares) return false;
             if (!['BUY', 'SELL'].includes(o.instruction)) return false;
             if (o.instruction === 'SELL' && !positionShareMap.has(o.symbol)) return false;
+            // Cornerstone trims are owned by the signal-engine CLM_CRF_TRIM rule
+            // (per Vol 7 + memory: triple_c_signal_engine.md). Reject any
+            // rebalance-plan attempts to sell CLM/CRF — they should not appear.
             if (o.instruction === 'SELL' && ['CLM', 'CRF'].includes(o.symbol)) return false;
+            // Hedge sizing is owned by the signal-engine AIRBAG_SCALE rule.
+            // Drop SPXU/SQQQ orders defensively in case the AI proposes them.
+            if (['SPXU', 'SQQQ'].includes(o.symbol)) return false;
             if (o.instruction === 'BUY' && !positionPriceMap.has(o.symbol) && !APPROVED_BUY_NEW.has(o.symbol)) return false;
             return true;
           })

@@ -462,13 +462,24 @@ Default allocation targets are the BASELINE, but market conditions warrant tempo
 These adjustments are tactical (weeks to months), not permanent. Always revert to baseline when
 market normalizes.
 
-VIX-BASED ALLOCATION SHIFTS:
+HEDGE SIZING (SPXU/SQQQ) — NOT YOUR DOMAIN:
+  Hedge sizing for SPXU and SQQQ is owned by the signal engine's AIRBAG_SCALE
+  rule, which sizes off VIX bands AND SPY 20-day drawdown together (not VIX
+  alone). DO NOT propose SPXU or SQQQ adjustments. DO NOT propose changes to
+  the Hedge pillar TARGET in user settings. If you see a hedge under- or
+  over-weight, the airbag rule will surface a corrective trade — leave it.
+
+  Long-side puts (e.g., SPY/QQQ puts as crash insurance) ARE in your domain
+  and are handled via the option-plan endpoint, separate from the short-ETF
+  hedge pillar.
+
+VIX-BASED ALLOCATION SHIFTS (Triples / Income / Cornerstone only):
 
   VIX < 15 (LOW FEAR — Bull Territory)
     • Market is calm, rallies are smooth, leverage works best
-    • Adjust targets: +30% on Triples (e.g., 10% → 13%), -30% on Hedges (e.g., 5% → 3%)
+    • Adjust target: +30% on Triples (e.g., 10% → 13%)
     • Rationale: VIX < 15 = decay risk is minimal, compounding acceleration is maximal
-    • Action: BUY Triples on any dip, reduce hedges to minimum (2-3%)
+    • Action: BUY Triples on any dip
 
   VIX 15–25 (NORMAL — Healthy Markets)
     • Markets are functioning normally, no systemic stress
@@ -477,20 +488,20 @@ VIX-BASED ALLOCATION SHIFTS:
 
   VIX 25–40 (HIGH FEAR — Caution Zone)
     • Volatility spike; uncertainty; fear of drawdown
-    • Adjust targets: -40% on Triples (e.g., 10% → 6%), +100% on Hedges (e.g., 5% → 10%)
-    • Action: SELL Triples into strength (don't panic sell weakness); rotate to income + hedges
-    • Rationale: Elevated vol → decay risk rises; hedging cost is now well-justified
-    • Do NOT panic sell into red days—sell when technicals are overbought (RSI > 70)
+    • Adjust target: -40% on Triples (e.g., 10% → 6%); rotate trimmed dollars into Income (1/3 to Triples on rebound is suppressed here)
+    • Action: SELL Triples into strength (don't panic sell weakness); rotate to Income
+    • Rationale: Elevated vol → decay risk rises
+    • Do NOT panic sell into red days — sell when technicals are overbought (RSI > 70)
 
   VIX > 40 (EXTREME FEAR — Panic Mode)
     • Market is in acute stress (fast crash, black swan event, etc.)
-    • Adjust targets: MINIMIZE Triples (e.g., 10% → 2%), MAXIMIZE hedges (e.g., 5% → 15%)
+    • Adjust target: MINIMIZE Triples (e.g., 10% → 2%)
     • Action:
-      1. Raise hedges FIRST (buy puts on SPY/QQQ if not already hedged)
-      2. HOLD or nibble-buy Triples with 2-3% of portfolio (average down)
-      3. Cornerstone DRIP at NAV = automatic buying opportunity
+      1. HOLD or nibble-buy Triples with 2-3% of portfolio (average down)
+      2. Cornerstone DRIP at NAV = automatic buying opportunity
+      3. (Crash-insurance puts are option-plan's job; airbag is sizing the short-ETF hedge layer in parallel.)
     • Rationale: VIX > 40 is historically the BEST buying opportunity. Major indexes always recover.
-      Triples recover 3× faster. Set hedges, then buy the dip.
+      Triples recover 3× faster.
 
 MARKET TREND ADJUSTMENTS:
 

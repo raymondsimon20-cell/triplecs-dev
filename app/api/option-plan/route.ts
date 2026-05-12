@@ -42,7 +42,7 @@ import { getTokens } from '@/lib/storage';
 import { getOptionsChain } from '@/lib/schwab/client';
 import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
 import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
-import { isAutomationPaused } from '@/lib/guardrails';
+import { getAutomationGate } from '@/lib/guardrails';
 import { appendInbox } from '@/lib/inbox';
 
 export const dynamic = 'force-dynamic';
@@ -222,10 +222,18 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  // Kill switch — must use stream sentinel format, the client reads the body
-  // as a stream and parses after __RESULT__.
-  if (await isAutomationPaused()) {
-    const payload = JSON.stringify({ paused: true, error: 'Automation paused' });
+  // Automation gate — user pause + signal-engine kill switch + defense mode.
+  // Must use stream sentinel format; the client reads the body as a stream
+  // and parses after __RESULT__.
+  const gate = await getAutomationGate();
+  if (gate.paused) {
+    const payload = JSON.stringify({
+      paused:     true,
+      gateSource: gate.source,
+      gateReason: gate.reason,
+      gateSince:  gate.since,
+      error:      `Automation paused (${gate.source}): ${gate.reason}`,
+    });
     const body = `__RESULT__${payload}\n__DONE__`;
     return new Response(body, {
       headers: {

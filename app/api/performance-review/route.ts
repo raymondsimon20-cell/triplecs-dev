@@ -26,7 +26,7 @@
 import Anthropic from '@anthropic-ai/sdk';
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
-import { isAutomationPaused } from '@/lib/guardrails';
+import { getAutomationGate } from '@/lib/guardrails';
 import { cachedSystemPrompt } from '@/lib/ai/prompt-cache';
 import { loadRecap } from '@/lib/ai/recap-loader';
 import { buildFeedbackBlock } from '@/lib/ai/feedback-context';
@@ -73,8 +73,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  if (await isAutomationPaused()) {
-    return NextResponse.json({ paused: true, error: 'Automation paused' }, { status: 200 });
+  const gate = await getAutomationGate();
+  if (gate.paused) {
+    return NextResponse.json({
+      paused:     true,
+      gateSource: gate.source,
+      gateReason: gate.reason,
+      gateSince:  gate.since,
+      error:      `Automation paused (${gate.source}): ${gate.reason}`,
+    }, { status: 200 });
   }
 
   const apiKey = process.env.ANTHROPIC_API_KEY;

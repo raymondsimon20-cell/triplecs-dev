@@ -20,6 +20,7 @@ import { requireAuth } from '@/lib/session';
 import { buildUserMessage } from '@/lib/ai/system-prompt';
 import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
 import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
+import { getAutomationGate } from '@/lib/guardrails';
 import { getLatestPortfolioSnapshot } from '@/lib/storage';
 import { createClient } from '@/lib/schwab/client';
 
@@ -165,15 +166,32 @@ export async function POST(req: Request) {
       try {
         const client = new Anthropic({ apiKey });
 
-        const [feedbackBlock, paceBlock] = await Promise.all([
+        const [feedbackBlock, paceBlock, gate] = await Promise.all([
           loadFeedbackBlock(),
           loadPaceBlock(),
+          getAutomationGate(),
         ]);
+
+        // When an automation gate is active, inject a context block so Claude's
+        // recommendations stay consistent with the gate. ai-analysis still
+        // answers — unlike rebalance-plan / option-plan which bail — but it
+        // shouldn't propose new buys while defense mode or the kill switch is
+        // tripped. The signal-engine flips these flags; the AI just respects them.
+        const gatePreamble = gate.paused
+          ? `[Strategy gate currently active]\n` +
+            `${gate.source}: ${gate.reason}` +
+            (gate.since ? ` (since ${new Date(gate.since).toISOString()})` : '') +
+            `\nWhile this gate is active, do not propose new BUY orders. ` +
+            `You may discuss the gate condition, suggest how to clear it, or do read-only ` +
+            `analysis — but trade recommendations should be limited to risk reduction (SELLs, ` +
+            `hedge adjustments) or "hold".\n\n`
+          : '';
+
         const stream = await client.messages.stream({
           model,
           max_tokens: maxTokens,
           system: cachedSystemPrompt(mode),
-          messages: [{ role: 'user', content: withContext(feedbackBlock, paceBlock, userMessage) }],
+          messages: [{ role: 'user', content: withContext(feedbackBlock, paceBlock, gatePreamble + userMessage) }],
         });
 
         for await (const event of stream) {
