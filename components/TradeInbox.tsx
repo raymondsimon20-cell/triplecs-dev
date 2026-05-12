@@ -14,7 +14,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Inbox, CheckCircle2, XCircle, AlertTriangle, RefreshCw,
-  ShieldAlert, Layers, Zap, Loader2,
+  ShieldAlert, Layers, Zap, Loader2, Activity,
 } from 'lucide-react';
 
 interface GuardrailViolation {
@@ -27,7 +27,7 @@ interface InboxItem {
   id:           string;
   createdAt:    number;
   expiresAt:    number;
-  source:       'rebalance' | 'option' | 'ai-rec';
+  source:       'rebalance' | 'option' | 'ai-rec' | 'signal-engine';
   status:       'pending' | 'executed' | 'dismissed' | 'expired';
   symbol:       string;
   instruction:  string;
@@ -61,21 +61,24 @@ interface Props {
 }
 
 const SOURCE_LABEL: Record<InboxItem['source'], string> = {
-  rebalance: 'Rebalance',
-  option:    'Option',
-  'ai-rec':  'AI Rec',
+  rebalance:       'Rebalance',
+  option:          'Option',
+  'ai-rec':        'AI Rec',
+  'signal-engine': 'Signals',
 };
 
 const SOURCE_ICON: Record<InboxItem['source'], JSX.Element> = {
-  rebalance: <Layers className="w-3 h-3" />,
-  option:    <ShieldAlert className="w-3 h-3" />,
-  'ai-rec':  <Zap className="w-3 h-3" />,
+  rebalance:       <Layers className="w-3 h-3" />,
+  option:          <ShieldAlert className="w-3 h-3" />,
+  'ai-rec':        <Zap className="w-3 h-3" />,
+  'signal-engine': <Activity className="w-3 h-3" />,
 };
 
 const SOURCE_TONE: Record<InboxItem['source'], string> = {
-  rebalance: 'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',
-  option:    'bg-violet-500/10 border-violet-500/30 text-violet-300',
-  'ai-rec':  'bg-amber-500/10 border-amber-500/30 text-amber-300',
+  rebalance:       'bg-cyan-500/10 border-cyan-500/30 text-cyan-300',
+  option:          'bg-violet-500/10 border-violet-500/30 text-violet-300',
+  'ai-rec':        'bg-amber-500/10 border-amber-500/30 text-amber-300',
+  'signal-engine': 'bg-emerald-500/10 border-emerald-500/30 text-emerald-300',
 };
 
 function isOption(item: InboxItem): boolean {

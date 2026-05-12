@@ -17,7 +17,7 @@ import type { GuardrailViolation } from './guardrails';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
-export type InboxSource = 'rebalance' | 'option' | 'ai-rec';
+export type InboxSource = 'rebalance' | 'option' | 'ai-rec' | 'signal-engine';
 
 export type InboxStatus = 'pending' | 'executed' | 'dismissed' | 'expired';
 
