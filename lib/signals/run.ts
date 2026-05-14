@@ -29,6 +29,8 @@ import {
   type EngineResult,
   type TradeSignal,
 } from './engine';
+import { autoExecute, type AutoExecuteResult } from './auto-execute';
+import type { InboxItem } from '../inbox';
 
 const CACHE_STORE = 'signal-engine-cache';
 const CACHE_KEY   = 'latest';
@@ -48,6 +50,8 @@ export interface RunResult {
   proposed: number;
   /** Items that actually landed in the inbox after dedup. */
   staged:   number;
+  /** Auto-execute outcome — populated only when auto-config.mode !== 'manual'. */
+  autoExecute?: AutoExecuteResult;
 }
 
 // ─── Cache helpers ───────────────────────────────────────────────────────────
@@ -234,6 +238,7 @@ export async function runSignalsAndStage(): Promise<RunResult> {
   // the whole run. Staging failures are non-fatal.
   const stageInputs = signalsToInbox(result.actionableTrades, portfolio.prices);
   let staged = 0;
+  let freshItems: InboxItem[] = [];
   if (stageInputs.length > 0) {
     try {
       const persisted = await Promise.race([
@@ -242,13 +247,33 @@ export async function runSignalsAndStage(): Promise<RunResult> {
           setTimeout(() => reject(new Error('staging timeout')), 5000),
         ),
       ]);
-      staged = Array.isArray(persisted) ? persisted.length : 0;
+      if (Array.isArray(persisted)) {
+        freshItems = persisted;
+        staged     = persisted.length;
+      }
     } catch (err) {
       console.warn('[signals/run] inbox staging failed:', err);
     }
   }
 
+  // Auto-execute pass — no-op in 'manual' mode. In 'dry-run' it writes paper
+  // trades; in 'auto' it places real Schwab orders. Always non-fatal — a
+  // failure here doesn't poison the rest of the result.
+  let autoExecuteResult: AutoExecuteResult | undefined;
+  if (freshItems.length > 0) {
+    try {
+      autoExecuteResult = await autoExecute(freshItems, result.valuation.totalValue);
+    } catch (err) {
+      console.warn('[signals/run] auto-execute failed:', err);
+    }
+  }
+
   await saveCache(result);
 
-  return { result, proposed: stageInputs.length, staged };
+  return {
+    result,
+    proposed: stageInputs.length,
+    staged,
+    autoExecute: autoExecuteResult,
+  };
 }
