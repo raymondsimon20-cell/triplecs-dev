@@ -171,6 +171,21 @@ export interface EngineInputs {
    * stricter cushion (e.g. cash minus pending-order reserve).
    */
   buyingPowerAvailable?: number;
+
+  /**
+   * AFW — Available For Withdrawal, in USD. Schwab's margin-headroom metric:
+   * equity minus maintenance requirement, i.e. the dollar amount you could
+   * actually deploy as new buying power right now. Sourced from Schwab's
+   * `availableFunds` field on the balances object.
+   *
+   * Used by AFW_TRIGGER to gate on sufficient headroom before deploying, and
+   * (future) by MAINTENANCE_RANKED_TRIM / PILLAR_FILL to size against true
+   * dollar capacity rather than a fraction-of-portfolio approximation.
+   *
+   * Optional for backward compatibility with snapshot-replay paths that
+   * don't carry AFW data.
+   */
+  afwDollars?: number;
 }
 
 export interface EngineResult {
@@ -190,10 +205,24 @@ export interface EngineResult {
 // ─── Config ──────────────────────────────────────────────────────────────────
 
 export const CONFIG = {
-  // AFW
-  AFW_LOOKBACK:    7,
-  AFW_THRESHOLD:   0.90,
-  AFW_DEPLOY:      1_000,
+  // ── AFW (Available For Withdrawal) deployment trigger ─────────────────────
+  // AFW is Schwab's margin-headroom metric: equity minus maintenance
+  // requirement. As the market drops, equity drops, AFW drops in lockstep.
+  // Vol-7 rule: when AFW drops 10% (equivalent to a 10% market drop), deploy
+  // capital from available margin into Triples to buy the dip.
+  //
+  // Current implementation uses SPY 7-day drawdown as the proxy for AFW
+  // drawdown (we don't yet snapshot AFW history per day). The PROXY fires on
+  // the same condition Vol-7 describes; the SOURCE of deployed capital is
+  // your available margin (AFW). Future: store afwDollars on PortfolioSnapshot
+  // so we can switch to true AFW-drawdown detection.
+  AFW_LOOKBACK:           7,
+  AFW_DRAWDOWN_THRESHOLD: 0.90,   // fire when SPY ≤ 90% of 7-day max
+  AFW_DEPLOY:             1_000,  // total $ deployed per fire
+  /** Skip the rule entirely when available AFW dollars fall below this. The
+   *  deployment itself is $1k; the $10k headroom keeps a 10× buffer so the
+   *  buy doesn't push utilization right up to the Schwab 50% wall. */
+  AFW_MIN_HEADROOM:       10_000,
 
   // Defense
   DEFENSE_EQUITY_RATIO: 0.40,
@@ -369,10 +398,26 @@ function evalDefenseMode(
   return signals;
 }
 
+/**
+ * AFW_TRIGGER — Vol-7 "dip deployment from Available For Withdrawal."
+ *
+ * AFW = Available For Withdrawal — Schwab's margin headroom dollar metric.
+ * Vol-7 rule: when AFW drops ~10% (because the market dropped and equity
+ * eroded), deploy $1000 of available margin into Triples to buy the dip.
+ *
+ * The proxy: we don't yet snapshot AFW per day, so we fire on SPY 7-day
+ * drawdown — a correlated signal. When AFW history is in the snapshot blob
+ * (todo), this rule can fire on true AFW drawdown.
+ *
+ * Headroom gate: even when the dip condition fires, if `afwDollars` is below
+ * the deploy amount, the rule skips with an INFO note rather than emit a
+ * BUY that the broker would reject at the 50% margin ceiling.
+ */
 function evalAfwTrigger(
   spyHistory: number[],
-  valuation: PortfolioValuation,
-  inDefense: boolean,
+  valuation:  PortfolioValuation,
+  inDefense:  boolean,
+  afwDollars: number | undefined,
   makeSignal: MakeSignal,
 ): { signals: TradeSignal[]; fired: boolean } {
   if (inDefense || spyHistory.length < CONFIG.AFW_LOOKBACK) {
@@ -380,36 +425,50 @@ function evalAfwTrigger(
   }
   const signals: TradeSignal[] = [];
 
-  const recent = spyHistory.slice(-CONFIG.AFW_LOOKBACK);
-  const afw    = Math.max(...recent);
-  const spyNow = spyHistory[spyHistory.length - 1];
+  const recent     = spyHistory.slice(-CONFIG.AFW_LOOKBACK);
+  const spy7dMax   = Math.max(...recent);
+  const spyNow     = spyHistory[spyHistory.length - 1];
+  const spyDrawdownPct = (1 - spyNow / spy7dMax) * 100;
 
-  if (spyNow > CONFIG.AFW_THRESHOLD * afw) {
+  if (spyNow > CONFIG.AFW_DRAWDOWN_THRESHOLD * spy7dMax) {
     return { signals: [], fired: false };
+  }
+
+  // AFW headroom gate. When we don't have AFW data (replay/legacy), skip the
+  // gate and let the guardrail layer enforce the 50% Schwab ceiling.
+  if (typeof afwDollars === 'number' && afwDollars < CONFIG.AFW_MIN_HEADROOM) {
+    signals.push(makeSignal(
+      'AFW_TRIGGER', 'AFW_HEADROOM_LOW', 'AFW', 'INFO', 0, 'HIGH',
+      `Dip detected (SPY ${spyDrawdownPct.toFixed(1)}% off 7d high) but AFW is only $${Math.round(afwDollars)} — ` +
+        `below the $${CONFIG.AFW_MIN_HEADROOM} minimum headroom. Skipping deployment to avoid hitting Schwab's 50% margin cap.`,
+      { spy: spyNow, spy7dMax, spyDrawdownPct, afwDollars, threshold: CONFIG.AFW_MIN_HEADROOM },
+    ));
+    return { signals, fired: false };
   }
 
   const triplesW =
     ((valuation.weightPcts['UPRO'] ?? 0) + (valuation.weightPcts['TQQQ'] ?? 0)) / 100;
+  const afwNote = typeof afwDollars === 'number' ? ` (AFW headroom: $${Math.round(afwDollars)})` : '';
 
   if (triplesW < 0.10) {
     signals.push(makeSignal(
       'AFW_TRIGGER', 'BUY_UPRO', 'UPRO', 'BUY',
       CONFIG.AFW_DEPLOY * 0.5, 'HIGH',
-      `AFW: SPY $${spyNow.toFixed(2)} ≤ 90% of $${afw.toFixed(2)} 7-day max — deploy $500 UPRO`,
-      { spy: spyNow, afw, triplesWeight: triplesW },
+      `Dip: SPY ${spyDrawdownPct.toFixed(1)}% off 7d high — deploy $500 AFW into UPRO${afwNote}`,
+      { spy: spyNow, spy7dMax, spyDrawdownPct, triplesWeight: triplesW, afwDollars },
     ));
     signals.push(makeSignal(
       'AFW_TRIGGER', 'BUY_TQQQ', 'TQQQ', 'BUY',
       CONFIG.AFW_DEPLOY * 0.5, 'HIGH',
-      `AFW: SPY $${spyNow.toFixed(2)} ≤ 90% of $${afw.toFixed(2)} 7-day max — deploy $500 TQQQ`,
-      { spy: spyNow, afw, triplesWeight: triplesW },
+      `Dip: SPY ${spyDrawdownPct.toFixed(1)}% off 7d high — deploy $500 AFW into TQQQ${afwNote}`,
+      { spy: spyNow, spy7dMax, spyDrawdownPct, triplesWeight: triplesW, afwDollars },
     ));
   } else {
     signals.push(makeSignal(
       'AFW_TRIGGER', 'BUY_QDTE', 'QDTE', 'BUY',
       CONFIG.AFW_DEPLOY, 'HIGH',
-      `AFW: SPY $${spyNow.toFixed(2)} ≤ 90% of $${afw.toFixed(2)} — triples at capacity (${(triplesW * 100).toFixed(1)}%), buy QDTE`,
-      { spy: spyNow, afw, triplesWeight: triplesW },
+      `Dip: SPY ${spyDrawdownPct.toFixed(1)}% off 7d high — Triples at ${(triplesW * 100).toFixed(1)}%, deploy $1000 AFW into QDTE${afwNote}`,
+      { spy: spyNow, spy7dMax, spyDrawdownPct, triplesWeight: triplesW, afwDollars },
     ));
   }
 
@@ -567,7 +626,9 @@ function evalMarginKillSwitch(
 
   const growth = marginDebt - prev.margin;
   if (growth > CONFIG.KILL_SWITCH_DEBT_GROWTH && !state.afwThisMonth.fired) {
-    const reason = `Margin debt grew $${growth.toFixed(0)} MoM without an AFW trigger this month`;
+    const reason =
+      `Margin debt grew $${growth.toFixed(0)} MoM without an AFW (Available For Withdrawal) ` +
+      `deployment this month — margin grew for some other reason, which is concerning`;
     return {
       signals: [makeSignal(
         'MARGIN_KILL_SWITCH', 'PAUSE_ALL_PURCHASES', 'MARGIN', 'ALERT', 0, 'CRITICAL',
@@ -945,10 +1006,11 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
     equityRatio: valuation.equityRatio,
   };
 
-  // 2. AFW trigger — fires only when not in defense.
-  const afw = evalAfwTrigger(inputs.spyHistory, valuation, inDefense, makeSignal);
-  all.push(...afw.signals);
-  if (afw.fired) {
+  // 2. AFW (Available For Withdrawal) deployment trigger — Vol-7 buy-the-dip
+  //    rule that uses available margin headroom. Skipped in defense mode.
+  const afwResult = evalAfwTrigger(inputs.spyHistory, valuation, inDefense, inputs.afwDollars, makeSignal);
+  all.push(...afwResult.signals);
+  if (afwResult.fired) {
     nextState.afwThisMonth = {
       month: currentYearMonth(),
       fired: true,

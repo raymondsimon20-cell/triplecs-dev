@@ -123,6 +123,12 @@ async function fetchAggregatedPortfolio(): Promise<{
   cash:       number;
   marginDebt: number;
   prices:     Record<string, number>;
+  /**
+   * AFW (Available For Withdrawal) — Schwab's margin-headroom metric, summed
+   * across accounts. Sourced from `availableFunds` on the balances object.
+   * Used by AFW_TRIGGER to gate deployments against the 50% Schwab ceiling.
+   */
+  afwDollars: number;
 }> {
   const tokens = await getTokens();
   if (!tokens) throw new Error('Schwab not connected');
@@ -143,11 +149,16 @@ async function fetchAggregatedPortfolio(): Promise<{
   const positions: EnginePosition[] = [];
   let cash       = 0;
   let marginDebt = 0;
+  let afwDollars = 0;
 
   for (const { hashValue, wrapper } of wrappers) {
     const acct = wrapper.securitiesAccount;
     cash       += acct.currentBalances.cashBalance ?? 0;
     marginDebt += Math.abs(acct.currentBalances.marginBalance ?? 0);
+    // AFW: sum availableFunds across accounts. This is what Schwab reports as
+    // your true buying-power-after-maintenance headroom — exactly the Vol-7
+    // AFW metric, sourced directly from the broker (not derived).
+    afwDollars += acct.currentBalances.availableFunds ?? 0;
 
     for (const p of acct.positions ?? []) {
       // Skip options (handled by option-plan, not the signal engine). Schwab
@@ -187,7 +198,7 @@ async function fetchAggregatedPortfolio(): Promise<{
     }
   }
 
-  return { positions, cash, marginDebt, prices };
+  return { positions, cash, marginDebt, prices, afwDollars };
 }
 
 // ─── Phase 2 inputs ──────────────────────────────────────────────────────────
@@ -364,6 +375,10 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
     },
     recentSells30d,
     buyingPowerAvailable: Math.max(0, portfolio.cash),
+    // AFW from Schwab: lets AFW_TRIGGER gate against true margin headroom
+    // rather than just deploying blindly. Falls back to undefined if the
+    // broker didn't return availableFunds (rare).
+    afwDollars: portfolio.afwDollars > 0 ? portfolio.afwDollars : undefined,
   };
 
   const result = runSignalEngine(inputs);

@@ -277,6 +277,55 @@ test('individual proposal stays within PILLAR_FILL_MAX_DOLLARS = $5,000', () => 
   }
 });
 
+// ─── AFW_TRIGGER tests ───────────────────────────────────────────────────────
+
+console.log('\nAFW_TRIGGER (Available For Withdrawal)');
+
+test('skips deployment when afwDollars below minimum headroom', () => {
+  // SPY drops 12% off the 7-day max → dip condition met. But AFW = $4000,
+  // below the $10k minimum headroom → rule should emit an INFO note, not BUYs.
+  const spyHistory = [500, 500, 500, 500, 500, 500, 440];   // -12% off max
+  const result = runSignalEngine(baseInputs({
+    positions: [enrichedPosition('SCHD', 100, 8_000)],
+    cash:      100,
+    spyHistory,
+    afwDollars: 4_000,
+  }));
+  const fires = findSignals(result.signals, 'AFW_TRIGGER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 0, `expected no BUYs when AFW < $10k headroom; got ${buys.length}`);
+  const infos = fires.filter((s) => s.direction === 'INFO');
+  assert.ok(infos.length > 0, 'expected an INFO note explaining the skip');
+});
+
+test('fires deployment when SPY dips AND afwDollars sufficient', () => {
+  const spyHistory = [500, 500, 500, 500, 500, 500, 440];   // -12% off max
+  const result = runSignalEngine(baseInputs({
+    positions:  [enrichedPosition('SCHD', 100, 8_000)],
+    cash:       15_000,
+    spyHistory,
+    afwDollars: 15_000,   // well above the $10k headroom floor
+  }));
+  const fires = findSignals(result.signals, 'AFW_TRIGGER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  assert.ok(buys.length >= 1, `expected BUY signals when AFW ≥ $10k; got ${buys.length}`);
+});
+
+test('fires when afwDollars is undefined (legacy / replay path)', () => {
+  // When AFW data isn't available, the rule should still fire on the dip
+  // (the guardrail layer will enforce the 50% Schwab ceiling at stage time).
+  const spyHistory = [500, 500, 500, 500, 500, 500, 440];
+  const result = runSignalEngine(baseInputs({
+    positions: [enrichedPosition('SCHD', 100, 8_000)],
+    cash:      10_000,
+    spyHistory,
+    // afwDollars intentionally omitted
+  }));
+  const fires = findSignals(result.signals, 'AFW_TRIGGER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  assert.ok(buys.length >= 1, 'expected BUYs when AFW data is unavailable (fallback to SPY-only)');
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass} passed, ${fail} failed`);

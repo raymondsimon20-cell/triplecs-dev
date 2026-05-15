@@ -38,7 +38,7 @@ export async function POST(req: Request) {
 
   // Coerce + clamp. Anything missing falls through to the existing value.
   const current = await getServerStrategyTargets();
-  const next: StrategyTargets = {
+  const merged: StrategyTargets = {
     ...current,
     ...Object.fromEntries(
       Object.entries(body).filter(
@@ -47,6 +47,26 @@ export async function POST(req: Request) {
     ),
   };
 
+  // Schwab caps margin utilization at 50% (Reg T initial margin requirement).
+  // Configuring margin thresholds above 50% is meaningless — orders fail at
+  // the broker regardless. Clamp to keep the user's settings honest.
+  const SCHWAB_MARGIN_HARD_CAP = 50;
+  const clampPct = (v: number) => Math.max(0, Math.min(v, SCHWAB_MARGIN_HARD_CAP));
+  const next: StrategyTargets = {
+    ...merged,
+    marginLimitPct:         clampPct(merged.marginLimitPct),
+    marginWarnPct:          clampPct(merged.marginWarnPct),
+    marginTrimTargetPct:    clampPct(merged.marginTrimTargetPct),
+    marginNewBuyCeilingPct: clampPct(merged.marginNewBuyCeilingPct),
+  };
+
   await saveServerStrategyTargets(next);
-  return NextResponse.json({ ok: true, targets: next });
+  return NextResponse.json({
+    ok:      true,
+    targets: next,
+    notes: next.marginLimitPct !== merged.marginLimitPct ||
+           next.marginNewBuyCeilingPct !== merged.marginNewBuyCeilingPct
+      ? [`Margin thresholds clamped to Schwab's 50% hard cap.`]
+      : undefined,
+  });
 }
