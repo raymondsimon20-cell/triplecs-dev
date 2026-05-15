@@ -4,7 +4,7 @@ import { useEffect, useState, useCallback } from 'react';
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceLine, Legend,
 } from 'recharts';
-import { Target, TrendingUp, TrendingDown, Database, RefreshCw, AlertTriangle } from 'lucide-react';
+import { Target, TrendingUp, TrendingDown, Database, RefreshCw, AlertTriangle, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 interface SnapshotPoint {
@@ -65,6 +65,7 @@ export function PerformancePanel() {
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
   const [backfilling, setBackfilling] = useState(false);
+  const [clearing, setClearing]       = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,6 +97,20 @@ export function PerformancePanel() {
       await load();
     } finally {
       setBackfilling(false);
+    }
+  }
+
+  async function clearSynthetic() {
+    if (!confirm('Delete all synthetic (backfilled) snapshots? Real captures will not be touched.')) return;
+    setClearing(true);
+    try {
+      const r = await fetch('/api/backfill', { method: 'DELETE' });
+      const d = await r.json();
+      if (d.error) alert(`Clear failed: ${d.error}`);
+      else alert(`Cleared ${d.deleted} synthetic day${d.deleted === 1 ? '' : 's'}. ${d.kept} real snapshot${d.kept === 1 ? '' : 's'} kept.`);
+      await load();
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -304,15 +319,28 @@ export function PerformancePanel() {
         <div>
           {data.meta.snapshotCount} snapshots · {data.meta.cashFlowCount} cash-flow events
         </div>
-        <button
-          onClick={runBackfill}
-          disabled={backfilling}
-          className="px-2 py-1 rounded hover:bg-white/[0.04] transition-colors flex items-center gap-1.5 disabled:opacity-50"
-          title="Re-run synthetic backfill — never overwrites real snapshots"
-        >
-          {backfilling ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
-          {backfilling ? 'Backfilling…' : 'Backfill'}
-        </button>
+        <div className="flex items-center gap-1">
+          {syntheticDays > 0 && (
+            <button
+              onClick={clearSynthetic}
+              disabled={clearing || backfilling}
+              className="px-2 py-1 rounded hover:bg-white/[0.04] transition-colors flex items-center gap-1.5 disabled:opacity-50"
+              title="Delete all synthetic (backfilled) snapshots — real captures untouched"
+            >
+              {clearing ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Trash2 className="w-3 h-3" />}
+              {clearing ? 'Clearing…' : 'Clear synthetic'}
+            </button>
+          )}
+          <button
+            onClick={runBackfill}
+            disabled={backfilling || clearing}
+            className="px-2 py-1 rounded hover:bg-white/[0.04] transition-colors flex items-center gap-1.5 disabled:opacity-50"
+            title="Re-run synthetic backfill — never overwrites real snapshots"
+          >
+            {backfilling ? <RefreshCw className="w-3 h-3 animate-spin" /> : <Database className="w-3 h-3" />}
+            {backfilling ? 'Backfilling…' : 'Backfill'}
+          </button>
+        </div>
       </div>
     </div>
   );
