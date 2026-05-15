@@ -12,7 +12,9 @@ import type { WatchlistItem } from '../route';
 
 export const dynamic = 'force-dynamic';
 
-// Full Triple C fund universe — 145 symbols across all pillars
+// Full Triple C fund universe — 185 symbols across all pillars.
+// Superset of the AI system prompt's APPROVED FUND UNIVERSE (lib/ai/system-prompt.ts):
+// every ticker the system prompt lists for new-position suggestions is present here.
 const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   // ── Triples ───────────────────────────────────────────────────────────────
   { symbol: 'TQQQ',  pillar: 'triples' },
@@ -68,10 +70,8 @@ const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   { symbol: 'ULTY',  pillar: 'income' },
   { symbol: 'YMAX',  pillar: 'income' },
   { symbol: 'YMAG',  pillar: 'income' },
-  { symbol: 'MSFO2', pillar: 'income' },
   { symbol: 'GDXY',  pillar: 'income' },
   { symbol: 'XOMO',  pillar: 'income' },
-  { symbol: 'AMZY2', pillar: 'income' },
   { symbol: 'FBY',   pillar: 'income' },
   { symbol: 'FIAT',  pillar: 'income' },
   { symbol: 'FIVY',  pillar: 'income' },
@@ -88,7 +88,6 @@ const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   { symbol: 'QDTY',  pillar: 'income' },
   { symbol: 'SDTY',  pillar: 'income' },
   { symbol: 'DFNV',  pillar: 'income' },
-  { symbol: 'IWMY2', pillar: 'income' },
   // ── Income — Roundhill ────────────────────────────────────────────────────
   { symbol: 'XDTE',  pillar: 'income' },
   { symbol: 'QDTE',  pillar: 'income' },
@@ -102,7 +101,6 @@ const FUND_UNIVERSE: { symbol: string; pillar: string }[] = [
   { symbol: 'AIPI',  pillar: 'income' },
   { symbol: 'REXQ',  pillar: 'income' },
   { symbol: 'REXS',  pillar: 'income' },
-  { symbol: 'SPYI2', pillar: 'income' },
   // ── Income — GraniteShares ────────────────────────────────────────────────
   { symbol: 'TSYY',  pillar: 'income' },
   // ── Income — Kurv ─────────────────────────────────────────────────────────

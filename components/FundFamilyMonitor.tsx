@@ -30,14 +30,14 @@ const FUND_FAMILIES: Record<string, string> = {
   AMDY: 'YieldMax', PYPLY: 'YieldMax', AIYY: 'YieldMax', OILY: 'YieldMax',
   CVNY: 'YieldMax', MRNY: 'YieldMax', SNOY: 'YieldMax', BIOY: 'YieldMax',
   DISO: 'YieldMax', ULTY: 'YieldMax', YMAX: 'YieldMax', YMAG: 'YieldMax',
-  MSFO2: 'YieldMax', GDXY: 'YieldMax', XOMO: 'YieldMax', AMZY2: 'YieldMax',
+  GDXY: 'YieldMax', XOMO: 'YieldMax',
   FBY: 'YieldMax', FIAT: 'YieldMax', FIVY: 'YieldMax', TSMY: 'YieldMax',
   APLY: 'YieldMax', OARK: 'YieldMax', DIPS: 'YieldMax', CRSH: 'YieldMax',
   KLIP: 'YieldMax', MSTY: 'YieldMax', PLTY: 'YieldMax',
 
   // Defiance ETFs
   QQQY: 'Defiance', IWMY: 'Defiance', JEPY: 'Defiance',
-  QDTY: 'Defiance', SDTY: 'Defiance', DFNV: 'Defiance', IWMY2: 'Defiance',
+  QDTY: 'Defiance', SDTY: 'Defiance', DFNV: 'Defiance',
 
   // Roundhill Investments
   XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', WDTE: 'Roundhill',
@@ -45,7 +45,6 @@ const FUND_FAMILIES: Record<string, string> = {
 
   // RexShares
   FEPI: 'RexShares', REXS: 'RexShares', REXQ: 'RexShares', AIPI: 'RexShares',
-  SPYI2: 'RexShares',
 
   // GraniteShares
   TSYY: 'GraniteShares',
