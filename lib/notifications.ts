@@ -9,8 +9,20 @@
  * To enable email delivery, set these env vars on Netlify:
  *
  *   RESEND_API_KEY      = re_xxxxxxxx (from resend.com dashboard)
- *   NOTIFY_FROM_EMAIL   = e.g. "Triple C <autopilot@yourdomain.com>"  (must be a verified Resend sender)
- *   NOTIFY_TO_EMAIL     = raymondsimon20@gmail.com
+ *   NOTIFY_FROM_EMAIL   = sender address (see options below)
+ *   NOTIFY_TO_EMAIL     = recipient (the user's own email)
+ *
+ * Two ways to set NOTIFY_FROM_EMAIL:
+ *
+ *   1. NO DOMAIN (easiest)  — use Resend's shared sender:
+ *        NOTIFY_FROM_EMAIL=Triple C Autopilot <onboarding@resend.dev>
+ *      Catch: this sender can only deliver to the email you signed up with at
+ *      resend.com. Fine for a single-user autopilot; not for multi-recipient.
+ *
+ *   2. CUSTOM DOMAIN  — verify a domain in the Resend dashboard, then use:
+ *        NOTIFY_FROM_EMAIL=Triple C <autopilot@yourdomain.com>
+ *      Required if you ever need to send to multiple recipients or want a
+ *      sender that doesn't say "resend.dev".
  *
  * When RESEND_API_KEY is unset the module no-ops (logs a debug line) so local
  * dev and unconfigured deploys don't fail. Callers should always assume the
