@@ -37,6 +37,7 @@ import { buildDigest, shouldSend } from './daily-digest';
 import { archiveDailyPlan } from './plan-archive';
 import { recordHeartbeat, getCronHealth } from './cron-health';
 import { sendNotification } from '../notifications';
+import { runOptionScan } from './option-scan';
 import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
 import type { TradeHistoryEntry } from '@/app/api/orders/route';
@@ -129,6 +130,18 @@ async function fetchAggregatedPortfolio(): Promise<{
    * Used by AFW_TRIGGER to gate deployments against the 50% Schwab ceiling.
    */
   afwDollars: number;
+  /**
+   * Live option positions across all accounts. Consumed by the daily put
+   * autopilot scanner. We carry the raw shape (symbol/qty/price/marketValue)
+   * here so the scanner doesn't need to re-fetch.
+   */
+  optionPositions: Array<{
+    symbol:        string;
+    shortQuantity: number;
+    longQuantity:  number;
+    averagePrice:  number;
+    marketValue:   number;
+  }>;
 }> {
   const tokens = await getTokens();
   if (!tokens) throw new Error('Schwab not connected');
@@ -147,6 +160,13 @@ async function fetchAggregatedPortfolio(): Promise<{
   );
 
   const positions: EnginePosition[] = [];
+  const optionPositions: Array<{
+    symbol:        string;
+    shortQuantity: number;
+    longQuantity:  number;
+    averagePrice:  number;
+    marketValue:   number;
+  }> = [];
   let cash       = 0;
   let marginDebt = 0;
   let afwDollars = 0;
@@ -161,10 +181,19 @@ async function fetchAggregatedPortfolio(): Promise<{
     afwDollars += acct.currentBalances.availableFunds ?? 0;
 
     for (const p of acct.positions ?? []) {
-      // Skip options (handled by option-plan, not the signal engine). Schwab
-      // classifies CEFs/ETFs (CLM, CRF, JEPI, QDTE, etc.) as COLLECTIVE_INVESTMENT
-      // or MUTUAL_FUND — not EQUITY — so filter by NOT-an-option rather than IS-equity.
-      if (p.instrument.assetType === 'OPTION') continue;
+      // Capture option positions for the daily put autopilot scanner (close
+      // at gain / roll near expiry / propose new). Equity engine ignores
+      // these via the assetType filter below.
+      if (p.instrument.assetType === 'OPTION') {
+        optionPositions.push({
+          symbol:        p.instrument.symbol,
+          shortQuantity: p.shortQuantity ?? 0,
+          longQuantity:  p.longQuantity ?? 0,
+          averagePrice:  p.averagePrice ?? p.averageLongPrice ?? 0,
+          marketValue:   p.marketValue ?? 0,
+        });
+        continue;
+      }
       if (p.instrument.symbol.includes(' ')) continue;
       if (p.longQuantity <= 0) continue;
       const meta = getFundMetadata(p.instrument.symbol);
@@ -198,7 +227,7 @@ async function fetchAggregatedPortfolio(): Promise<{
     }
   }
 
-  return { positions, cash, marginDebt, prices, afwDollars };
+  return { positions, cash, marginDebt, prices, afwDollars, optionPositions };
 }
 
 // ─── Phase 2 inputs ──────────────────────────────────────────────────────────
@@ -433,6 +462,54 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
   }
 
   await saveCache(result);
+
+  // ─── Daily put autopilot scan ────────────────────────────────────────────
+  // Examines open option positions: close shorts at >=75% profit, roll shorts
+  // with DTE<21 + 25-74% profit, propose new protective puts when Triples
+  // exposure is high without hedge coverage, propose income puts on Tier-1
+  // names when AFW headroom is comfortable. All stage as tier 'approval' —
+  // options never auto-execute regardless of mode.
+  try {
+    const tokens = await getTokens();
+    if (tokens && portfolio.optionPositions.length > 0) {
+      const scan = await runOptionScan(
+        tokens,
+        portfolio.optionPositions,
+        portfolio.positions,
+        portfolio.prices,
+        result.valuation.totalValue,
+        portfolio.afwDollars > 0 ? portfolio.afwDollars : undefined,
+      );
+      const allOptionProposals = [
+        ...scan.closeProposals,
+        ...scan.rollProposals,
+        ...scan.protectProposals,
+        ...scan.incomeProposals,
+      ];
+      if (allOptionProposals.length > 0) {
+        try {
+          await Promise.race([
+            appendInbox(allOptionProposals),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('option staging timeout')), 5000),
+            ),
+          ]);
+          console.log(
+            `[option-scan] staged ${scan.closeProposals.length} close, ${scan.rollProposals.length} roll, ` +
+            `${scan.protectProposals.length} protect, ${scan.incomeProposals.length} income proposals`,
+          );
+        } catch (err) {
+          console.warn('[option-scan] inbox staging failed:', err);
+        }
+      }
+      if (scan.skipped.length > 0) {
+        console.log(`[option-scan] skipped ${scan.skipped.length}:`,
+          scan.skipped.map((s) => `${s.underlying}: ${s.reason}`).join('; '));
+      }
+    }
+  } catch (err) {
+    console.warn('[option-scan] scan failed:', err);
+  }
 
   // Inbox housekeeping — drop resolved items older than 60 days so the audit
   // trail doesn't accumulate forever. Pending items are never touched here.

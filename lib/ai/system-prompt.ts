@@ -168,6 +168,25 @@ AFW (AVAILABLE FOR WITHDRAWAL):
     dollars over utilization percent for any deploy/trim sizing rationale.
   - The AFW_TRIGGER engine rule deploys AFW (not cash) into Triples on dips.
 
+DAILY PUT AUTOPILOT SCAN (lib/signals/option-scan.ts):
+  Every cron run scans the live put portfolio and stages proposals to the
+  inbox as tier-2 (approval required, never auto-executed). Four kinds:
+
+    1. CLOSE — short put at >=75% profit → BUY_TO_CLOSE (Vol-6 close target)
+    2. ROLL  — short put with DTE<21 AND 25-74% profit → CLOSE + new
+               SELL_TO_OPEN at 60-90 DTE
+    3. PROTECT — Triples >30% of portfolio AND no SPY/QQQ protective long
+                 put → propose new BUY_TO_OPEN (Vol-5: ~30 DTE, 10% OTM)
+    4. INCOME — AFW >=$10k AND no active short put on a Tier-1 income ticker
+                you actually hold → propose new SELL_TO_OPEN (Vol-6:
+                60-90 DTE, delta ~-0.25)
+
+  When the user asks for an option plan via /api/option-plan, defer to your
+  own contract selection (you generally pick better than the deterministic
+  fallback). When the user reviews the daily digest, options proposals come
+  from the scanner — point them at the inbox or rationalize the proposals,
+  don't re-propose duplicates.
+
 CARDINAL RULE: Spend ONLY from dividends/distributions. NEVER spend from principal.
   • Selling principal positions to fund lifestyle destroys the income engine.
   • Dividends are the salary; principal is the business.
