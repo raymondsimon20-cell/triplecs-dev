@@ -27,6 +27,8 @@
  */
 
 import type { SignalEngineState } from './state';
+import type { PillarType } from '../schwab/types';
+import { listAiCurated, type FundFamily } from '../data/fund-metadata';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -73,6 +75,40 @@ export interface EnginePosition {
    * `shares × prices[symbol]` so a missing quote doesn't zero out a holding.
    */
   marketValue: number;
+  /**
+   * Phase 2 additions — sourced from `lib/data/fund-metadata.ts` via the
+   * enrichment step in `lib/classify.ts`. Optional so existing call sites
+   * (and historical snapshot replay) keep working.
+   */
+  pillar?:               PillarType;
+  family?:               FundFamily;
+  maintenancePct?:       number;
+  maintenancePctSource?: 'explicit' | 'default';
+}
+
+/**
+ * User-configured pillar allocation targets (percent of total portfolio value).
+ * Mirrors `StrategyTargets` in `lib/utils.ts`. Passed in by the run module
+ * after reading from the server-side strategy store; falls back to defaults
+ * if the user hasn't overridden anything.
+ */
+export interface PillarTargets {
+  triplesPct:     number;
+  cornerstonePct: number;
+  incomePct:      number;
+  hedgePct:       number;
+}
+
+/**
+ * A recent sell, used so PILLAR_FILL can avoid proposing a BUY on a ticker
+ * the user sold at a loss inside the wash-sale window. Defensive only — the
+ * guardrail layer also catches this; this just keeps the engine from emitting
+ * obviously-bad signals.
+ */
+export interface RecentSell {
+  symbol:    string;
+  soldDate:  string;   // ISO date
+  isLoss:    boolean;
 }
 
 export interface EngineInputs {
@@ -90,6 +126,21 @@ export interface EngineInputs {
   vix:         number;
   /** Persisted engine memory. */
   state:       SignalEngineState;
+
+  /**
+   * Phase 2 additions. All optional so callers that pre-date them still type-check.
+   */
+
+  /** User-configured pillar targets. PILLAR_FILL is skipped when missing. */
+  pillarTargets?: PillarTargets;
+  /** Recent sells inside wash-sale window. PILLAR_FILL avoids re-buying these. */
+  recentSells30d?: RecentSell[];
+  /**
+   * Cash actually available to deploy on new BUYs. If omitted, the engine uses
+   * `max(0, cash)` — fine for most cases. Caller can override to apply a
+   * stricter cushion (e.g. cash minus pending-order reserve).
+   */
+  buyingPowerAvailable?: number;
 }
 
 export interface EngineResult {
@@ -142,6 +193,36 @@ export const CONFIG = {
 
   // Freedom ratio
   FREEDOM_RATIO_MONTHLY_GAIN: 0.02,
+
+  // ── Phase 2 — Maintenance-ranked trim ─────────────────────────────────────
+  /** Margin utilization above which a margin-relief SELL fires. */
+  MARGIN_TRIM_THRESHOLD: 0.30,
+  /** Trim sizes the SELL to bring utilization back down to this level. */
+  MARGIN_TRIM_TARGET: 0.25,
+  /** Don't sell more than this fraction of any single position in one signal. */
+  MARGIN_TRIM_MAX_FRACTION_OF_POSITION: 0.5,
+  /** Vol-7 rotation rule: trim proceeds rotate 1/3 into Triple ETFs. */
+  ROTATION_INTO_TRIPLES_PCT: 0.33,
+
+  // ── Phase 2 — Pillar fill (new-position suggestions) ──────────────────────
+  /** PILLAR_FILL fires when actual is this many pp below target. */
+  PILLAR_FILL_GAP_THRESHOLD_PP: 5,
+  /** Each run proposes this fraction of the gap (averages in over runs). */
+  PILLAR_FILL_GAP_FRACTION: 0.33,
+  /** Hard ceiling per single PILLAR_FILL signal. Matches auto-execute per-trade cap. */
+  PILLAR_FILL_MAX_DOLLARS: 5_000,
+  /** At most this many new tickers per pillar per run. */
+  PILLAR_FILL_MAX_CANDIDATES: 2,
+  /** When margin > 30%, skip candidates whose maintenancePct exceeds this. */
+  PILLAR_FILL_HIGH_MARGIN_MAINT_CEILING: 60,
+  /** Penalize candidates whose family is already above this % of portfolio. */
+  PILLAR_FILL_FAMILY_PENALTY_PCT: 10,
+  /**
+   * Absolute margin-utilization ceiling for ANY new-buy rule. Above this,
+   * PILLAR_FILL is skipped entirely — MAINTENANCE_RANKED_TRIM is what should
+   * be firing first to relieve margin pressure, not new buys that add to it.
+   */
+  PILLAR_FILL_MAX_MARGIN_PCT: 0.35,
 } as const;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -536,6 +617,262 @@ function evalFreedomRatio(
   return [];
 }
 
+// ─── Phase 2 — Maintenance-ranked trim ───────────────────────────────────────
+
+/**
+ * MAINTENANCE_RANKED_TRIM
+ *
+ * When margin utilization exceeds the threshold, sell the position that frees
+ * the most equity per dollar sold — i.e. the highest maintenance % the user
+ * actually holds. Pair the SELL with a 1/3 rotation into Triple ETFs per the
+ * Vol-7 rotation rule.
+ *
+ * Skipped in defense mode or when the kill-switch is active (those gates take
+ * priority). Skipped when the engine has no maintenance data for any position
+ * (would degrade to a coin-flip ranking).
+ *
+ * Skipped for Triples (LEVERAGE_REDUCTION_ALERT owns that), Hedges (AIRBAG owns
+ * those), and CLM/CRF (DRIP-protected by separate rule). The candidate set is
+ * effectively "income pillar positions ranked by maintenance × marketValue".
+ */
+function evalMaintenanceRankedTrim(
+  positions:        EnginePosition[],
+  valuation:        PortfolioValuation,
+  inDefense:        boolean,
+  killSwitchActive: boolean,
+  makeSignal:       MakeSignal,
+): TradeSignal[] {
+  if (inDefense || killSwitchActive) return [];
+  if (valuation.totalValue <= 0)     return [];
+
+  const marginUtilPct = valuation.marginDebt / valuation.totalValue;
+  if (marginUtilPct <= CONFIG.MARGIN_TRIM_THRESHOLD) return [];
+
+  // Equity we need to free to bring utilization to TARGET. Each dollar sold
+  // frees `maintenancePct%` of equity, so we need to sell more than the gap.
+  const requiredEquityFreed =
+    (marginUtilPct - CONFIG.MARGIN_TRIM_TARGET) * valuation.totalValue;
+
+  // Eligible candidates: income (and "other") positions only. Triples/hedges/
+  // cornerstone owned by other rules. Skip positions without maintenance data
+  // (we'd be guessing).
+  const candidates = positions
+    .filter((p) => p.marketValue > 0)
+    .filter((p) => p.pillar !== 'triples' && p.pillar !== 'hedge' && p.pillar !== 'cornerstone')
+    .filter((p) => typeof p.maintenancePct === 'number')
+    .map((p) => ({
+      pos:   p,
+      maint: p.maintenancePct as number,
+      score: (p.maintenancePct as number) * p.marketValue,
+    }))
+    .sort((a, b) => b.score - a.score);
+
+  if (candidates.length === 0) return [];
+
+  const top = candidates[0];
+
+  // dollars to sell ≈ requiredFreed / (maint / 100), capped at half the position
+  const rawTrim    = requiredEquityFreed / (top.maint / 100);
+  const maxTrim    = top.pos.marketValue * CONFIG.MARGIN_TRIM_MAX_FRACTION_OF_POSITION;
+  const trimDollars = Math.min(rawTrim, maxTrim);
+
+  if (trimDollars < 100) return [];   // not worth a signal
+
+  const signals: TradeSignal[] = [];
+  const priority: SignalPriority = marginUtilPct > 0.40 ? 'HIGH' : 'MEDIUM';
+
+  signals.push(makeSignal(
+    'MAINTENANCE_RANKED_TRIM',
+    `TRIM_${top.pos.symbol}`,
+    top.pos.symbol,
+    'SELL',
+    trimDollars,
+    priority,
+    `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(CONFIG.MARGIN_TRIM_THRESHOLD * 100).toFixed(0)}%. ` +
+      `${top.pos.symbol} has highest maintenance (${top.maint}%) among holdings — selling $${Math.round(trimDollars)} ` +
+      `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(CONFIG.MARGIN_TRIM_TARGET * 100).toFixed(0)}%).`,
+    {
+      marginUtilPct,
+      targetMarginPct:        CONFIG.MARGIN_TRIM_TARGET,
+      candidateSymbol:        top.pos.symbol,
+      candidateMaintPct:      top.maint,
+      candidateMaintSource:   top.pos.maintenancePctSource ?? 'default',
+      requiredEquityFreed,
+      cappedAtHalfPosition:   rawTrim > maxTrim,
+    },
+  ));
+
+  // Vol-7 1/3 rotation pair — only when 1/3 is large enough to be worth an order.
+  const rotationDollars = trimDollars * CONFIG.ROTATION_INTO_TRIPLES_PCT;
+  if (rotationDollars >= 100) {
+    const uproW = valuation.weightPcts['UPRO'] ?? 0;
+    const tqqqW = valuation.weightPcts['TQQQ'] ?? 0;
+    const target = uproW <= tqqqW ? 'UPRO' : 'TQQQ';
+    signals.push(makeSignal(
+      'MAINTENANCE_RANKED_TRIM',
+      `ROTATE_INTO_${target}`,
+      target,
+      'BUY',
+      rotationDollars,
+      priority,
+      `Vol-7 1/3 rotation: ~$${Math.round(rotationDollars)} of ${top.pos.symbol} proceeds rotates into ${target} ` +
+        `(currently ${(uproW + tqqqW > 0 ? (target === 'UPRO' ? uproW : tqqqW) : 0).toFixed(1)}%).`,
+      {
+        rotationFromSymbol: top.pos.symbol,
+        rotationFraction:   CONFIG.ROTATION_INTO_TRIPLES_PCT,
+        targetTicker:       target,
+      },
+    ));
+  }
+
+  return signals;
+}
+
+// ─── Phase 2 — Pillar fill (new-position suggestions) ────────────────────────
+
+/**
+ * PILLAR_FILL
+ *
+ * When the Income pillar is meaningfully below target and the engine isn't
+ * gated, propose up to N new income tickers from the AI-curated subset.
+ *
+ * Scoring prefers candidates whose fund family the user is not already
+ * concentrated in. When margin utilization is elevated (>30%), high-maintenance
+ * candidates are filtered out so PILLAR_FILL doesn't fight MAINTENANCE_RANKED_TRIM.
+ *
+ * Triples are owned by AFW_TRIGGER + the rotation pair. Cornerstone buys are
+ * owned by the rebalance-plan endpoint. Hedge sizing is owned by AIRBAG_SCALE.
+ * So PILLAR_FILL only addresses the Income pillar gap.
+ *
+ * Skipped when:
+ *  - pillarTargets is not provided (caller didn't load strategy config)
+ *  - defense mode active, kill switch active
+ *  - cash insufficient
+ *  - gap is below threshold
+ *
+ * Size:
+ *  - Each run proposes 1/3 of the gap (averages in over time)
+ *  - Capped at PILLAR_FILL_MAX_DOLLARS per candidate, MAX_CANDIDATES per pillar
+ *  - Bounded by 95% of available cash to leave a buffer
+ */
+function evalPillarFill(
+  positions:           EnginePosition[],
+  valuation:           PortfolioValuation,
+  pillarTargets:       PillarTargets | undefined,
+  buyingPowerAvail:    number,
+  inDefense:           boolean,
+  killSwitchActive:    boolean,
+  recentSells30d:      RecentSell[],
+  makeSignal:          MakeSignal,
+): TradeSignal[] {
+  if (!pillarTargets)                return [];
+  if (inDefense || killSwitchActive) return [];
+  if (buyingPowerAvail < 100)        return [];
+
+  // Hard margin ceiling for the rule itself. Above this, the user should be
+  // trimming not buying — MAINTENANCE_RANKED_TRIM handles that side.
+  const utilFirstCheck =
+    valuation.totalValue > 0 ? valuation.marginDebt / valuation.totalValue : 0;
+  if (utilFirstCheck > CONFIG.PILLAR_FILL_MAX_MARGIN_PCT) return [];
+
+  // Aggregate dollars by pillar and by family.
+  const dollarsByPillar: Record<string, number> = {
+    triples: 0, cornerstone: 0, income: 0, hedge: 0, other: 0,
+  };
+  const dollarsByFamily: Record<string, number> = {};
+  const heldSymbols = new Set<string>();
+
+  for (const p of positions) {
+    if (p.marketValue <= 0) continue;
+    heldSymbols.add(p.symbol);
+    if (p.pillar) {
+      dollarsByPillar[p.pillar] = (dollarsByPillar[p.pillar] ?? 0) + p.marketValue;
+    }
+    if (p.family) {
+      dollarsByFamily[p.family] = (dollarsByFamily[p.family] ?? 0) + p.marketValue;
+    }
+  }
+
+  const totalForPct = valuation.totalValue > 0 ? valuation.totalValue : 1;
+  const incomePct   = (dollarsByPillar['income'] / totalForPct) * 100;
+  const targetPct   = pillarTargets.incomePct;
+  const gapPp       = targetPct - incomePct;
+
+  if (gapPp < CONFIG.PILLAR_FILL_GAP_THRESHOLD_PP) return [];
+
+  const fullGapDollars = (gapPp / 100) * valuation.totalValue;
+  const deployBudget = Math.min(
+    fullGapDollars * CONFIG.PILLAR_FILL_GAP_FRACTION,
+    CONFIG.PILLAR_FILL_MAX_DOLLARS * CONFIG.PILLAR_FILL_MAX_CANDIDATES,
+    buyingPowerAvail * 0.95,
+  );
+  if (deployBudget < 100) return [];
+
+  // Wash-sale defensive skip — only blocks symbols sold at a loss in window.
+  const washSaleSkip = new Set(
+    recentSells30d.filter((s) => s.isLoss).map((s) => s.symbol),
+  );
+
+  const marginUtilPct = valuation.marginDebt / totalForPct;
+
+  // Score candidates from the AI-curated income subset.
+  const scored = listAiCurated('income')
+    .filter((c) => !heldSymbols.has(c.symbol))
+    .filter((c) => !washSaleSkip.has(c.symbol))
+    .filter((c) => {
+      if (marginUtilPct > 0.30 && c.maintenancePct > CONFIG.PILLAR_FILL_HIGH_MARGIN_MAINT_CEILING) {
+        return false;
+      }
+      return true;
+    })
+    .map((c) => {
+      const familyDollars   = dollarsByFamily[c.family] ?? 0;
+      const familyPct       = (familyDollars / totalForPct) * 100;
+      const familyPenalty   = Math.max(0, familyPct - CONFIG.PILLAR_FILL_FAMILY_PENALTY_PCT);
+      // Maintenance gets a mild penalty: prefer lower-maint candidates when ranking
+      // is otherwise tied, but don't override the family-diversification preference.
+      const maintPenalty = c.maintenancePct / 100;
+      const score = -familyPenalty - maintPenalty;
+      return { c, familyPct, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  if (scored.length === 0) return [];
+
+  const pickN          = Math.min(CONFIG.PILLAR_FILL_MAX_CANDIDATES, scored.length);
+  const perCandidate   = deployBudget / pickN;
+  const sizePerSignal  = Math.min(perCandidate, CONFIG.PILLAR_FILL_MAX_DOLLARS);
+  const signals: TradeSignal[] = [];
+  const priority: SignalPriority = gapPp > 10 ? 'HIGH' : 'MEDIUM';
+
+  for (let i = 0; i < pickN; i += 1) {
+    const { c, familyPct } = scored[i];
+    signals.push(makeSignal(
+      'PILLAR_FILL',
+      `FILL_INCOME_${c.symbol}`,
+      c.symbol,
+      'BUY',
+      sizePerSignal,
+      priority,
+      `Income pillar at ${incomePct.toFixed(1)}% vs target ${targetPct}% (gap ${gapPp.toFixed(1)}pp). ` +
+        `${c.symbol} (${c.family}) fills the gap; you don't already hold it` +
+        (familyPct > 0 ? `, and current ${c.family} exposure is ${familyPct.toFixed(1)}%.` : '.'),
+      {
+        pillar:                 'income',
+        actualPct:              Math.round(incomePct * 100) / 100,
+        targetPct,
+        gapPp:                  Math.round(gapPp * 100) / 100,
+        candidateFamily:        c.family,
+        familyExposurePct:      Math.round(familyPct * 100) / 100,
+        candidateMaintPct:      c.maintenancePct,
+        candidateMaintSource:   c.maintenancePctSource,
+      },
+    ));
+  }
+
+  return signals;
+}
+
 // ─── Main engine ─────────────────────────────────────────────────────────────
 
 export function runSignalEngine(inputs: EngineInputs): EngineResult {
@@ -610,6 +947,26 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
 
   // 8. Freedom ratio.
   all.push(...evalFreedomRatio(inputs.state.freedomRatioHistory, makeSignal));
+
+  // 9. (Phase 2) Maintenance-ranked margin-relief trim. Gated by inDefense and
+  //    killSwitchActive — both are dominant when active.
+  all.push(...evalMaintenanceRankedTrim(
+    inputs.positions, valuation, inDefense, nextState.killSwitch.active, makeSignal,
+  ));
+
+  // 10. (Phase 2) Pillar-fill new-position suggestions. Requires pillarTargets;
+  //     gated by inDefense and killSwitchActive. Income pillar only.
+  const buyingPowerAvail = inputs.buyingPowerAvailable ?? Math.max(0, inputs.cash);
+  all.push(...evalPillarFill(
+    inputs.positions,
+    valuation,
+    inputs.pillarTargets,
+    buyingPowerAvail,
+    inDefense,
+    nextState.killSwitch.active,
+    inputs.recentSells30d ?? [],
+    makeSignal,
+  ));
 
   // Update prevMonth at month boundary (snapshot current margin for next month's
   // kill-switch comparison).

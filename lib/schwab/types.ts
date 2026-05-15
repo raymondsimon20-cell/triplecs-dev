@@ -142,6 +142,23 @@ export interface EnrichedPosition extends SchwabPosition {
   gainLossPercent: number;
   portfolioPercent: number;
   todayGainLoss: number;
+  /**
+   * Fund family — issuer / concentration bucket. 'Other' for unknowns,
+   * 'Individual' for single stocks, 'Gold' for physical-gold ETFs.
+   * Sourced from `lib/data/fund-metadata.ts`.
+   */
+  family?: string;
+  /**
+   * Schwab-style maintenance requirement % — the proportion of position value
+   * that must be backed by equity. Used by the rule engine to rank sells by
+   * the equity freed per dollar sold ("maintenance hierarchy").
+   *
+   * Explicit values come from the Vol-7 maintenance table; pillar-default
+   * fallbacks are used otherwise. Inspect `maintenancePctSource` to tell them
+   * apart when accuracy matters (e.g. when sizing autopilot trades).
+   */
+  maintenancePct?: number;
+  maintenancePctSource?: 'explicit' | 'default';
 }
 
 // ─── Schwab Order Types ──────────────────────────────────────────────────────

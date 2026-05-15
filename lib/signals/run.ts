@@ -27,10 +27,14 @@ import {
   type EngineInputs,
   type EnginePosition,
   type EngineResult,
+  type RecentSell,
   type TradeSignal,
 } from './engine';
 import { autoExecute, type AutoExecuteResult } from './auto-execute';
 import type { InboxItem } from '../inbox';
+import { getFundMetadata } from '../data/fund-metadata';
+import { getServerStrategyTargets } from '../strategy-store';
+import type { TradeHistoryEntry } from '@/app/api/orders/route';
 
 const CACHE_STORE = 'signal-engine-cache';
 const CACHE_KEY   = 'latest';
@@ -142,10 +146,19 @@ async function fetchAggregatedPortfolio(): Promise<{
       if (p.instrument.assetType === 'OPTION') continue;
       if (p.instrument.symbol.includes(' ')) continue;
       if (p.longQuantity <= 0) continue;
+      const meta = getFundMetadata(p.instrument.symbol);
       positions.push({
         symbol:      p.instrument.symbol,
         shares:      p.longQuantity,
         marketValue: p.marketValue ?? 0,
+        ...(meta
+          ? {
+              pillar:               meta.pillar,
+              family:               meta.family,
+              maintenancePct:       meta.maintenancePct,
+              maintenancePctSource: meta.maintenancePctSource,
+            }
+          : {}),
       });
     }
   }
@@ -164,6 +177,44 @@ async function fetchAggregatedPortfolio(): Promise<{
   }
 
   return { positions, cash, marginDebt, prices };
+}
+
+// ─── Phase 2 inputs ──────────────────────────────────────────────────────────
+
+/**
+ * Load recent SELLs from trade-history for wash-sale defensive filtering.
+ *
+ * We can't reliably determine "sold at a loss" from TradeHistoryEntry alone
+ * (cost basis isn't there). Conservative choice: flag every recent sell as
+ * `isLoss: true` so PILLAR_FILL avoids re-proposing it. The authoritative
+ * wash-sale check still happens in `lib/guardrails.ts` at stage time with
+ * better data.
+ */
+async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
+  try {
+    const log = (await getStore('trade-history').get('log', { type: 'json' })) as
+      | TradeHistoryEntry[]
+      | null;
+    if (!Array.isArray(log)) return [];
+    const cutoff = Date.now() - windowDays * 24 * 60 * 60 * 1000;
+    const out: RecentSell[] = [];
+    for (const e of log) {
+      if (!e.timestamp || !e.symbol) continue;
+      if (e.status !== 'placed') continue;
+      if (e.instruction !== 'SELL' && e.instruction !== 'SELL_TO_CLOSE') continue;
+      const t = Date.parse(e.timestamp);
+      if (!Number.isFinite(t) || t < cutoff) continue;
+      out.push({
+        symbol:   e.symbol.toUpperCase(),
+        soldDate: e.timestamp,
+        isLoss:   true,  // conservative: treat all as potential wash-sale exposure
+      });
+    }
+    return out;
+  } catch (err) {
+    console.warn('[signals/run] loadRecentSells failed:', err);
+    return [];
+  }
 }
 
 // ─── Signal → inbox mapper ───────────────────────────────────────────────────
@@ -210,10 +261,12 @@ function signalsToInbox(
  * logged because the result itself is still useful even if staging hiccupped.
  */
 export async function runSignalsAndStage(): Promise<RunResult> {
-  const [portfolio, market, state] = await Promise.all([
+  const [portfolio, market, state, strategy, recentSells30d] = await Promise.all([
     fetchAggregatedPortfolio(),
     fetchMarketContext(),
     loadSignalState(),
+    getServerStrategyTargets(),
+    loadRecentSells(30),
   ]);
 
   if (market.spyPrice > 0) portfolio.prices['SPY'] = market.spyPrice;
@@ -226,6 +279,16 @@ export async function runSignalsAndStage(): Promise<RunResult> {
     spyHistory: market.spyHistory,
     vix:        market.vix,
     state,
+    // Phase 2 — server-side strategy targets + recent sells unlock
+    // MAINTENANCE_RANKED_TRIM and PILLAR_FILL.
+    pillarTargets: {
+      triplesPct:     strategy.triplesPct,
+      cornerstonePct: strategy.cornerstonePct,
+      incomePct:      strategy.incomePct,
+      hedgePct:       strategy.hedgePct,
+    },
+    recentSells30d,
+    buyingPowerAvailable: Math.max(0, portfolio.cash),
   };
 
   const result = runSignalEngine(inputs);

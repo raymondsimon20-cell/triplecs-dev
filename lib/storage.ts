@@ -98,6 +98,13 @@ export interface PortfolioSnapshot {
     marketValue: number;
     shares: number;
     unrealizedGL: number;
+    /**
+     * Fund family + maintenance metadata populated from `lib/data/fund-metadata.ts`.
+     * Optional so historical snapshots written before Phase 1 still deserialize.
+     */
+    family?: string;
+    maintenancePct?: number;
+    maintenancePctSource?: 'explicit' | 'default';
   }>;
   /** SPY closing price on the snapshot date — used as benchmark for alpha calc. */
   spyClose?: number;

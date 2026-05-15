@@ -97,6 +97,13 @@ export function buildSnapshot(
       marketValue: p.marketValue,
       shares: p.longQuantity,
       unrealizedGL: p.longOpenProfitLoss ?? 0,
+      // Carry maintenance + family into the snapshot so engine rules and the
+      // performance backfill can rank positions by margin efficiency without
+      // re-deriving from a separate table. Falls back to undefined when the
+      // enriched position doesn't have metadata (unknown ticker).
+      ...(p.family            !== undefined ? { family:            p.family            } : {}),
+      ...(p.maintenancePct    !== undefined ? { maintenancePct:    p.maintenancePct    } : {}),
+      ...(p.maintenancePctSource           ? { maintenancePctSource: p.maintenancePctSource } : {}),
     })),
   );
 

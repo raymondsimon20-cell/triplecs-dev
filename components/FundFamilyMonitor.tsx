@@ -15,116 +15,15 @@
 import { useState, useMemo } from 'react';
 import { Layers, ChevronDown, ChevronUp, AlertTriangle, CheckCircle } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
+import { getFundFamily } from '@/lib/data/fund-metadata';
 
 interface Props {
   positions: EnrichedPosition[];
   totalValue: number;
 }
 
-// ─── Fund family mapping ──────────────────────────────────────────────────────
-
-const FUND_FAMILIES: Record<string, string> = {
-  // YieldMax
-  TSLY: 'YieldMax', NVDY: 'YieldMax', AMZY: 'YieldMax', GOOGY: 'YieldMax',
-  MSFO: 'YieldMax', CONY: 'YieldMax', JPMO: 'YieldMax', NFLXY: 'YieldMax',
-  AMDY: 'YieldMax', PYPLY: 'YieldMax', AIYY: 'YieldMax', OILY: 'YieldMax',
-  CVNY: 'YieldMax', MRNY: 'YieldMax', SNOY: 'YieldMax', BIOY: 'YieldMax',
-  DISO: 'YieldMax', ULTY: 'YieldMax', YMAX: 'YieldMax', YMAG: 'YieldMax',
-  GDXY: 'YieldMax', XOMO: 'YieldMax',
-  FBY: 'YieldMax', FIAT: 'YieldMax', FIVY: 'YieldMax', TSMY: 'YieldMax',
-  APLY: 'YieldMax', OARK: 'YieldMax', DIPS: 'YieldMax', CRSH: 'YieldMax',
-  KLIP: 'YieldMax', MSTY: 'YieldMax', PLTY: 'YieldMax',
-
-  // Defiance ETFs
-  QQQY: 'Defiance', IWMY: 'Defiance', JEPY: 'Defiance',
-  QDTY: 'Defiance', SDTY: 'Defiance', DFNV: 'Defiance',
-
-  // Roundhill Investments
-  XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', WDTE: 'Roundhill',
-  MDTE: 'Roundhill', TOPW: 'Roundhill', BRKW: 'Roundhill',
-
-  // RexShares
-  FEPI: 'RexShares', REXS: 'RexShares', REXQ: 'RexShares', AIPI: 'RexShares',
-
-  // GraniteShares
-  TSYY: 'GraniteShares',
-
-  // Kurv
-  KSLV: 'Kurv',
-
-  // JPMorgan
-  JEPI: 'JPMorgan', JEPQ: 'JPMorgan',
-
-  // Global X
-  QYLD: 'Global X', RYLD: 'Global X', XYLD: 'Global X', DJIA: 'Global X',
-  NVDL: 'Global X', TSLL: 'Global X',
-
-  // Neos Investments
-  SPYI: 'Neos', QDVO: 'Neos', JPEI: 'Neos', IWMI: 'Neos',
-  QQQI: 'Neos', BTCI: 'Neos', NIHI: 'Neos', IAUI: 'Neos',
-
-  // PIMCO
-  PDI: 'PIMCO', PDO: 'PIMCO', PTY: 'PIMCO', PCN: 'PIMCO',
-  PFL: 'PIMCO', PFN: 'PIMCO', PHK: 'PIMCO',
-
-  // Eaton Vance
-  ETV: 'Eaton Vance', ETB: 'Eaton Vance', EOS: 'Eaton Vance',
-  EOI: 'Eaton Vance', EVT: 'Eaton Vance',
-
-  // BlackRock
-  BST: 'BlackRock', BDJ: 'BlackRock', ECAT: 'BlackRock', BGY: 'BlackRock',
-  BCAT: 'BlackRock', BUI: 'BlackRock',
-
-  // Amplify
-  DIVO: 'Amplify', BLOK: 'Amplify', COWS: 'Amplify',
-
-  // ProShares / 3× ETFs
-  UPRO: 'ProShares', TQQQ: 'ProShares', UDOW: 'ProShares',
-  UMDD: 'ProShares', URTY: 'ProShares', SQQQ: 'ProShares', SPXS: 'ProShares',
-
-  // Direxion
-  SPXL: 'Direxion', TECL: 'Direxion', LABU: 'Direxion', TPVG: 'Direxion',
-  HIBL: 'Direxion', CURE: 'Direxion',
-
-  // Cornerstone (own pillar — no concentration cap applies)
-  CLM: 'Cornerstone', CRF: 'Cornerstone',
-
-  // Oxford Lane
-  OXLC: 'Oxford Lane', OXSQ: 'Oxford Lane',
-
-  // KraneShares
-  KMLM: 'KraneShares',
-
-  // RiverNorth
-  RIV: 'RiverNorth', OPP: 'RiverNorth',
-
-  // Liberty All-Star
-  USA: 'Liberty', LICT: 'Liberty',
-
-  // Columbia
-  STK: 'Columbia',
-
-  // Gabelli
-  GAB: 'Gabelli', GDV: 'Gabelli', GGT: 'Gabelli',
-
-  // Invesco
-  QQQ: 'Invesco', QQQM: 'Invesco', RSP: 'Invesco',
-
-  // Schwab / Vanguard / iShares — broad index, typically no cap needed
-  SCHD: 'Schwab', SCHG: 'Schwab', SCHB: 'Schwab',
-  VTI: 'Vanguard', VOO: 'Vanguard', VYM: 'Vanguard', VXUS: 'Vanguard',
-  SPY: 'iShares', IVV: 'iShares', IWM: 'iShares', ITA: 'iShares',
-
-  // Growth anchors — treated as individual, not families
-  NVDA: 'Individual', AAPL: 'Individual', MSFT: 'Individual',
-  AMZN: 'Individual', GOOGL: 'Individual', META: 'Individual',
-  SPYG: 'Individual',
-  MCD: 'Individual', COST: 'Individual', 'BRK.B': 'Individual',
-  MSTR: 'Individual', KGC: 'Individual', 'O': 'Individual',
-
-  // Physical-gold anchors
-  AAAU: 'Gold', GLD: 'Gold', IAU: 'Gold',
-};
+// Family classification now lives in `lib/data/fund-metadata.ts` (single source
+// of truth). This component just consumes `getFundFamily(symbol)`.
 
 // Families exempt from cap warnings (index funds, individual stocks, etc.)
 const EXEMPT_FAMILIES = new Set(['Cornerstone', 'Individual', 'Schwab', 'Vanguard', 'iShares', 'Gold']);
@@ -158,7 +57,7 @@ export function FundFamilyMonitor({ positions, totalValue }: Props) {
       const symbol = pos.instrument?.symbol?.toUpperCase() ?? '';
       if (!symbol || pos.marketValue <= 0) continue;
 
-      const family = FUND_FAMILIES[symbol] ?? 'Other';
+      const family = getFundFamily(symbol);
       if (!map[family]) map[family] = { totalValue: 0, tickers: [] };
       map[family].totalValue += pos.marketValue;
       map[family].tickers.push({ symbol, value: pos.marketValue });

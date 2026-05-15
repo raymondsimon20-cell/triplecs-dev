@@ -309,8 +309,8 @@ function FundFamilySection({
           const barColor = isOver ? '#ef4444' : isNear ? '#f97316' : '#3b82f6';
           const barPct = Math.min((f.portfolioPercent / familyCapPct) * 100, 100);
 
-          // Income families that can erode — flag Yieldmax/Defiance more strongly
-          const isHighDecay = ['Yieldmax', 'Defiance', 'Roundhill', 'RexShares'].includes(f.family);
+          // Income families that can erode — flag YieldMax/Defiance more strongly
+          const isHighDecay = ['YieldMax', 'Defiance', 'Roundhill', 'RexShares'].includes(f.family);
 
           return (
             <div key={f.family} className="space-y-1">

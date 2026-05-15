@@ -24,6 +24,7 @@ import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
 import { TradeInbox } from '@/components/TradeInbox';
+import { DailyPlanPanel } from '@/components/DailyPlanPanel';
 import { PerformanceReviewPanel } from '@/components/PerformanceReviewPanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
@@ -805,6 +806,22 @@ export default function DashboardPage() {
         >
           <div className="pt-4">
             <PerformancePanel />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Daily Autopilot Plan — tier-grouped engine recommendations ────── */}
+        <CollapsiblePanel
+          id="daily-plan"
+          title="Daily Autopilot Plan"
+          icon={<Inbox className="w-4 h-4 text-emerald-400" />}
+          accentClass="border-emerald-500/40"
+          tintClass="from-emerald-500/[0.04]"
+          iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+          glowColor="income"
+          defaultOpen={true}
+        >
+          <div className="pt-4">
+            <DailyPlanPanel />
           </div>
         </CollapsiblePanel>
 

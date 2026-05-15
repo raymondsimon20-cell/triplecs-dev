@@ -4,6 +4,7 @@
  */
 
 import type { SchwabPosition, EnrichedPosition, PillarType, SchwabQuotesResponse } from './schwab/types';
+import { getFundMetadata } from './data/fund-metadata';
 
 // ─── Symbol classification lists ──────────────────────────────────────────────
 
@@ -174,6 +175,12 @@ export function enrichPositions(
       ? (quote.lastPrice - quote.closePrice) * qty * (pos.shortQuantity > 0 ? -1 : 1)
       : pos.currentDayProfitLoss ?? 0;
 
+    // Pull family + maintenance from the canonical metadata table. Options
+    // borrow the underlying's metadata where possible; unknowns fall through
+    // as undefined and consumers should treat that as "no data".
+    const underlyingSymbol = symbol.split(/\s|[0-9]/)[0]?.toUpperCase() ?? symbol;
+    const meta = getFundMetadata(underlyingSymbol);
+
     return {
       ...pos,
       pillar,
@@ -183,6 +190,13 @@ export function enrichPositions(
       gainLossPercent,
       portfolioPercent,
       todayGainLoss,
+      ...(meta
+        ? {
+            family: meta.family,
+            maintenancePct: meta.maintenancePct,
+            maintenancePctSource: meta.maintenancePctSource,
+          }
+        : {}),
     };
   });
 }
@@ -233,59 +247,18 @@ export function summarizeByPillar(
 }
 
 // ─── Fund family classification ───────────────────────────────────────────────
+//
+// Family classification was previously duplicated here and in
+// `components/FundFamilyMonitor.tsx` (with disagreeing casing — e.g. 'Yieldmax'
+// vs 'YieldMax', 'NEOS' vs 'Neos'). It now lives in `lib/data/fund-metadata.ts`.
+// Both `FundFamily` and `getFundFamily` are re-exported here for backward
+// compatibility with existing imports from this module.
 
-export type FundFamily =
-  | 'Yieldmax'
-  | 'Defiance'
-  | 'Roundhill'
-  | 'RexShares'
-  | 'NEOS'
-  | 'GraniteShares'
-  | 'Kurv'
-  | 'BlackRock'
-  | 'ProShares'
-  | 'Direxion'
-  | 'Cornerstone'
-  | 'Other';
+export type { FundFamily } from './data/fund-metadata';
+export { getFundFamily } from './data/fund-metadata';
 
-const FUND_FAMILY_MAP: Record<string, FundFamily> = {
-  // Yieldmax
-  TSLY: 'Yieldmax', NVDY: 'Yieldmax', AMZY: 'Yieldmax', GOOGY: 'Yieldmax',
-  MSFO: 'Yieldmax', APLY: 'Yieldmax', OARK: 'Yieldmax', JPMO: 'Yieldmax',
-  CONY: 'Yieldmax', NFLY: 'Yieldmax', DISO: 'Yieldmax', SQY: 'Yieldmax',
-  SMCY: 'Yieldmax', YMAX: 'Yieldmax', YMAG: 'Yieldmax', ULTY: 'Yieldmax',
-  KLIP: 'Yieldmax', DIPS: 'Yieldmax', CRSH: 'Yieldmax',
-  MSTY: 'Yieldmax', PLTY: 'Yieldmax', GDXY: 'Yieldmax',
-  // Defiance
-  QQQY: 'Defiance', JEPY: 'Defiance', IWMY: 'Defiance',
-  DEFI: 'Defiance', WDTE: 'Defiance', BDTE: 'Defiance', IDTE: 'Defiance', QDTU: 'Defiance',
-  // Roundhill
-  XDTE: 'Roundhill', QDTE: 'Roundhill', RDTE: 'Roundhill', YBTC: 'Roundhill', WEEK: 'Roundhill',
-  TOPW: 'Roundhill', BRKW: 'Roundhill',
-  // RexShares
-  FEPI: 'RexShares', AIPI: 'RexShares',
-  // NEOS (high-income option-overlay ETFs)
-  QQQI: 'NEOS', SPYI: 'NEOS', BTCI: 'NEOS', NIHI: 'NEOS', IAUI: 'NEOS',
-  // GraniteShares YieldBOOST
-  TSYY: 'GraniteShares',
-  // Kurv
-  KSLV: 'Kurv',
-  // BlackRock closed-end funds
-  ECAT: 'BlackRock', BST: 'BlackRock', BDJ: 'BlackRock',
-  // ProShares (triple long)
-  UPRO: 'ProShares', TQQQ: 'ProShares', UDOW: 'ProShares',
-  // Direxion (triple long + short)
-  SPXL: 'Direxion', TECL: 'Direxion', SOXL: 'Direxion', LABU: 'Direxion',
-  TNA: 'Direxion', FAS: 'Direxion', FNGU: 'Direxion',
-  SPXS: 'Direxion', SOXS: 'Direxion', SRTY: 'Direxion', FAZ: 'Direxion',
-  FNGD: 'Direxion', FNGA: 'Direxion', FNGB: 'Direxion',
-  // Cornerstone
-  CLM: 'Cornerstone', CRF: 'Cornerstone',
-};
-
-export function getFundFamily(symbol: string): FundFamily {
-  return FUND_FAMILY_MAP[symbol.toUpperCase()] ?? 'Other';
-}
+import { getFundFamily as _getFundFamily } from './data/fund-metadata';
+import type { FundFamily } from './data/fund-metadata';
 
 export interface FundFamilyConcentration {
   family: FundFamily;
@@ -302,7 +275,7 @@ export function getFundFamilyConcentrations(
   const map = new Map<FundFamily, FundFamilyConcentration>();
 
   for (const pos of positions) {
-    const family = getFundFamily(pos.instrument.symbol);
+    const family = _getFundFamily(pos.instrument.symbol);
     if (family === 'Other') continue;
     if (!map.has(family)) {
       map.set(family, { family, totalValue: 0, portfolioPercent: 0, symbols: [] });
