@@ -20,12 +20,15 @@
 
 import type { DailyPlan } from './daily-plan';
 import type { AutoExecuteResult } from './auto-execute';
+import type { CronHealth } from './cron-health';
 
 export interface DigestInput {
   plan:        DailyPlan;
   autoExecute?: AutoExecuteResult;
   /** Absolute URL to the dashboard, e.g. https://triplecs.netlify.app/dashboard. */
   dashboardUrl?: string;
+  /** Optional cron health snapshot — surfaced as a warning when stale. */
+  cronHealth?: CronHealth;
 }
 
 export interface FormattedDigest {
@@ -41,9 +44,11 @@ export interface FormattedDigest {
  * actionable happened. Conservative: when in doubt, send.
  */
 export function shouldSend(input: DigestInput): boolean {
-  const { plan, autoExecute } = input;
+  const { plan, autoExecute, cronHealth } = input;
   // Always send when defense or kill switch is active — the user needs to know.
   if (plan.inDefenseMode || plan.killSwitchActive) return true;
+  // Always send when the engine is stale or errored — most important signal.
+  if (cronHealth?.isStale) return true;
   // Send when anything needs approval.
   if (plan.counts.approval > 0) return true;
   // Send when auto-execute actually placed orders.
@@ -63,7 +68,8 @@ function fmt$(n: number): string {
   });
 }
 
-function buildSubject(plan: DailyPlan, autoExecute?: AutoExecuteResult): string {
+function buildSubject(plan: DailyPlan, autoExecute?: AutoExecuteResult, cronHealth?: CronHealth): string {
+  if (cronHealth?.isStale)               return 'Autopilot: engine is stale';
   if (plan.killSwitchActive)             return 'Autopilot: kill switch tripped';
   if (plan.inDefenseMode)                return 'Autopilot: defense mode active';
   if (plan.counts.approval > 0) {
@@ -86,13 +92,14 @@ function actionLine(prefix: string, ticker: string, dir: string, size: number, r
 }
 
 export function buildDigest(input: DigestInput): FormattedDigest {
-  const { plan, autoExecute, dashboardUrl } = input;
-  const subject = buildSubject(plan, autoExecute);
+  const { plan, autoExecute, dashboardUrl, cronHealth } = input;
+  const subject = buildSubject(plan, autoExecute, cronHealth);
 
   // ─── Plain text body ────────────────────────────────────────────────────────
   const lines: string[] = [];
   lines.push(`Portfolio: ${fmt$(plan.totalValue)} · Margin ${plan.marginUtilizationPct.toFixed(1)}%`);
   lines.push(`Mode: ${plan.autoExecuteMode}`);
+  if (cronHealth?.isStale)   lines.push(`⚠ Engine health: ${cronHealth.reason}`);
   if (plan.inDefenseMode)    lines.push('⚠ Defense mode is active — new buys suppressed.');
   if (plan.killSwitchActive) lines.push('⚠ Margin kill switch is tripped — all new purchases paused.');
   lines.push('');

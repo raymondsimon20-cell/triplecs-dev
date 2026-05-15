@@ -74,10 +74,19 @@ export interface DailyPlan {
  * this list defaults to tier 2 (requires approval) when a BUY/SELL, or tier 3
  * (alert) when ALERT/INFO. This is intentional: easy to expand the auto list
  * once a rule has been observed in supervised mode for a while.
+ *
+ * Graduation history:
+ *   - CLM_CRF_TRIM, AIRBAG_SCALE: initial set (well-bounded by hard caps)
+ *   - AFW_TRIGGER:               promoted after observation; sizes are fixed
+ *                                  in CONFIG.AFW_DEPLOY ($500/$1000 splits).
+ *   - MAINTENANCE_RANKED_TRIM:   stays tier 2 until observed; can sell up to
+ *                                  half of a position which is more material.
+ *   - PILLAR_FILL:               stays tier 2; opens NEW positions.
  */
 const AUTO_TIER_RULES: ReadonlySet<string> = new Set([
   'CLM_CRF_TRIM',         // pillar trim above a hard cap — well-bounded
   'AIRBAG_SCALE',         // VIX-reactive hedge sizing — bounded by AIRBAG % targets
+  'AFW_TRIGGER',          // $500/$500 splits or $1000 single ticker — hard-coded sizes
 ]);
 
 /**

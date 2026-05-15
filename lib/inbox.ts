@@ -19,7 +19,7 @@ import type { GuardrailViolation } from './guardrails';
 
 export type InboxSource = 'rebalance' | 'option' | 'ai-rec' | 'signal-engine';
 
-export type InboxStatus = 'pending' | 'executed' | 'dismissed' | 'expired';
+export type InboxStatus = 'pending' | 'executed' | 'dismissed' | 'expired' | 'failed';
 
 export type InboxInstruction =
   | 'BUY' | 'SELL'
@@ -273,6 +273,21 @@ export async function dismissItem(id: string): Promise<InboxItem | null> {
   }));
 }
 
+/**
+ * Mark an inbox item as failed because the broker rejected the order.
+ * Distinct from `dismissed` (user said no) and `expired` (TTL elapsed).
+ * The next cron will skip `failed` items rather than retry blindly — the
+ * user can manually re-pend via PATCH /api/inbox if they want to retry.
+ */
+export async function markFailed(id: string, reason: string, message?: string): Promise<InboxItem | null> {
+  return updateItem(id, (it) => ({
+    ...it,
+    status:     'failed',
+    resolvedAt: Date.now(),
+    message:    message ?? reason,
+  }));
+}
+
 /** Bulk-dismiss all currently `pending` items. Returns the number dismissed. */
 export async function dismissAllPending(): Promise<number> {
   const items = await readAll();
@@ -309,4 +324,29 @@ async function updateItem(id: string, patch: (it: InboxItem) => InboxItem): Prom
 export async function getInboxItem(id: string): Promise<InboxItem | null> {
   const items = await readAll();
   return items.find((it) => it.id === id) ?? null;
+}
+
+/**
+ * Prune resolved inbox items older than `maxAgeDays`. Pending items are never
+ * dropped here — only executed/dismissed/expired/failed entries. Returns the
+ * number of items pruned.
+ *
+ * The MAX_ITEMS cap (500) already bounds the inbox in the worst case; this
+ * adds a soft retention policy so the audit trail doesn't grow indefinitely
+ * with stale entries.
+ */
+export async function pruneResolvedItems(maxAgeDays = 60): Promise<number> {
+  const items = await readAll();
+  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+  const resolvedStatuses: ReadonlySet<InboxStatus> = new Set([
+    'executed', 'dismissed', 'expired', 'failed',
+  ]);
+  const next = items.filter((it) => {
+    if (!resolvedStatuses.has(it.status)) return true; // keep pending
+    const age = it.resolvedAt ?? it.createdAt;
+    return age >= cutoff; // keep recent resolved
+  });
+  const removed = items.length - next.length;
+  if (removed > 0) await writeAll(next);
+  return removed;
 }

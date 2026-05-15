@@ -19,7 +19,7 @@ import { getStore } from '@netlify/blobs';
 import { createClient, getAccountNumbers } from '../schwab/client';
 import { getTokens }      from '../storage';
 import { getDailyCloses } from '../prices/historical';
-import { appendInbox, listInbox, type AppendInput, type InboxItem } from '../inbox';
+import { appendInbox, listInbox, pruneResolvedItems, type AppendInput, type InboxItem } from '../inbox';
 
 import { loadSignalState, saveSignalState } from './state';
 import {
@@ -35,6 +35,7 @@ import { loadAutoConfig } from './auto-config';
 import { buildDailyPlan, classifySignalTier } from './daily-plan';
 import { buildDigest, shouldSend } from './daily-digest';
 import { archiveDailyPlan } from './plan-archive';
+import { recordHeartbeat, getCronHealth } from './cron-health';
 import { sendNotification } from '../notifications';
 import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
@@ -188,11 +189,13 @@ async function fetchAggregatedPortfolio(): Promise<{
 /**
  * Load recent SELLs from trade-history for wash-sale defensive filtering.
  *
- * We can't reliably determine "sold at a loss" from TradeHistoryEntry alone
- * (cost basis isn't there). Conservative choice: flag every recent sell as
- * `isLoss: true` so PILLAR_FILL avoids re-proposing it. The authoritative
- * wash-sale check still happens in `lib/guardrails.ts` at stage time with
- * better data.
+ * `isLoss` is now computed honestly from cost-basis-per-share captured at
+ * sale time (see lib/schwab/cost-basis.ts). When cost basis is unavailable
+ * (older entries written before that capture, missing position record),
+ * we fall back to the conservative `isLoss: true` so the engine errs on
+ * the safe side of the wash-sale rule.
+ *
+ * The IRS wash-sale window is 30 calendar days, not trading days.
  */
 async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
   try {
@@ -208,10 +211,20 @@ async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
       if (e.instruction !== 'SELL' && e.instruction !== 'SELL_TO_CLOSE') continue;
       const t = Date.parse(e.timestamp);
       if (!Number.isFinite(t) || t < cutoff) continue;
+      // Compute isLoss from captured cost basis when available. The wash-sale
+      // rule blocks BUYs of substantially-identical securities sold AT A LOSS,
+      // so a sell at a gain is fine to re-buy.
+      let isLoss = true; // safe default when basis unknown
+      if (
+        typeof e.costBasisPerShare === 'number' && e.costBasisPerShare > 0 &&
+        typeof e.price             === 'number' && e.price             > 0
+      ) {
+        isLoss = e.price < e.costBasisPerShare;
+      }
       out.push({
         symbol:   e.symbol.toUpperCase(),
         soldDate: e.timestamp,
-        isLoss:   true,  // conservative: treat all as potential wash-sale exposure
+        isLoss,
       });
     }
     return out;
@@ -269,6 +282,27 @@ function signalsToInbox(
  * logged because the result itself is still useful even if staging hiccupped.
  */
 export async function runSignalsAndStage(): Promise<RunResult> {
+  const runStartedAt = Date.now();
+  try {
+    return await runSignalsAndStageInner(runStartedAt);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Record a failed heartbeat so /api/signals/health surfaces the failure
+    // rather than reporting "no heartbeat" forever. Don't await alert sending
+    // here — the throw needs to propagate to the caller (HTTP route / cron).
+    void recordHeartbeat({
+      ranAt:       runStartedAt,
+      durationMs:  Date.now() - runStartedAt,
+      status:      'error',
+      signalCount: 0,
+      actionable:  0,
+      error:       msg,
+    }).catch(() => undefined);
+    throw err;
+  }
+}
+
+async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult> {
   const [portfolio, market, state, strategy, recentSells30d] = await Promise.all([
     fetchAggregatedPortfolio(),
     fetchMarketContext(),
@@ -341,6 +375,21 @@ export async function runSignalsAndStage(): Promise<RunResult> {
 
   await saveCache(result);
 
+  // Inbox housekeeping — drop resolved items older than 60 days so the audit
+  // trail doesn't accumulate forever. Pending items are never touched here.
+  void pruneResolvedItems(60).catch(() => undefined);
+
+  // Heartbeat: record before the digest/archive so a slow notification
+  // doesn't widen the perceived run duration. Best-effort — failures don't
+  // break the run.
+  void recordHeartbeat({
+    ranAt:       runStartedAt,
+    durationMs:  Date.now() - runStartedAt,
+    status:      'success',
+    signalCount: result.signals.length,
+    actionable:  result.actionableTrades.length,
+  }).catch(() => undefined);
+
   // Fire-and-forget daily digest. Never fails the run — notification failures
   // are logged and swallowed so a missing API key or network blip doesn't
   // poison auto-execute. Only sends when there's something actionable
@@ -355,12 +404,17 @@ export async function runSignalsAndStage(): Promise<RunResult> {
     try { await archiveDailyPlan(plan); }
     catch (err) { console.warn('[signals/run] plan archive failed:', err); }
 
-    if (shouldSend({ plan, autoExecute: autoExecuteResult })) {
+    // Pull current cron health for the digest. Read happens AFTER we recorded
+    // this run's heartbeat, so health reflects the just-finished cycle.
+    const cronHealth = await getCronHealth().catch(() => undefined);
+
+    if (shouldSend({ plan, autoExecute: autoExecuteResult, cronHealth })) {
       const dashboardUrl = process.env.URL || process.env.DEPLOY_URL || undefined;
       const digest = buildDigest({
         plan,
         autoExecute: autoExecuteResult,
         dashboardUrl: dashboardUrl ? `${dashboardUrl}/dashboard` : undefined,
+        cronHealth,
       });
       const sent = await sendNotification(digest);
       if (!sent.delivered) {

@@ -546,15 +546,23 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
 
         try {
           // Tier classification for rebalance-plan staging:
-          //   - SELL on a high-maintenance income position to relieve pillar drift
-          //     is well-bounded → tier 'auto' if the order value is small.
-          //   - Anything else (new positions, large trades, anything blocked) →
-          //     tier 'approval' so the user reviews it explicitly.
-          const TIER_AUTO_MAX_DOLLARS = 2_000;
-          const classifyTier = (orderValue: number, hasViolations: boolean): 'auto' | 'approval' => {
+          //   - SELL trims to relieve over-target drift are safer than BUYs:
+          //     they free buying power, can't violate concentration caps, and
+          //     can't open NEW positions. SELL ≤ $5k → tier 'auto'.
+          //   - BUY trades have a tighter cap because they consume buying power
+          //     and can push pillars toward concentration limits. BUY ≤ $2k →
+          //     tier 'auto'; larger → tier 'approval'.
+          //   - Anything with a guardrail violation → 'approval' regardless.
+          const SELL_AUTO_MAX = 5_000;
+          const BUY_AUTO_MAX  = 2_000;
+          const classifyTier = (
+            instruction: 'BUY' | 'SELL',
+            orderValue:  number,
+            hasViolations: boolean,
+          ): 'auto' | 'approval' => {
             if (hasViolations) return 'approval';
-            if (orderValue <= TIER_AUTO_MAX_DOLLARS) return 'auto';
-            return 'approval';
+            const cap = instruction === 'SELL' ? SELL_AUTO_MAX : BUY_AUTO_MAX;
+            return orderValue <= cap ? 'auto' : 'approval';
           };
 
           const stageInputs: AppendInput[] = [
@@ -572,7 +580,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
                 rationale:   o.rationale,
                 aiMode:      'rebalance_plan',
                 violations,
-                tier:        classifyTier(orderValue, violations.length > 0),
+                tier:        classifyTier(o.instruction, orderValue, violations.length > 0),
               };
             }),
             ...blockedOrders.map((o) => ({

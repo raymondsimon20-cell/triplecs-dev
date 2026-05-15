@@ -32,6 +32,7 @@ import { getAccountNumbers } from '../schwab/client';
 import { placeOrders, type OrderRequest } from '../schwab/orders';
 import {
   markExecuted,
+  markFailed,
   type InboxItem,
 } from '../inbox';
 
@@ -58,6 +59,8 @@ interface TradeHistoryEntry {
   message?:    string;
   rationale?:  string;
   aiMode?:     string;
+  /** Avg cost basis (USD/share) for SELLs; undefined for BUYs. */
+  costBasisPerShare?: number;
 }
 
 interface PaperTrade extends TradeHistoryEntry {
@@ -391,7 +394,14 @@ export async function autoExecute(
     price:       it.price,
   }));
 
-  const results = await placeOrders(tokens, accountHash, orderRequests);
+  // Capture cost basis for SELLs in parallel with placing the orders. The
+  // map reflects pre-order state which is exactly what gets closed out.
+  const { fetchCostBasisMap, costBasisFor } = await import('../schwab/cost-basis');
+  const hasSell = allowed.some((it) => it.instruction === 'SELL');
+  const [results, costBasisMap] = await Promise.all([
+    placeOrders(tokens, accountHash, orderRequests),
+    hasSell ? fetchCostBasisMap(tokens, accountHash) : Promise.resolve({} as Record<string, number>),
+  ]);
 
   const now = Date.now();
   const historyEntries: TradeHistoryEntry[] = results.map((r, i) => ({
@@ -407,30 +417,46 @@ export async function autoExecute(
     message:     r.message,
     rationale:   allowed[i].rationale,
     aiMode:      'signal_engine_auto',
+    costBasisPerShare: costBasisFor(allowed[i].instruction, r.symbol, costBasisMap),
   }));
   await saveTradeHistoryEntries(historyEntries);
 
-  // Mark successfully-placed inbox items as executed.
+  // Mark each inbox item with the broker outcome:
+  //   - 'placed' → status 'executed', orderId attached
+  //   - anything else → status 'failed', reason recorded. Failed items will
+  //     not be re-attempted on the next cron — they need user intervention.
   let executed = 0;
   for (let i = 0; i < results.length; i += 1) {
     const r = results[i];
-    if (r.status !== 'placed') continue;
-    try {
-      await markExecuted(allowed[i].id, { orderId: r.orderId, message: r.message });
-      executed += 1;
-    } catch (err) {
-      console.warn(`[auto-execute] markExecuted failed for ${allowed[i].id}:`, err);
+    if (r.status === 'placed') {
+      try {
+        await markExecuted(allowed[i].id, { orderId: r.orderId, message: r.message });
+        executed += 1;
+      } catch (err) {
+        console.warn(`[auto-execute] markExecuted failed for ${allowed[i].id}:`, err);
+      }
+    } else {
+      const reason = r.message ?? 'Schwab rejected the order';
+      try {
+        await markFailed(allowed[i].id, reason, reason);
+        console.warn(
+          `[auto-execute] Schwab failed ${allowed[i].instruction} ${allowed[i].symbol}: ${reason}. ` +
+          `Inbox item marked failed; no retry on next cron.`,
+        );
+      } catch (err) {
+        console.warn(`[auto-execute] markFailed write failed for ${allowed[i].id}:`, err);
+      }
     }
   }
 
-  // Any errored orders + originally rejected items stay in inbox for manual handling.
+  // Surface broker errors in the autoExecute summary so the digest can show them.
   const erroredSummaries = results
     .map((r, i) => ({ r, item: allowed[i] }))
     .filter(({ r }) => r.status !== 'placed')
     .map(({ r, item }) => ({
       symbol:      item.symbol,
       instruction: item.instruction,
-      reason:      `Schwab error: ${r.message ?? 'unknown'}`,
+      reason:      `Schwab error: ${r.message ?? 'unknown'} — item marked failed`,
     }));
 
   console.log(`[auto-execute] AUTO: placed ${executed}/${allowed.length} order(s).`);

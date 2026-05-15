@@ -41,7 +41,7 @@ function looksLikePutRecAsEquity(it: AppendInput): boolean {
 
 export const dynamic = 'force-dynamic';
 
-const VALID_STATUSES: InboxStatus[] = ['pending', 'executed', 'dismissed', 'expired'];
+const VALID_STATUSES: InboxStatus[] = ['pending', 'executed', 'dismissed', 'expired', 'failed'];
 const VALID_SOURCES:  InboxSource[] = ['rebalance', 'option', 'ai-rec', 'signal-engine'];
 
 function unauthorized() {

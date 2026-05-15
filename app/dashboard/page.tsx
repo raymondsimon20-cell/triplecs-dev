@@ -26,6 +26,7 @@ import { PerformancePanel } from '@/components/PerformancePanel';
 import { TradeInbox } from '@/components/TradeInbox';
 import { DailyPlanPanel } from '@/components/DailyPlanPanel';
 import { ReplayPanel } from '@/components/ReplayPanel';
+import { PlanArchivePanel } from '@/components/PlanArchivePanel';
 import { PerformanceReviewPanel } from '@/components/PerformanceReviewPanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
@@ -842,6 +843,22 @@ export default function DashboardPage() {
               accountHash={account.accountHash}
               onChanged={() => fetchAccounts(true)}
             />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Plan Archive — browse historical daily plans ───────────────────── */}
+        <CollapsiblePanel
+          id="plan-archive"
+          title="Plan Archive"
+          icon={<Inbox className="w-4 h-4 text-purple-400" />}
+          accentClass="border-purple-500/40"
+          tintClass="from-purple-500/[0.04]"
+          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+          glowColor="purple"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <PlanArchivePanel />
           </div>
         </CollapsiblePanel>
 

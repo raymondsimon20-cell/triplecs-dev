@@ -53,6 +53,13 @@ export interface TradeHistoryEntry {
   message?:    string;
   rationale?:  string;
   aiMode?:     string;
+  /**
+   * Cost basis per share for SELLs (USD/share). Captured at order placement
+   * time from Schwab's position record. Used to compute realized P&L and to
+   * decide whether a recent sell falls under wash-sale (loss) or not (gain).
+   * Undefined for BUYs and when the position couldn't be located.
+   */
+  costBasisPerShare?: number;
 }
 
 async function saveTradeHistory(entries: TradeHistoryEntry[]) {
@@ -113,9 +120,16 @@ export async function POST(req: Request) {
   if (!tokens) return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
 
   try {
-    const [equityResults, optionResults] = await Promise.all([
+    // Capture cost-basis snapshot BEFORE placing orders. Done in parallel
+    // with the orders themselves to keep latency flat; SELLs use the basis
+    // from the pre-order state which is exactly the basis being closed out.
+    const { fetchCostBasisMap, costBasisFor } = await import('@/lib/schwab/cost-basis');
+    const [equityResults, optionResults, costBasisMap] = await Promise.all([
       orders.length     > 0 ? placeOrders(tokens, accountHash, orders)             : Promise.resolve([]),
       optionOrders.length > 0 ? placeOptionOrders(tokens, accountHash, optionOrders) : Promise.resolve([]),
+      orders.some((o) => o.instruction === 'SELL')
+        ? fetchCostBasisMap(tokens, accountHash)
+        : Promise.resolve({} as Record<string, number>),
     ]);
 
     const now = Date.now();
@@ -133,6 +147,7 @@ export async function POST(req: Request) {
       message:     r.message,
       rationale:   orders[i].rationale,
       aiMode:      orders[i].aiMode,
+      costBasisPerShare: costBasisFor(orders[i].instruction, r.symbol, costBasisMap),
     }));
 
     const optionHistory: TradeHistoryEntry[] = optionResults.map((r, i) => ({
