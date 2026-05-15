@@ -25,6 +25,7 @@ import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
 import { TradeInbox } from '@/components/TradeInbox';
 import { DailyPlanPanel } from '@/components/DailyPlanPanel';
+import { ReplayPanel } from '@/components/ReplayPanel';
 import { PerformanceReviewPanel } from '@/components/PerformanceReviewPanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
@@ -841,6 +842,22 @@ export default function DashboardPage() {
               accountHash={account.accountHash}
               onChanged={() => fetchAccounts(true)}
             />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Engine Replay — backtest rule fires over stored snapshots ─────── */}
+        <CollapsiblePanel
+          id="replay"
+          title="Engine Replay"
+          icon={<Brain className="w-4 h-4 text-purple-400" />}
+          accentClass="border-purple-500/40"
+          tintClass="from-purple-500/[0.04]"
+          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+          glowColor="purple"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <ReplayPanel />
           </div>
         </CollapsiblePanel>
 

@@ -457,6 +457,9 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
               rationale:   finalPlan.rationale,
               aiMode:      mode,
               violations:  [],
+              // Option trades always require human approval — auto-execute
+              // does not touch contracts regardless of order size.
+              tier:        'approval',
             }]),
             new Promise((_, reject) => setTimeout(() => reject(new Error('staging timeout')), 5000)),
           ]);

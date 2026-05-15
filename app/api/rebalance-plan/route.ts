@@ -545,9 +545,22 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
         }
 
         try {
+          // Tier classification for rebalance-plan staging:
+          //   - SELL on a high-maintenance income position to relieve pillar drift
+          //     is well-bounded → tier 'auto' if the order value is small.
+          //   - Anything else (new positions, large trades, anything blocked) →
+          //     tier 'approval' so the user reviews it explicitly.
+          const TIER_AUTO_MAX_DOLLARS = 2_000;
+          const classifyTier = (orderValue: number, hasViolations: boolean): 'auto' | 'approval' => {
+            if (hasViolations) return 'approval';
+            if (orderValue <= TIER_AUTO_MAX_DOLLARS) return 'auto';
+            return 'approval';
+          };
+
           const stageInputs: AppendInput[] = [
             ...finalOrders.map((o) => {
               const violations = allowed.find((a) => a.symbol === o.symbol && a.instruction === o.instruction)?.violations ?? [];
+              const orderValue = o.shares * (o.currentPrice ?? 0);
               return {
                 source:      'rebalance' as const,
                 symbol:      o.symbol,
@@ -559,6 +572,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
                 rationale:   o.rationale,
                 aiMode:      'rebalance_plan',
                 violations,
+                tier:        classifyTier(orderValue, violations.length > 0),
               };
             }),
             ...blockedOrders.map((o) => ({
@@ -572,6 +586,8 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
               rationale:   o.rationale,
               aiMode:      'rebalance_plan',
               violations:  o.violations,
+              // Blocked items always require human review.
+              tier:        'approval' as const,
             })),
           ];
           if (stageInputs.length > 0) {

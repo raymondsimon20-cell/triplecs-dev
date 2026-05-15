@@ -19,7 +19,7 @@ import { getStore } from '@netlify/blobs';
 import { createClient, getAccountNumbers } from '../schwab/client';
 import { getTokens }      from '../storage';
 import { getDailyCloses } from '../prices/historical';
-import { appendInbox, type AppendInput } from '../inbox';
+import { appendInbox, listInbox, type AppendInput, type InboxItem } from '../inbox';
 
 import { loadSignalState, saveSignalState } from './state';
 import {
@@ -31,10 +31,13 @@ import {
   type TradeSignal,
 } from './engine';
 import { autoExecute, type AutoExecuteResult } from './auto-execute';
-import type { InboxItem } from '../inbox';
+import { loadAutoConfig } from './auto-config';
+import { buildDailyPlan, classifySignalTier } from './daily-plan';
+import { buildDigest, shouldSend } from './daily-digest';
+import { archiveDailyPlan } from './plan-archive';
+import { sendNotification } from '../notifications';
 import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
-import { classifySignalTier } from './daily-plan';
 import type { TradeHistoryEntry } from '@/app/api/orders/route';
 
 const CACHE_STORE = 'signal-engine-cache';
@@ -337,6 +340,36 @@ export async function runSignalsAndStage(): Promise<RunResult> {
   }
 
   await saveCache(result);
+
+  // Fire-and-forget daily digest. Never fails the run — notification failures
+  // are logged and swallowed so a missing API key or network blip doesn't
+  // poison auto-execute. Only sends when there's something actionable
+  // (tier-2 pending, executed trades, or breaker tripped).
+  try {
+    const [inbox, autoConfig] = await Promise.all([
+      listInbox({ status: 'pending' }),
+      loadAutoConfig(),
+    ]);
+    const plan = buildDailyPlan(result, inbox, autoConfig);
+    // Archive every run so the user can review history later.
+    try { await archiveDailyPlan(plan); }
+    catch (err) { console.warn('[signals/run] plan archive failed:', err); }
+
+    if (shouldSend({ plan, autoExecute: autoExecuteResult })) {
+      const dashboardUrl = process.env.URL || process.env.DEPLOY_URL || undefined;
+      const digest = buildDigest({
+        plan,
+        autoExecute: autoExecuteResult,
+        dashboardUrl: dashboardUrl ? `${dashboardUrl}/dashboard` : undefined,
+      });
+      const sent = await sendNotification(digest);
+      if (!sent.delivered) {
+        console.warn('[signals/run] digest not delivered:', sent.reason);
+      }
+    }
+  } catch (err) {
+    console.warn('[signals/run] daily digest failed:', err);
+  }
 
   return {
     result,
