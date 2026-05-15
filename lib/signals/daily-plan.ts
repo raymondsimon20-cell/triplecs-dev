@@ -52,6 +52,8 @@ export interface DailyPlan {
   generatedAt:       string;
   totalValue:        number;
   marginUtilizationPct: number;
+  /** AFW (Available For Withdrawal) in dollars — Schwab's margin headroom. */
+  afwDollars?:       number;
   inDefenseMode:     boolean;
   killSwitchActive:  boolean;
   autoExecuteMode:   AutoConfig['mode'];
@@ -177,6 +179,15 @@ export function buildDailyPlan(
     actions[tier].push(action);
   }
 
+  // Pull AFW from the most recent signal that carries it (any rule that fired
+  // with AFW data attaches `afwBefore` / `afwDollars` in its data payload).
+  // Falls back to undefined for plans built before AFW capture shipped.
+  let afwFromSignals: number | undefined;
+  for (const s of engineResult.signals) {
+    const v = (s.data?.afwBefore ?? s.data?.afwDollars) as number | undefined;
+    if (typeof v === 'number') { afwFromSignals = v; break; }
+  }
+
   return {
     generatedAt:          engineResult.generatedAt,
     totalValue:           engineResult.valuation.totalValue,
@@ -184,6 +195,7 @@ export function buildDailyPlan(
       engineResult.valuation.totalValue > 0
         ? (engineResult.valuation.marginDebt / engineResult.valuation.totalValue) * 100
         : 0,
+    afwDollars:           afwFromSignals,
     inDefenseMode:        engineResult.inDefenseMode,
     killSwitchActive:     engineResult.killSwitchActive,
     autoExecuteMode:      autoConfig.mode,

@@ -315,6 +315,9 @@ export function SettingsPanel() {
                 <h3 className="text-xs font-semibold text-[#7c82a0] uppercase tracking-wider">
                   Margin Settings
                 </h3>
+                <div className="text-[10px] text-[#4a5070]">
+                  Schwab caps utilization at 50% — values above 50 are clamped server-side.
+                </div>
                 <SliderRow
                   label="Interest rate"
                   description="Your Schwab margin rate"
@@ -325,17 +328,31 @@ export function SettingsPanel() {
                 />
                 <SliderRow
                   label="Warn at"
-                  description="Orange alert level"
+                  description="UI warning level (informational only)"
                   value={draft.marginWarnPct}
-                  min={10} max={40}
+                  min={10} max={50}
                   onChange={(v) => set('marginWarnPct', v)}
                 />
                 <SliderRow
-                  label="Limit at"
-                  description="Red / reduce-now level"
+                  label="Trim fires above"
+                  description="MAINTENANCE_RANKED_TRIM fires past this"
                   value={draft.marginLimitPct}
-                  min={20} max={60}
+                  min={20} max={50}
                   onChange={(v) => set('marginLimitPct', v)}
+                />
+                <SliderRow
+                  label="Trim target"
+                  description="Trim aims to bring margin back here"
+                  value={draft.marginTrimTargetPct}
+                  min={15} max={50}
+                  onChange={(v) => set('marginTrimTargetPct', v)}
+                />
+                <SliderRow
+                  label="New-buy ceiling"
+                  description="PILLAR_FILL stops proposing new positions above this"
+                  value={draft.marginNewBuyCeilingPct}
+                  min={20} max={50}
+                  onChange={(v) => set('marginNewBuyCeilingPct', v)}
                 />
               </section>
 

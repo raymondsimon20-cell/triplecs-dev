@@ -95,8 +95,11 @@ export async function POST(req: Request) {
       });
     }
 
-    // Seed the simulated portfolio from the first snapshot — same positions
-    // and cash as the actual portfolio at t=0.
+    // Seed the simulated portfolio from the first snapshot — same positions,
+    // cash, AND margin debt as the actual portfolio at t=0. Modeling margin
+    // honestly is essential for an AFW-aware strategy: ignoring marginDebt
+    // would underestimate leverage and silently let the sim deploy capital
+    // it doesn't have.
     const first = realChronological[0];
     const simPositions = new Map<string, SimulatedPosition>();
     for (const p of first.positions ?? []) {
@@ -104,12 +107,12 @@ export async function POST(req: Request) {
       const pricePerShare = p.marketValue / p.shares;
       simPositions.set(p.symbol, { shares: p.shares, costBasis: pricePerShare });
     }
-    let simCash = Math.max(
-      0,
-      first.equity -
-        (first.positions ?? []).reduce((s, p) => s + (p.marketValue || 0), 0) +
-        Math.abs(first.marginBalance ?? 0),
+    const holdingsAtStart = (first.positions ?? []).reduce(
+      (s, p) => s + (p.marketValue || 0), 0,
     );
+    // cash = equity - positions + marginDebt (rearrange equity = pos + cash − margin)
+    let simCash       = Math.max(0, first.equity - holdingsAtStart + Math.abs(first.marginBalance ?? 0));
+    let simMarginDebt = Math.abs(first.marginBalance ?? 0);
 
     // Build SPY history once so the engine sees realistic context.
     const spyByDate: Array<{ date: string; spy: number }> = realChronological
@@ -149,6 +152,8 @@ export async function POST(req: Request) {
         const px = prices[sym];
         if (px && pos.shares > 0) v += px * pos.shares;
       }
+      // Total value is gross of margin — equity is total minus margin debt.
+      // valueSimulated returns total (matches how the engine valuation works).
       return v;
     };
 
@@ -181,10 +186,18 @@ export async function POST(req: Request) {
         .slice(-25);
 
       const totalSim = valueSimulated(prices);
+      // AFW estimate during simulation: equity minus an assumed 50% Reg-T
+      // maintenance requirement on positions. Coarse but matches Schwab's
+      // headroom math closely enough for sim purposes. Falls back to 0
+      // (no headroom) if totals look wrong.
+      const positionsValue = totalSim - simCash;
+      const equityForSim   = totalSim - simMarginDebt;
+      const simAfwDollars  = Math.max(0, equityForSim - positionsValue * 0.5);
+
       const inputs: EngineInputs = {
         positions:  enginePositions,
         cash:       simCash,
-        marginDebt: 0,  // simulation doesn't model margin debt path
+        marginDebt: simMarginDebt,
         prices,
         spyHistory,
         vix:        20,
@@ -195,8 +208,14 @@ export async function POST(req: Request) {
           incomePct:      strategy.incomePct,
           hedgePct:       strategy.hedgePct,
         },
+        marginThresholds: {
+          trimAbovePct:     strategy.marginLimitPct,
+          trimTargetPct:    strategy.marginTrimTargetPct,
+          newBuyCeilingPct: strategy.marginNewBuyCeilingPct,
+        },
         recentSells30d:       [],
-        buyingPowerAvailable: simCash,
+        buyingPowerAvailable: Math.max(simCash, simAfwDollars),
+        afwDollars:           simAfwDollars > 0 ? simAfwDollars : undefined,
       };
 
       const r = runSignalEngine(inputs);
@@ -214,8 +233,19 @@ export async function POST(req: Request) {
         const existing = simPositions.get(sig.ticker);
         if (sig.direction === 'BUY') {
           const cost = shares * px;
-          if (cost > simCash) continue;   // skip if we can't fund it
-          simCash -= cost;
+          // Fund the buy from cash first; if cash runs out, borrow on margin.
+          // This mirrors how Schwab settles: cash account first, margin account
+          // takes the overflow up to the maintenance ceiling. The simulation
+          // would CONTINUE borrowing past the 50% Schwab cap (since we don't
+          // model the broker rejection) — that's a known limit of the sim.
+          if (cost <= simCash) {
+            simCash -= cost;
+          } else {
+            const cashUsed   = simCash;
+            const borrowed   = cost - cashUsed;
+            simCash         = 0;
+            simMarginDebt  += borrowed;
+          }
           if (existing) {
             const newShares = existing.shares + shares;
             const newBasis  = ((existing.shares * existing.costBasis) + cost) / newShares;
@@ -226,12 +256,20 @@ export async function POST(req: Request) {
           symbolOriginRule.set(sig.ticker, sig.rule);
           recordAttr(sig.rule, 'buys');
         } else {
-          // SELL: trim shares; realize per-share (px - costBasis) × sold shares
+          // SELL: trim shares; realize per-share (px - costBasis) × sold shares.
+          // Proceeds pay down margin first (mirrors how Schwab applies SELL
+          // proceeds when margin debt is outstanding), then build up cash.
           if (!existing || existing.shares <= 0) continue;
           const sellShares = Math.min(shares, existing.shares);
           const proceeds   = sellShares * px;
           const realized   = (px - existing.costBasis) * sellShares;
-          simCash += proceeds;
+          if (simMarginDebt > 0) {
+            const paydown = Math.min(simMarginDebt, proceeds);
+            simMarginDebt -= paydown;
+            simCash       += proceeds - paydown;
+          } else {
+            simCash += proceeds;
+          }
           // Attribute realized P&L to the rule that originally bought it
           // (falls back to the SELL rule if we lost track).
           const attrRule = symbolOriginRule.get(sig.ticker) ?? sig.rule;
@@ -278,8 +316,11 @@ export async function POST(req: Request) {
       attribution,
       caveats: [
         'Fills happen at snapshot close — no intraday slippage or spread cost.',
-        'Margin interest and tax drag are NOT modeled.',
+        'Margin debt IS modeled (seeded from first snapshot, paid down by SELL proceeds, borrowed on BUYs that overrun cash). Margin INTEREST expense is not modeled.',
+        'AFW is estimated as `equity − 0.5 × positionsValue` during the sim (Reg-T proxy). The live engine uses Schwab\'s authoritative availableFunds; the sim approximates.',
+        'Schwab\'s 50% margin ceiling is NOT enforced in the simulation — the sim can borrow past the cap. Live trading would be rejected at that point.',
         'Dividends and distributions are ignored — biases income-heavy strategies down.',
+        'Tax drag is not modeled.',
         'Wash-sale tracking is off (recentSells30d=[]) — PILLAR_FILL may re-buy more aggressively than in production.',
         'Fund metadata is sourced from the current canonical table — historical reclassifications are not preserved.',
       ],

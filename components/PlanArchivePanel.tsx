@@ -29,6 +29,8 @@ interface DailyPlan {
   generatedAt:          string;
   totalValue:           number;
   marginUtilizationPct: number;
+  /** AFW (Available For Withdrawal) — Schwab margin headroom in USD. */
+  afwDollars?:          number;
   inDefenseMode:        boolean;
   killSwitchActive:     boolean;
   autoExecuteMode:      string;
@@ -160,6 +162,9 @@ export function PlanArchivePanel() {
                   Portfolio <strong className="text-white">{fmt$(plan.totalValue)}</strong>
                   {' · '}
                   Margin <strong className="text-white">{plan.marginUtilizationPct.toFixed(1)}%</strong>
+                  {typeof plan.afwDollars === 'number' && (
+                    <> · AFW <strong className="text-white">{fmt$(plan.afwDollars)}</strong></>
+                  )}
                   {' · '}
                   Mode <code className="bg-[#0f1117] px-1 rounded">{plan.autoExecuteMode}</code>
                 </div>

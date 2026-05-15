@@ -108,6 +108,13 @@ export interface PortfolioSnapshot {
   }>;
   /** SPY closing price on the snapshot date — used as benchmark for alpha calc. */
   spyClose?: number;
+  /**
+   * AFW (Available For Withdrawal) dollars at snapshot time. Schwab's
+   * margin-headroom metric. Optional so historical snapshots written before
+   * AFW capture shipped continue to deserialize. Enables future backtest /
+   * replay paths to gate AFW-aware rules against true headroom.
+   */
+  afwDollars?: number;
   /** True when the snapshot was reconstructed by the backfill routine, not captured live. */
   synthetic?: boolean;
 }

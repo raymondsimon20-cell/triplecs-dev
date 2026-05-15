@@ -374,7 +374,12 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
       newBuyCeilingPct: strategy.marginNewBuyCeilingPct,
     },
     recentSells30d,
-    buyingPowerAvailable: Math.max(0, portfolio.cash),
+    // Buying power = AFW when available (true headroom net of maintenance
+    // requirements). Falls back to cash when AFW is missing — strictly more
+    // conservative since cash ≤ AFW for a margin account.
+    buyingPowerAvailable: portfolio.afwDollars > 0
+      ? portfolio.afwDollars
+      : Math.max(0, portfolio.cash),
     // AFW from Schwab: lets AFW_TRIGGER gate against true margin headroom
     // rather than just deploying blindly. Falls back to undefined if the
     // broker didn't return availableFunds (rare).

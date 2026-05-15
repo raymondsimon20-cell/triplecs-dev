@@ -282,6 +282,12 @@ export const CONFIG = {
    * be firing first to relieve margin pressure, not new buys that add to it.
    */
   PILLAR_FILL_MAX_MARGIN_PCT: 0.35,
+  /**
+   * AFW-dollar floor for PILLAR_FILL. When afwDollars is available, prefer
+   * this absolute check over the ratio gate — it's more honest math. If AFW
+   * headroom is below this, no new positions proposed regardless of pillar gap.
+   */
+  PILLAR_FILL_MIN_AFW_DOLLARS: 5_000,
 } as const;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -732,6 +738,7 @@ function evalMaintenanceRankedTrim(
   inDefense:        boolean,
   killSwitchActive: boolean,
   thresholds:       MarginThresholds | undefined,
+  afwDollars:       number | undefined,
   makeSignal:       MakeSignal,
 ): TradeSignal[] {
   if (inDefense || killSwitchActive) return [];
@@ -744,8 +751,13 @@ function evalMaintenanceRankedTrim(
   const marginUtilPct = valuation.marginDebt / valuation.totalValue;
   if (marginUtilPct <= trimAbove) return [];
 
-  // Equity we need to free to bring utilization to TARGET. Each dollar sold
-  // frees `maintenancePct%` of equity, so we need to sell more than the gap.
+  // Equity to free to bring utilization to TARGET. Each dollar sold at
+  // maintenance% M frees M/100 of equity (the maintenance requirement
+  // against that dollar disappears, returning to AFW).
+  //
+  // When afwDollars is known we report it in the signal data so the digest
+  // can show "AFW will rise from $X to $Y" — but the SIZING math is
+  // algebraically identical either way: `(util − target) × totalValue`.
   const requiredEquityFreed = (marginUtilPct - trimTarget) * valuation.totalValue;
 
   // Eligible candidates: income (and "other") positions only. Triples/hedges/
@@ -795,6 +807,12 @@ function evalMaintenanceRankedTrim(
       candidateMaintSource:   top.pos.maintenancePctSource ?? 'default',
       requiredEquityFreed,
       cappedAtHalfPosition:   rawTrim > maxTrim,
+      // AFW (Available For Withdrawal) context — present when Schwab data
+      // was fed through. Tells the digest how much headroom this trim frees.
+      afwBefore:              afwDollars,
+      afwAfterEstimate:       typeof afwDollars === 'number'
+        ? afwDollars + (trimDollars * top.maint / 100)
+        : undefined,
     },
   ));
 
@@ -856,6 +874,7 @@ function evalPillarFill(
   valuation:           PortfolioValuation,
   pillarTargets:       PillarTargets | undefined,
   marginThresholds:    MarginThresholds | undefined,
+  afwDollars:          number | undefined,
   buyingPowerAvail:    number,
   inDefense:           boolean,
   killSwitchActive:    boolean,
@@ -866,9 +885,13 @@ function evalPillarFill(
   if (inDefense || killSwitchActive) return [];
   if (buyingPowerAvail < 100)        return [];
 
-  // Hard margin ceiling for the rule itself. Above this, the user should be
-  // trimming not buying — MAINTENANCE_RANKED_TRIM handles that side. Runtime
-  // threshold from strategy store wins over CONFIG default when provided.
+  // Two-part margin gate:
+  //  (a) AFW-dollar floor — when we know real headroom, refuse to propose any
+  //      new position if AFW is below the floor. Most honest check.
+  //  (b) Utilization-ratio ceiling — fallback when AFW data is absent.
+  if (typeof afwDollars === 'number' && afwDollars < CONFIG.PILLAR_FILL_MIN_AFW_DOLLARS) {
+    return [];
+  }
   const newBuyCeiling = marginThresholds
     ? marginThresholds.newBuyCeilingPct / 100
     : CONFIG.PILLAR_FILL_MAX_MARGIN_PCT;
@@ -1052,24 +1075,29 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
 
   // 9. (Phase 2) Maintenance-ranked margin-relief trim. Gated by inDefense and
   //    killSwitchActive — both are dominant when active. Thresholds come from
-  //    the strategy store when provided; otherwise CONFIG defaults.
+  //    the strategy store when provided; otherwise CONFIG defaults. AFW is
+  //    used for digest context (sizing math is algebraically the same).
   all.push(...evalMaintenanceRankedTrim(
     inputs.positions,
     valuation,
     inDefense,
     nextState.killSwitch.active,
     inputs.marginThresholds,
+    inputs.afwDollars,
     makeSignal,
   ));
 
   // 10. (Phase 2) Pillar-fill new-position suggestions. Requires pillarTargets;
-  //     gated by inDefense and killSwitchActive. Income pillar only.
+  //     gated by inDefense and killSwitchActive. Income pillar only. Hard
+  //     AFW-dollar floor when AFW data available — no new buys when headroom
+  //     is too low, regardless of utilization ratio.
   const buyingPowerAvail = inputs.buyingPowerAvailable ?? Math.max(0, inputs.cash);
   all.push(...evalPillarFill(
     inputs.positions,
     valuation,
     inputs.pillarTargets,
     inputs.marginThresholds,
+    inputs.afwDollars,
     buyingPowerAvail,
     inDefense,
     nextState.killSwitch.active,

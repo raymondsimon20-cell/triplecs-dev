@@ -20,6 +20,8 @@ export interface FetchedAccountState {
   equity: number;
   marginBalance: number;       // absolute value (positive number)
   marginUtilizationPct: number;
+  /** AFW (Available For Withdrawal) dollars — Schwab's margin headroom. */
+  afwDollars: number;
   pillarSummary: ReturnType<typeof summarizeByPillar>;
   positions: EnrichedPosition[];
 }
@@ -49,6 +51,8 @@ export async function fetchAccountState(accountHash: string): Promise<FetchedAcc
   const pillarSummary = summarizeByPillar(enriched, totalValue);
   const equity        = acct.currentBalances.equity;
   const marginBalance = Math.abs(acct.currentBalances.marginBalance ?? 0);
+  // AFW = Available For Withdrawal. Schwab returns this as availableFunds.
+  const afwDollars    = acct.currentBalances.availableFunds ?? 0;
 
   return {
     accountNumber: acct.accountNumber,
@@ -56,6 +60,7 @@ export async function fetchAccountState(accountHash: string): Promise<FetchedAcc
     equity,
     marginBalance,
     marginUtilizationPct: totalValue > 0 ? (marginBalance / totalValue) * 100 : 0,
+    afwDollars,
     pillarSummary,
     positions: enriched,
   };
@@ -76,6 +81,8 @@ export function buildSnapshot(
   const totalValue    = states.reduce((s, x) => s + x.totalValue, 0);
   const equity        = states.reduce((s, x) => s + x.equity, 0);
   const marginBalance = states.reduce((s, x) => s + x.marginBalance, 0);
+  // Sum AFW across accounts — single dollar capacity number for the engine.
+  const afwDollars    = states.reduce((s, x) => s + (x.afwDollars ?? 0), 0);
 
   // Aggregate pillar summaries by absolute dollars, then re-derive percentages
   const pillarMap = new Map<string, number>();
@@ -115,6 +122,7 @@ export function buildSnapshot(
     marginUtilizationPct: totalValue > 0 ? (marginBalance / totalValue) * 100 : 0,
     pillarSummary,
     positions,
+    afwDollars,
     ...(extras.spyClose !== undefined ? { spyClose: extras.spyClose } : {}),
     ...(extras.synthetic ? { synthetic: true } : {}),
   };

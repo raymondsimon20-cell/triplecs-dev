@@ -97,7 +97,10 @@ export function buildDigest(input: DigestInput): FormattedDigest {
 
   // ─── Plain text body ────────────────────────────────────────────────────────
   const lines: string[] = [];
-  lines.push(`Portfolio: ${fmt$(plan.totalValue)} · Margin ${plan.marginUtilizationPct.toFixed(1)}%`);
+  const afwSuffix = typeof plan.afwDollars === 'number'
+    ? ` · AFW ${fmt$(plan.afwDollars)}`
+    : '';
+  lines.push(`Portfolio: ${fmt$(plan.totalValue)} · Margin ${plan.marginUtilizationPct.toFixed(1)}%${afwSuffix}`);
   lines.push(`Mode: ${plan.autoExecuteMode}`);
   if (cronHealth?.isStale)   lines.push(`⚠ Engine health: ${cronHealth.reason}`);
   if (plan.inDefenseMode)    lines.push('⚠ Defense mode is active — new buys suppressed.');
@@ -224,6 +227,7 @@ function renderHtml(plan: DailyPlan, autoExecute: AutoExecuteResult | undefined,
   <p style="color: #666; margin: 0 0 16px; font-size: 14px;">
     Portfolio <strong>${fmt$(plan.totalValue)}</strong>
     · Margin <strong>${plan.marginUtilizationPct.toFixed(1)}%</strong>
+    ${typeof plan.afwDollars === 'number' ? `· AFW <strong>${fmt$(plan.afwDollars)}</strong>` : ''}
     · Mode <code style="background: #f3f4f6; padding: 2px 6px; border-radius: 3px;">${plan.autoExecuteMode}</code>
   </p>
   ${gateWarning}

@@ -146,12 +146,27 @@ INCOME PILLAR ALLOCATION TARGET: user-configurable (Vol 7 default: 65% of total 
 MARGIN RULES
 ════════════════════════════════════════════════════════
 
-THRESHOLDS (Vol 7):
-  • 0–20%   : HEALTHY — normal operating range
-  • 20–30%  : WARNING — monitor closely, consider reducing exposure
-  • 30–50%  : CRITICAL — reduce immediately; sell highest-maintenance positions first
-  • >50%    : EMERGENCY MAX — immediate action required; deleverage completely if needed
-  • 100%    : NEVER — prohibited under all circumstances
+MARGIN THRESHOLDS ARE USER-CONFIGURABLE. Always use the values from
+strategy_config in the portfolio snapshot — not the Vol-7 defaults below.
+The user may run at a different leverage range than Vol-7 describes.
+
+THRESHOLDS (read from strategy_config):
+  - Below marginWarnPct                         : HEALTHY — normal operating range
+  - marginWarnPct to marginLimitPct             : WARNING — monitor closely
+  - marginLimitPct to marginNewBuyCeilingPct    : ELEVATED — engine trims, suppresses new buys
+  - Above marginNewBuyCeilingPct                : CRITICAL — reduce immediately; sell highest-maint first
+  - >=50%                                       : SCHWAB HARD CAP — orders fail at the broker
+
+VOL-7 DEFAULT THRESHOLDS (use only when strategy_config is missing):
+  - 0-20% HEALTHY, 20-30% WARN, 30-50% CRITICAL, >50% SCHWAB HARD CAP
+
+AFW (AVAILABLE FOR WITHDRAWAL):
+  - AFW is Schwab's margin-headroom dollar figure — equity minus the
+    maintenance requirement. As you take on margin, AFW shrinks. AFW hits
+    zero at the 50% Schwab ceiling.
+  - The portfolio snapshot includes afw_dollars when available. Prefer AFW
+    dollars over utilization percent for any deploy/trim sizing rationale.
+  - The AFW_TRIGGER engine rule deploys AFW (not cash) into Triples on dips.
 
 CARDINAL RULE: Spend ONLY from dividends/distributions. NEVER spend from principal.
   • Selling principal positions to fund lifestyle destroys the income engine.
@@ -727,12 +742,16 @@ CORNERSTONE RULES:
   • CLM and CRF ONLY belong in the Cornerstone pillar — never count them as Income.
   • NEVER hold fewer than 3 shares of CLM or CRF (DRIP floor).
 
-MARGIN THRESHOLDS:
-  • 0–20%  : HEALTHY
-  • 20–30% : WARNING — monitor
-  • 30–50% : CRITICAL — reduce immediately
-  • >50%   : EMERGENCY — deleverage now
-  • 100%   : PROHIBITED
+MARGIN THRESHOLDS (read from strategy_config — Vol-7 defaults shown):
+  - Below marginWarnPct                       : HEALTHY
+  - marginWarnPct to marginLimitPct           : WARNING — engine watches
+  - marginLimitPct to marginNewBuyCeilingPct  : ELEVATED — engine starts trimming
+  - Above marginNewBuyCeilingPct              : CRITICAL — no new buys, sell maint
+  - >=50%                                     : SCHWAB HARD CAP — orders fail
+
+AFW (Available For Withdrawal): Schwab's headroom dollar metric in the snapshot's
+  afw_dollars field. Cite AFW in dollar terms when available — more honest than
+  utilization percentages.
 
 CONCENTRATION LIMIT: No single position > 20% of portfolio.
 

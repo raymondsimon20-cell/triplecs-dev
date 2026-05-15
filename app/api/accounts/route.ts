@@ -148,6 +148,9 @@ export async function GET(req: Request) {
           equity: acct.currentBalances.equity,
           marginBalance: marginBal,
           marginUtilizationPct: totalValue > 0 ? (marginBal / totalValue) * 100 : 0,
+          // AFW = Available For Withdrawal. Captured in snapshots so backtest
+          // / replay paths can eventually gate on true historical headroom.
+          afwDollars: acct.currentBalances.availableFunds ?? 0,
           pillarSummary,
           positions: enrichedPositions,
         }])).catch((e) => console.warn('[snapshot] save failed:', e));
