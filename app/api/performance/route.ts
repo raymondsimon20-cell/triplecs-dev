@@ -2,15 +2,22 @@
  * GET /api/performance
  *
  * Returns the consolidated performance dataset:
- *   - daily snapshots (real + synthetic)
+ *   - daily snapshots (real + synthetic — synthetic are returned for chart
+ *     display only and excluded from all return calculations below)
  *   - cash-flow events
- *   - TWR / CAGR / period returns
- *   - pillar attribution
- *   - SPY alpha
+ *   - TWR / CAGR / period returns (real snapshots only)
+ *   - pillar attribution (real snapshots only)
+ *   - SPY alpha (real snapshots only)
  *   - 40% target progress
  *
  * Pure read endpoint — math is all pure functions, no Schwab calls. Backed
  * by the daily snapshot capture so it stays fast.
+ *
+ * Why synthetic snapshots are excluded from math: the backfill walks back
+ * from current positions and prices them at historical closes, but it can't
+ * reconstruct cash balance, margin, sold positions, or realized gains. The
+ * resulting `equity` field is positions-only, which would silently mix with
+ * real `equity` values (positions + cash) and corrupt TWR.
  */
 
 import { NextResponse } from 'next/server';
@@ -41,10 +48,13 @@ export async function GET(req: Request) {
 
     // Snapshots come back newest-first; performance functions expect chronological
     const chronological = [...snapshots].reverse();
+    // Math runs on real snapshots only — synthetic backfill has positions-only
+    // equity and would skew TWR. Chart still gets the full series (faded).
+    const realOnly = chronological.filter((s) => !s.synthetic);
 
-    const twr         = computeTWR(chronological, cashFlows);
-    const attribution = computePillarAttribution(chronological);
-    const alpha       = computeAlphaVsSPY(chronological, cashFlows);
+    const twr         = computeTWR(realOnly, cashFlows);
+    const attribution = computePillarAttribution(realOnly);
+    const alpha       = computeAlphaVsSPY(realOnly, cashFlows);
     const progress    = twr ? computeProgressVs40(twr.cagrPct, twr.daysCovered) : null;
 
     return NextResponse.json({
@@ -56,7 +66,8 @@ export async function GET(req: Request) {
       progress,
       meta: {
         snapshotCount: chronological.length,
-        syntheticCount: chronological.filter((s) => s.synthetic).length,
+        realCount: realOnly.length,
+        syntheticCount: chronological.length - realOnly.length,
         cashFlowCount: cashFlows.length,
       },
     });

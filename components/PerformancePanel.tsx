@@ -10,6 +10,7 @@ import { motion } from 'framer-motion';
 interface SnapshotPoint {
   savedAt: number;
   totalValue: number;
+  equity: number;
   spyClose?: number;
   synthetic?: boolean;
 }
@@ -20,7 +21,7 @@ interface PerfPayload {
   attribution: Array<{ pillar: string; contributionPp: number; returnPct: number; avgWeightPct: number }> | null;
   alpha: { portfolioReturnPct: number; spyReturnPct: number; alphaPp: number } | null;
   progress: { actualCAGR: number; targetCAGR: number; gapPp: number; paceLabel: 'ahead' | 'on-pace' | 'behind'; requiredForwardCAGR: number | null } | null;
-  meta: { snapshotCount: number; syntheticCount: number; cashFlowCount: number };
+  meta: { snapshotCount: number; realCount: number; syntheticCount: number; cashFlowCount: number };
 }
 
 interface ChartPoint {
@@ -141,8 +142,13 @@ export function PerformancePanel() {
   // Build the chart series. TWR/SPY are computed cumulatively from each snapshot.
   // (For a simple visualization we use snapshot-relative simple return — the
   // panel's pace gauge already shows the cash-flow-adjusted TWR for the headline.)
+  //
+  // We use `equity` (positions + cash − margin debt) so cash dividends and
+  // interest are reflected. This matches the basis used by computeTWR.
+  // Synthetic snapshots have equity == totalValue (positions only); they
+  // remain on the chart faded but won't perfectly stitch with real points.
   const sorted = [...data.snapshots].sort((a, b) => a.savedAt - b.savedAt);
-  const baseValue = sorted[0].totalValue;
+  const baseValue = sorted[0].equity;
   const baseSpy = sorted.find((s) => typeof s.spyClose === 'number' && s.spyClose! > 0)?.spyClose;
   const startTime = sorted[0].savedAt;
 
@@ -151,7 +157,7 @@ export function PerformancePanel() {
     const targetCum = (Math.pow(1.40, days / 365) - 1) * 100;
     return {
       date: new Date(s.savedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      twrPct: baseValue > 0 ? (s.totalValue / baseValue - 1) * 100 : 0,
+      twrPct: baseValue > 0 ? (s.equity / baseValue - 1) * 100 : 0,
       spyPct: baseSpy && s.spyClose ? (s.spyClose / baseSpy - 1) * 100 : null,
       targetPct: targetCum,
       synthetic: Boolean(s.synthetic),

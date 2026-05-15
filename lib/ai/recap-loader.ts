@@ -68,9 +68,13 @@ export async function loadPaceContext(): Promise<PaceContext | null> {
       getSnapshotHistory(365),
       getCashFlows(),
     ]);
-    if (snapshots.length < 2) return null;
+    // Mirror /api/performance: synthetic snapshots have positions-only equity
+    // and would corrupt the TWR. Compute pace from real snapshots only so the
+    // AI's pace context agrees with the Performance panel headline.
+    const realSnapshots = snapshots.filter((s) => !s.synthetic);
+    if (realSnapshots.length < 2) return null;
 
-    const twr = computeTWR(snapshots, cashFlows);
+    const twr = computeTWR(realSnapshots, cashFlows);
     if (!twr) return null;
 
     const progress = computeProgressVs40(twr.cagrPct, twr.daysCovered);
