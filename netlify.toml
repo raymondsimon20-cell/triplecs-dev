@@ -5,6 +5,17 @@
 [build.environment]
   NODE_VERSION = "20"
 
+  # ── Secrets scanner config ────────────────────────────────────────────────
+  # Netlify scans the build output for env-var VALUES that look like leaked
+  # secrets. Some of our env vars hold non-secret values (sender address, user
+  # agent, redirect URI) that legitimately end up in the build — those would
+  # otherwise trip the scanner. Real secrets (API keys, client secrets,
+  # session signing key) stay scanned.
+  #
+  # Add to this list, don't remove from it, if a new build fails the scan and
+  # you confirm the value isn't sensitive.
+  SECRETS_SCAN_OMIT_KEYS = "NOTIFY_FROM_EMAIL,NOTIFY_TO_EMAIL,NEXT_PUBLIC_APP_URL,SCHWAB_REDIRECT_URI,SEC_USER_AGENT,NODE_VERSION"
+
 [[plugins]]
   package = "@netlify/plugin-nextjs"
 
