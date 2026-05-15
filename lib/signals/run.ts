@@ -131,16 +131,21 @@ async function fetchAggregatedPortfolio(): Promise<{
   const accountNums = await getAccountNumbers(tokens);
   if (accountNums.length === 0) throw new Error('No Schwab accounts');
 
+  // Pair the wrapper with its hashValue so positions can be tagged with the
+  // account they live in (needed for multi-account routing in auto-execute).
   const wrappers = await Promise.all(
-    accountNums.map(({ hashValue }) => client.getAccount(hashValue)),
+    accountNums.map(async ({ hashValue }) => ({
+      hashValue,
+      wrapper: await client.getAccount(hashValue),
+    })),
   );
 
   const positions: EnginePosition[] = [];
   let cash       = 0;
   let marginDebt = 0;
 
-  for (const w of wrappers) {
-    const acct = w.securitiesAccount;
+  for (const { hashValue, wrapper } of wrappers) {
+    const acct = wrapper.securitiesAccount;
     cash       += acct.currentBalances.cashBalance ?? 0;
     marginDebt += Math.abs(acct.currentBalances.marginBalance ?? 0);
 
@@ -156,6 +161,7 @@ async function fetchAggregatedPortfolio(): Promise<{
         symbol:      p.instrument.symbol,
         shares:      p.longQuantity,
         marketValue: p.marketValue ?? 0,
+        accountHash: hashValue,
         ...(meta
           ? {
               pillar:               meta.pillar,
@@ -237,11 +243,25 @@ async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
 // ─── Signal → inbox mapper ───────────────────────────────────────────────────
 
 /** Convert engine signals into inbox AppendInputs. Skips composite-ticker and
- *  zero-sized signals; computes shares from sizeDollars × current price. */
+ *  zero-sized signals; computes shares from sizeDollars × current price.
+ *
+ *  Multi-account routing:
+ *   - SELLs target the account that actually holds the position.
+ *   - BUYs target the primary (first) account.
+ *  Accounts not yet known at signal time (rare race) fall through with no
+ *  accountHash; auto-execute then uses its own default-first-account logic.
+ */
 function signalsToInbox(
   signals: TradeSignal[],
   prices: Record<string, number>,
+  positions: EnginePosition[],
+  primaryAccountHash: string | undefined,
 ): AppendInput[] {
+  const positionAccount = new Map<string, string>();
+  for (const p of positions) {
+    if (p.accountHash) positionAccount.set(p.symbol, p.accountHash);
+  }
+
   const out: AppendInput[] = [];
   for (const s of signals) {
     if (s.direction !== 'BUY' && s.direction !== 'SELL') continue;
@@ -253,6 +273,10 @@ function signalsToInbox(
 
     const shares = Math.floor(s.sizeDollars / price);
     if (shares <= 0) continue;
+
+    const accountHash =
+      s.direction === 'SELL' ? positionAccount.get(s.ticker) ?? primaryAccountHash :
+                               primaryAccountHash;
 
     out.push({
       source:      'signal-engine',
@@ -269,6 +293,7 @@ function signalsToInbox(
       // when running unattended. Without this, mode=auto would fire tier-2
       // items too (the safety gap that motivated this).
       tier:        classifySignalTier(s),
+      accountHash,
     });
   }
   return out;
@@ -341,7 +366,13 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
 
   // Stage actionable trades with a hard timeout so a slow inbox doesn't hang
   // the whole run. Staging failures are non-fatal.
-  const stageInputs = signalsToInbox(result.actionableTrades, portfolio.prices);
+  const primaryAccountHash = portfolio.positions[0]?.accountHash;
+  const stageInputs = signalsToInbox(
+    result.actionableTrades,
+    portfolio.prices,
+    portfolio.positions,
+    primaryAccountHash,
+  );
   let staged = 0;
   let freshItems: InboxItem[] = [];
   if (stageInputs.length > 0) {

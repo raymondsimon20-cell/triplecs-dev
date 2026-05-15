@@ -27,6 +27,7 @@ import { TradeInbox } from '@/components/TradeInbox';
 import { DailyPlanPanel } from '@/components/DailyPlanPanel';
 import { ReplayPanel } from '@/components/ReplayPanel';
 import { PlanArchivePanel } from '@/components/PlanArchivePanel';
+import { RollbackPanel } from '@/components/RollbackPanel';
 import { PerformanceReviewPanel } from '@/components/PerformanceReviewPanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
@@ -843,6 +844,22 @@ export default function DashboardPage() {
               accountHash={account.accountHash}
               onChanged={() => fetchAccounts(true)}
             />
+          </div>
+        </CollapsiblePanel>
+
+        {/* ── Rollback — undo recent autopilot trades within 24h ─────────────── */}
+        <CollapsiblePanel
+          id="rollback"
+          title="Rollback"
+          icon={<Inbox className="w-4 h-4 text-red-400" />}
+          accentClass="border-red-500/40"
+          tintClass="from-red-500/[0.04]"
+          iconContainerClass="bg-red-500/10 border border-red-500/20"
+          glowColor="red"
+          defaultOpen={false}
+        >
+          <div className="pt-4">
+            <RollbackPanel />
           </div>
         </CollapsiblePanel>
 

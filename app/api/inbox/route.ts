@@ -75,6 +75,7 @@ export async function GET(req: Request) {
     executed:  items.filter((it) => it.status === 'executed').length,
     dismissed: items.filter((it) => it.status === 'dismissed').length,
     expired:   items.filter((it) => it.status === 'expired').length,
+    failed:    items.filter((it) => it.status === 'failed').length,
   };
   return NextResponse.json({ items, counts });
 }

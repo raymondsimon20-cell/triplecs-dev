@@ -69,6 +69,14 @@ export interface InboxItem {
    * historical inbox items that were staged before tiering shipped.
    */
   tier?:        'auto' | 'approval' | 'alert';
+
+  /**
+   * Schwab account hash this order should target. Optional — when omitted the
+   * auto-execute path falls back to the first account. SELLs routed by the
+   * signal engine carry the holding's account hash so the order goes against
+   * the right position.
+   */
+  accountHash?: string;
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -127,6 +135,8 @@ export interface AppendInput {
   violations?: GuardrailViolation[];
   /** Phase 5 tier metadata — see InboxItem.tier. */
   tier?:       'auto' | 'approval' | 'alert';
+  /** Schwab account hash — see InboxItem.accountHash. */
+  accountHash?: string;
   /** Override default 24h TTL for this item (rare). */
   ttlMs?:      number;
 }
@@ -218,6 +228,7 @@ export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
       violations,
       blocked:     violations.some((v) => v.severity === 'block'),
       tier:        input.tier,
+      accountHash: input.accountHash,
     };
     fresh.push(item);
     // Update cross-source map so duplicates within the same batch are also caught.

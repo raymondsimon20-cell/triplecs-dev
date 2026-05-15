@@ -84,6 +84,13 @@ export interface EnginePosition {
   family?:               FundFamily;
   maintenancePct?:       number;
   maintenancePctSource?: 'explicit' | 'default';
+  /**
+   * Schwab account hash this position lives in. Populated by the aggregator
+   * when iterating multi-account state. Auto-execute uses this for SELLs so
+   * the inverse order targets the right account. Optional for backward
+   * compatibility with replay-from-snapshot.
+   */
+  accountHash?: string;
 }
 
 /**

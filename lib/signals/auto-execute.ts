@@ -369,39 +369,75 @@ export async function autoExecute(
     };
   }
 
-  // Use the first account — single-account user setup. Multi-account
-  // dispatch would route each order to the right account; not handled yet.
+  // Multi-account routing: group allowed items by their target accountHash.
+  // Items without one fall through to the primary (first) account. Each
+  // bucket gets its own placeOrders call and cost-basis fetch so SELLs land
+  // against the account that actually holds the position.
   const accountNums = await getAccountNumbers(tokens);
-  const accountHash = accountNums[0]?.hashValue;
-  if (!accountHash) {
+  const primaryAccountHash = accountNums[0]?.hashValue;
+  if (!primaryAccountHash) {
     return {
       mode: 'auto',
       considered: stagedItems.length,
       executed: 0,
       rejected: [...rejectedSummaries, ...allowed.map((it) => ({
-        symbol: it.symbol, instruction: it.instruction, reason: 'No account hash',
+        symbol: it.symbol, instruction: it.instruction, reason: 'No Schwab accounts available',
       }))],
       breakerTripped: false, breakerReason: '',
       dryRun: false,
     };
   }
 
-  const orderRequests: OrderRequest[] = allowed.map((it) => ({
-    symbol:      it.symbol,
-    instruction: it.instruction as 'BUY' | 'SELL',
-    quantity:    it.quantity,
-    orderType:   it.orderType,
-    price:       it.price,
-  }));
+  const allowedByAccount = new Map<string, InboxItem[]>();
+  for (const it of allowed) {
+    const hash = it.accountHash ?? primaryAccountHash;
+    if (!allowedByAccount.has(hash)) allowedByAccount.set(hash, []);
+    allowedByAccount.get(hash)!.push(it);
+  }
 
-  // Capture cost basis for SELLs in parallel with placing the orders. The
-  // map reflects pre-order state which is exactly what gets closed out.
   const { fetchCostBasisMap, costBasisFor } = await import('../schwab/cost-basis');
-  const hasSell = allowed.some((it) => it.instruction === 'SELL');
-  const [results, costBasisMap] = await Promise.all([
-    placeOrders(tokens, accountHash, orderRequests),
-    hasSell ? fetchCostBasisMap(tokens, accountHash) : Promise.resolve({} as Record<string, number>),
-  ]);
+
+  // Per-account placement, but parallelized across accounts so total wall
+  // time stays close to single-account latency.
+  type PerAccountResult = {
+    accountHash: string;
+    items:       InboxItem[];
+    results:     Awaited<ReturnType<typeof placeOrders>>;
+    costBasisMap: Record<string, number>;
+  };
+  const perAccountResults: PerAccountResult[] = await Promise.all(
+    Array.from(allowedByAccount.entries()).map(async ([hash, items]) => {
+      const reqs: OrderRequest[] = items.map((it) => ({
+        symbol:      it.symbol,
+        instruction: it.instruction as 'BUY' | 'SELL',
+        quantity:    it.quantity,
+        orderType:   it.orderType,
+        price:       it.price,
+      }));
+      const hasSell = items.some((it) => it.instruction === 'SELL');
+      const [results, costBasisMap] = await Promise.all([
+        placeOrders(tokens, hash, reqs),
+        hasSell ? fetchCostBasisMap(tokens, hash) : Promise.resolve({} as Record<string, number>),
+      ]);
+      return { accountHash: hash, items, results, costBasisMap };
+    }),
+  );
+
+  // Reassemble a flat results list aligned with the original `allowed` order
+  // so downstream code (history entries, markExecuted/markFailed loops) keeps
+  // working without re-keying.
+  const itemIdToResult = new Map<string, { r: PerAccountResult['results'][number]; basis: number | undefined }>();
+  for (const par of perAccountResults) {
+    par.results.forEach((r, i) => {
+      const item = par.items[i];
+      itemIdToResult.set(item.id, {
+        r,
+        basis: costBasisFor(item.instruction, r.symbol, par.costBasisMap),
+      });
+    });
+  }
+  const results = allowed.map((it) => itemIdToResult.get(it.id)!.r);
+  const basisForItem = (i: number) => itemIdToResult.get(allowed[i].id)?.basis;
 
   const now = Date.now();
   const historyEntries: TradeHistoryEntry[] = results.map((r, i) => ({
@@ -417,7 +453,7 @@ export async function autoExecute(
     message:     r.message,
     rationale:   allowed[i].rationale,
     aiMode:      'signal_engine_auto',
-    costBasisPerShare: costBasisFor(allowed[i].instruction, r.symbol, costBasisMap),
+    costBasisPerShare: basisForItem(i),
   }));
   await saveTradeHistoryEntries(historyEntries);
 

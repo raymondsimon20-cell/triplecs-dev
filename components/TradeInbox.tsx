@@ -28,7 +28,8 @@ interface InboxItem {
   createdAt:    number;
   expiresAt:    number;
   source:       'rebalance' | 'option' | 'ai-rec' | 'signal-engine';
-  status:       'pending' | 'executed' | 'dismissed' | 'expired';
+  status:       'pending' | 'executed' | 'dismissed' | 'expired' | 'failed';
+  tier?:        'auto' | 'approval' | 'alert';
   symbol:       string;
   instruction:  string;
   quantity:     number;
@@ -51,6 +52,7 @@ interface InboxPayload {
   counts: {
     pending: number; blocked: number;
     executed: number; dismissed: number; expired: number;
+    failed?: number;
   };
 }
 
@@ -109,7 +111,8 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const r = await fetch('/api/inbox?status=pending');
+      // Pull pending + failed so the user can see autopilot rejects and retry.
+      const r = await fetch('/api/inbox?status=pending,failed');
       const d: InboxPayload | { error: string } = await r.json();
       if ('error' in d) setError(d.error);
       else { setData(d); setError(null); }
@@ -318,6 +321,7 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
           {items.map((item) => {
             const busy = busyIds.has(item.id);
             const blockedItem = item.blocked;
+            const failedItem = item.status === 'failed';
             const warnings = item.violations.filter((v) => v.severity === 'warn');
             const blocks   = item.violations.filter((v) => v.severity === 'block');
             const ageMs = Date.now() - item.createdAt;
@@ -330,7 +334,9 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
                 transition={{ duration: 0.15 }}
                 className={[
                   'card-glass border rounded-lg p-3',
-                  blockedItem ? 'border-red-500/40' : 'border-[#252840]',
+                  failedItem ? 'border-red-500/60 bg-red-500/[0.03]' :
+                  blockedItem ? 'border-red-500/40' :
+                  'border-[#252840]',
                 ].join(' ')}
               >
                 <div className="flex items-start justify-between gap-3">
@@ -356,6 +362,19 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
                         {fmtAge(ageMs)} ago
                       </span>
                     </div>
+
+                    {/* Failed-status banner — surfaces Schwab's error message
+                        for autopilot-rejected orders. Loud by design: a failed
+                        item won't auto-retry on the next cron. */}
+                    {failedItem && (
+                      <div className="mt-1.5 flex items-start gap-1.5 text-[10px] text-red-300 bg-red-500/10 border border-red-500/30 rounded px-2 py-1">
+                        <XCircle className="w-3 h-3 flex-shrink-0 mt-0.5" />
+                        <div className="flex-1">
+                          <span className="font-semibold">Schwab rejected:</span>{' '}
+                          {item.message ?? 'unknown error'}
+                        </div>
+                      </div>
+                    )}
 
                     {/* Rationale */}
                     {item.rationale && (
@@ -385,21 +404,48 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
 
                   {/* Actions */}
                   <div className="flex flex-col gap-1.5 flex-shrink-0">
-                    <button
-                      onClick={() => execute(item)}
-                      disabled={busy}
-                      className={[
-                        'text-[11px] px-2.5 py-1 rounded border flex items-center gap-1 transition-colors font-semibold',
-                        blockedItem
-                          ? 'border-red-500/30 text-red-300 hover:bg-red-500/15'
-                          : 'border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/15 bg-emerald-500/5',
-                        'disabled:opacity-50 disabled:cursor-not-allowed',
-                      ].join(' ')}
-                      title={blockedItem ? 'Override required — click and confirm' : 'Submit this order to Schwab'}
-                    >
-                      {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
-                      {blockedItem ? 'Override' : 'Approve'}
-                    </button>
+                    {failedItem ? (
+                      // For failed items, "Retry" flips the inbox status back
+                      // to 'pending' (the next manual approve/auto cycle picks
+                      // it up). User can still dismiss to drop it permanently.
+                      <button
+                        onClick={async () => {
+                          markBusy(item.id, true);
+                          try {
+                            await fetch('/api/inbox', {
+                              method: 'PATCH',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ id: item.id, status: 'pending' }),
+                            });
+                            await load();
+                          } finally {
+                            markBusy(item.id, false);
+                          }
+                        }}
+                        disabled={busy}
+                        className="text-[11px] px-2.5 py-1 rounded border border-amber-500/30 text-amber-300 hover:bg-amber-500/15 bg-amber-500/5 flex items-center gap-1 transition-colors font-semibold disabled:opacity-50"
+                        title="Re-mark this item as pending — it will be eligible for the next approval / auto-execute pass"
+                      >
+                        {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+                        Retry
+                      </button>
+                    ) : (
+                      <button
+                        onClick={() => execute(item)}
+                        disabled={busy}
+                        className={[
+                          'text-[11px] px-2.5 py-1 rounded border flex items-center gap-1 transition-colors font-semibold',
+                          blockedItem
+                            ? 'border-red-500/30 text-red-300 hover:bg-red-500/15'
+                            : 'border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/15 bg-emerald-500/5',
+                          'disabled:opacity-50 disabled:cursor-not-allowed',
+                        ].join(' ')}
+                        title={blockedItem ? 'Override required — click and confirm' : 'Submit this order to Schwab'}
+                      >
+                        {busy ? <Loader2 className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
+                        {blockedItem ? 'Override' : 'Approve'}
+                      </button>
+                    )}
                     <button
                       onClick={() => dismiss(item)}
                       disabled={busy}
