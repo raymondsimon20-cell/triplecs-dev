@@ -354,6 +354,14 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
       incomePct:      strategy.incomePct,
       hedgePct:       strategy.hedgePct,
     },
+    // Runtime margin thresholds from strategy store. When the user updates
+    // their preferred leverage range, these flow into the engine on the next
+    // cron without a redeploy.
+    marginThresholds: {
+      trimAbovePct:     strategy.marginLimitPct,
+      trimTargetPct:    strategy.marginTrimTargetPct,
+      newBuyCeilingPct: strategy.marginNewBuyCeilingPct,
+    },
     recentSells30d,
     buyingPowerAvailable: Math.max(0, portfolio.cash),
   };

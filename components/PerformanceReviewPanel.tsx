@@ -411,15 +411,17 @@ function Metric({ label, value, positive }: { label: string; value: string; posi
 
 function labelFor(k: keyof StrategyTargets): string {
   const map: Record<keyof StrategyTargets, string> = {
-    triplesPct:     'Triples %',
-    cornerstonePct: 'Cornerstone %',
-    incomePct:      'Income %',
-    hedgePct:       'Hedge %',
-    marginLimitPct: 'Margin limit %',
-    marginWarnPct:  'Margin warn %',
-    familyCapPct:   'Family cap %',
-    fireNumber:     'FIRE target $',
-    marginRatePct:  'Margin rate %',
+    triplesPct:             'Triples %',
+    cornerstonePct:         'Cornerstone %',
+    incomePct:              'Income %',
+    hedgePct:               'Hedge %',
+    marginLimitPct:         'Margin limit %',
+    marginWarnPct:          'Margin warn %',
+    marginTrimTargetPct:    'Margin trim target %',
+    marginNewBuyCeilingPct: 'Margin new-buy ceiling %',
+    familyCapPct:           'Family cap %',
+    fireNumber:             'FIRE target $',
+    marginRatePct:          'Margin rate %',
   };
   return map[k];
 }

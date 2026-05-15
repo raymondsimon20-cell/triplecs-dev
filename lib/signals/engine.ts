@@ -118,6 +118,23 @@ export interface RecentSell {
   isLoss:    boolean;
 }
 
+/**
+ * Runtime margin thresholds — when provided, override the hard-coded CONFIG
+ * defaults. Lets the operator dial the engine to their preferred leverage
+ * range without redeploying. Sourced from StrategyTargets (lib/utils.ts) by
+ * the run module.
+ *
+ * All values are percentages (e.g. 30 = 30%, not 0.30).
+ */
+export interface MarginThresholds {
+  /** Above this, MAINTENANCE_RANKED_TRIM starts firing. */
+  trimAbovePct:     number;
+  /** Trim is sized to bring utilization back to roughly this level. */
+  trimTargetPct:    number;
+  /** PILLAR_FILL refuses to propose NEW positions above this. */
+  newBuyCeilingPct: number;
+}
+
 export interface EngineInputs {
   /** Positions from Schwab. Caller filters out options upstream. */
   positions:   EnginePosition[];
@@ -140,6 +157,12 @@ export interface EngineInputs {
 
   /** User-configured pillar targets. PILLAR_FILL is skipped when missing. */
   pillarTargets?: PillarTargets;
+  /**
+   * Runtime margin thresholds. When omitted, engine falls back to CONFIG.
+   * Provide these from the strategy store so operators can tune leverage
+   * targets via /api/strategy without redeploying.
+   */
+  marginThresholds?: MarginThresholds;
   /** Recent sells inside wash-sale window. PILLAR_FILL avoids re-buying these. */
   recentSells30d?: RecentSell[];
   /**
@@ -647,18 +670,22 @@ function evalMaintenanceRankedTrim(
   valuation:        PortfolioValuation,
   inDefense:        boolean,
   killSwitchActive: boolean,
+  thresholds:       MarginThresholds | undefined,
   makeSignal:       MakeSignal,
 ): TradeSignal[] {
   if (inDefense || killSwitchActive) return [];
   if (valuation.totalValue <= 0)     return [];
 
+  // Prefer runtime thresholds from strategy store; fall back to CONFIG defaults.
+  const trimAbove  = thresholds ? thresholds.trimAbovePct  / 100 : CONFIG.MARGIN_TRIM_THRESHOLD;
+  const trimTarget = thresholds ? thresholds.trimTargetPct / 100 : CONFIG.MARGIN_TRIM_TARGET;
+
   const marginUtilPct = valuation.marginDebt / valuation.totalValue;
-  if (marginUtilPct <= CONFIG.MARGIN_TRIM_THRESHOLD) return [];
+  if (marginUtilPct <= trimAbove) return [];
 
   // Equity we need to free to bring utilization to TARGET. Each dollar sold
   // frees `maintenancePct%` of equity, so we need to sell more than the gap.
-  const requiredEquityFreed =
-    (marginUtilPct - CONFIG.MARGIN_TRIM_TARGET) * valuation.totalValue;
+  const requiredEquityFreed = (marginUtilPct - trimTarget) * valuation.totalValue;
 
   // Eligible candidates: income (and "other") positions only. Triples/hedges/
   // cornerstone owned by other rules. Skip positions without maintenance data
@@ -695,12 +722,13 @@ function evalMaintenanceRankedTrim(
     'SELL',
     trimDollars,
     priority,
-    `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(CONFIG.MARGIN_TRIM_THRESHOLD * 100).toFixed(0)}%. ` +
+    `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(trimAbove * 100).toFixed(0)}%. ` +
       `${top.pos.symbol} has highest maintenance (${top.maint}%) among holdings — selling $${Math.round(trimDollars)} ` +
-      `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(CONFIG.MARGIN_TRIM_TARGET * 100).toFixed(0)}%).`,
+      `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(trimTarget * 100).toFixed(0)}%).`,
     {
       marginUtilPct,
-      targetMarginPct:        CONFIG.MARGIN_TRIM_TARGET,
+      trimAboveThresholdPct:  trimAbove,
+      targetMarginPct:        trimTarget,
       candidateSymbol:        top.pos.symbol,
       candidateMaintPct:      top.maint,
       candidateMaintSource:   top.pos.maintenancePctSource ?? 'default',
@@ -766,6 +794,7 @@ function evalPillarFill(
   positions:           EnginePosition[],
   valuation:           PortfolioValuation,
   pillarTargets:       PillarTargets | undefined,
+  marginThresholds:    MarginThresholds | undefined,
   buyingPowerAvail:    number,
   inDefense:           boolean,
   killSwitchActive:    boolean,
@@ -777,10 +806,14 @@ function evalPillarFill(
   if (buyingPowerAvail < 100)        return [];
 
   // Hard margin ceiling for the rule itself. Above this, the user should be
-  // trimming not buying — MAINTENANCE_RANKED_TRIM handles that side.
+  // trimming not buying — MAINTENANCE_RANKED_TRIM handles that side. Runtime
+  // threshold from strategy store wins over CONFIG default when provided.
+  const newBuyCeiling = marginThresholds
+    ? marginThresholds.newBuyCeilingPct / 100
+    : CONFIG.PILLAR_FILL_MAX_MARGIN_PCT;
   const utilFirstCheck =
     valuation.totalValue > 0 ? valuation.marginDebt / valuation.totalValue : 0;
-  if (utilFirstCheck > CONFIG.PILLAR_FILL_MAX_MARGIN_PCT) return [];
+  if (utilFirstCheck > newBuyCeiling) return [];
 
   // Aggregate dollars by pillar and by family.
   const dollarsByPillar: Record<string, number> = {
@@ -956,9 +989,15 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
   all.push(...evalFreedomRatio(inputs.state.freedomRatioHistory, makeSignal));
 
   // 9. (Phase 2) Maintenance-ranked margin-relief trim. Gated by inDefense and
-  //    killSwitchActive — both are dominant when active.
+  //    killSwitchActive — both are dominant when active. Thresholds come from
+  //    the strategy store when provided; otherwise CONFIG defaults.
   all.push(...evalMaintenanceRankedTrim(
-    inputs.positions, valuation, inDefense, nextState.killSwitch.active, makeSignal,
+    inputs.positions,
+    valuation,
+    inDefense,
+    nextState.killSwitch.active,
+    inputs.marginThresholds,
+    makeSignal,
   ));
 
   // 10. (Phase 2) Pillar-fill new-position suggestions. Requires pillarTargets;
@@ -968,6 +1007,7 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
     inputs.positions,
     valuation,
     inputs.pillarTargets,
+    inputs.marginThresholds,
     buyingPowerAvail,
     inDefense,
     nextState.killSwitch.active,

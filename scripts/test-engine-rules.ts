@@ -210,6 +210,60 @@ test('respects PILLAR_FILL_MAX_CANDIDATES cap (≤ 2 proposals per pillar)', () 
   assert.ok(fires.length <= 2, `expected ≤2 candidates, got ${fires.length}`);
 });
 
+test('runtime marginThresholds override CONFIG defaults', () => {
+  // At 35% utilization, default CONFIG would fire MAINTENANCE_RANKED_TRIM
+  // (threshold 30%). With runtime marginThresholds.trimAbovePct = 47, the
+  // same portfolio should NOT fire (35% is below 47%).
+  // Margin debt = $35k, totalValue = $100k → utilization = 35%.
+  const positionsAndCash = {
+    positions: [enrichedPosition('OXLC', 5000, 40_000), enrichedPosition('SCHD', 250, 20_000)],
+    cash:      40_000,    // total $100k
+    marginDebt: 35_000,
+  };
+
+  const defaultResult = runSignalEngine(baseInputs(positionsAndCash));
+  assert.ok(
+    findSignals(defaultResult.signals, 'MAINTENANCE_RANKED_TRIM').length > 0,
+    'expected default (30%) threshold to fire at 35% utilization',
+  );
+
+  const runtimeResult = runSignalEngine(baseInputs({
+    ...positionsAndCash,
+    marginThresholds: { trimAbovePct: 47, trimTargetPct: 42, newBuyCeilingPct: 47 },
+  }));
+  assert.equal(
+    findSignals(runtimeResult.signals, 'MAINTENANCE_RANKED_TRIM').length, 0,
+    'expected runtime threshold (47%) to suppress firing at 35% utilization',
+  );
+});
+
+test('PILLAR_FILL respects runtime newBuyCeilingPct', () => {
+  // Underweight income (50% of $70k vs 65% target → 15pp gap), 30% utilization.
+  //   positions $35k + cash $35k = totalValue $70k
+  //   income% = 35/70 = 50% (gap 15pp ✓)
+  //   marginDebt $21k → util ≈ 30%
+  const inputs = {
+    positions: [enrichedPosition('SCHD', 437, 35_000)],
+    cash:       35_000,
+    marginDebt: 21_000,
+  };
+
+  const defaultResult = runSignalEngine(baseInputs(inputs));
+  assert.ok(
+    findSignals(defaultResult.signals, 'PILLAR_FILL').length > 0,
+    'expected default ceiling (35%) to allow PILLAR_FILL at 30% utilization',
+  );
+
+  const tightenedResult = runSignalEngine(baseInputs({
+    ...inputs,
+    marginThresholds: { trimAbovePct: 30, trimTargetPct: 25, newBuyCeilingPct: 25 },
+  }));
+  assert.equal(
+    findSignals(tightenedResult.signals, 'PILLAR_FILL').length, 0,
+    'expected runtime ceiling (25%) to suppress PILLAR_FILL at 30% utilization',
+  );
+});
+
 test('individual proposal stays within PILLAR_FILL_MAX_DOLLARS = $5,000', () => {
   // Huge gap, plenty of cash — still each proposal should be capped at $5k.
   const result = runSignalEngine(baseInputs({

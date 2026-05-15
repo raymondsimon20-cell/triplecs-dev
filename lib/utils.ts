@@ -55,15 +55,41 @@ export function clamp(value: number, min: number, max: number): number {
 }
 
 /**
- * Default Triple C allocation targets (can be overridden via SettingsPanel).
+ * Default Triple C allocation targets (can be overridden via SettingsPanel
+ * or by POSTing to /api/strategy).
+ *
+ * Margin model — the engine consumes these to size when to trim and when to
+ * stop proposing new buys:
+ *
+ *   marginLimitPct           — When margin utilization exceeds this,
+ *                              MAINTENANCE_RANKED_TRIM fires. This is the
+ *                              "upper edge of comfortable" — past it, the
+ *                              engine starts asking you to come down.
+ *
+ *   marginTrimTargetPct      — Trim signals are sized to bring utilization
+ *                              back to roughly this level. Should be a few
+ *                              points below marginLimitPct to leave headroom.
+ *
+ *   marginNewBuyCeilingPct   — PILLAR_FILL refuses to propose NEW positions
+ *                              above this margin utilization. Prevents the
+ *                              engine fighting itself (proposing buys while
+ *                              another rule wants to trim).
+ *
+ *   marginWarnPct            — Informational warn level for the UI. No engine
+ *                              behavior changes; pure display.
+ *
+ * Vol-7 defaults below describe a low-leverage strategy. Higher-leverage
+ * operators (e.g. targeting 40–45%) can adjust by POSTing to /api/strategy.
  */
 export interface StrategyTargets {
   triplesPct: number;       // % of portfolio
   cornerstonePct: number;   // % of portfolio
   incomePct: number;        // % of portfolio
   hedgePct: number;         // % of portfolio
-  marginLimitPct: number;   // max margin as % of total value
-  marginWarnPct: number;    // warn threshold
+  marginLimitPct: number;          // trim fires above this
+  marginWarnPct: number;           // informational warn threshold
+  marginTrimTargetPct: number;     // trim aims to bring margin back here
+  marginNewBuyCeilingPct: number;  // PILLAR_FILL bails above this
   familyCapPct: number;     // max single fund family concentration
   fireNumber: number;       // monthly income FIRE target ($)
   marginRatePct: number;    // margin interest rate % (e.g. 7.75 for 7.75%)
@@ -76,6 +102,8 @@ export const DEFAULT_TARGETS: StrategyTargets = {
   hedgePct: 5,
   marginLimitPct: 30,
   marginWarnPct: 20,
+  marginTrimTargetPct: 25,
+  marginNewBuyCeilingPct: 35,
   familyCapPct: 20,
   fireNumber: 10000,
   marginRatePct: 7.75,
