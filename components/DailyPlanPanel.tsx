@@ -202,6 +202,43 @@ export function DailyPlanPanel() {
     }
   }
 
+  /**
+   * Bulk-approve every actionable item in a tier. Filters to BUY/SELL items
+   * that are still pending and not guardrail-blocked. PATCHes sequentially so
+   * a Schwab rate limit on the downstream order endpoint doesn't backfire.
+   */
+  async function bulkAct(tierActions: PlannedAction[], status: 'executed' | 'dismissed') {
+    const verb = status === 'executed' ? 'approve' : 'dismiss';
+    const acting = tierActions.filter(
+      (a) =>
+        a.inboxItemId &&
+        a.status === 'pending' &&
+        !a.blockedByGuardrails &&
+        (a.direction === 'BUY' || a.direction === 'SELL'),
+    );
+    if (acting.length === 0) return;
+    if (!confirm(`${verb === 'approve' ? 'Approve' : 'Dismiss'} all ${acting.length} item(s) in this tier?`)) {
+      return;
+    }
+    setBusy('__bulk__');
+    try {
+      for (const action of acting) {
+        try {
+          await fetch('/api/inbox', {
+            method:  'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ id: action.inboxItemId, status }),
+          });
+        } catch (err) {
+          console.warn('[DailyPlanPanel] bulk patch failed for', action.ticker, err);
+        }
+      }
+      await load();
+    } finally {
+      setBusy(null);
+    }
+  }
+
   if (loading) {
     return (
       <div className="h-24 flex items-center justify-center">
@@ -267,6 +304,9 @@ export function DailyPlanPanel() {
               : 'These would fire automatically if auto-execute mode were on. Currently requires approval.'
           }
           color="emerald"
+          onBulkApprove={() => bulkAct(data.actions.auto, 'executed')}
+          onBulkDismiss={() => bulkAct(data.actions.auto, 'dismissed')}
+          bulkBusy={busy === '__bulk__'}
         >
           {data.actions.auto.map((a) => (
             <ActionRow
@@ -286,6 +326,9 @@ export function DailyPlanPanel() {
           title="Tier 2 — Requires approval"
           subtitle="New positions, large trades, or anything outside the auto whitelist. Review and approve each before it executes."
           color="amber"
+          onBulkApprove={() => bulkAct(data.actions.approval, 'executed')}
+          onBulkDismiss={() => bulkAct(data.actions.approval, 'dismissed')}
+          bulkBusy={busy === '__bulk__'}
         >
           {data.actions.approval.map((a) => (
             <ActionRow
@@ -305,6 +348,9 @@ export function DailyPlanPanel() {
           title="Tier 3 — Alerts (no action)"
           subtitle="Informational signals that need your judgment, not a trade."
           color="cyan"
+          onBulkApprove={undefined}
+          onBulkDismiss={() => bulkAct(data.actions.alert, 'dismissed')}
+          bulkBusy={busy === '__bulk__'}
         >
           {data.actions.alert.map((a) => (
             <ActionRow
@@ -331,12 +377,18 @@ function Section({
   title,
   subtitle,
   color,
+  onBulkApprove,
+  onBulkDismiss,
+  bulkBusy,
   children,
 }: {
-  title:    string;
-  subtitle: string;
-  color:    'emerald' | 'amber' | 'cyan';
-  children: React.ReactNode;
+  title:         string;
+  subtitle:      string;
+  color:         'emerald' | 'amber' | 'cyan';
+  onBulkApprove?: () => void;
+  onBulkDismiss?: () => void;
+  bulkBusy?:     boolean;
+  children:      React.ReactNode;
 }) {
   const accent =
     color === 'emerald' ? 'text-emerald-400' :
@@ -344,9 +396,35 @@ function Section({
                           'text-cyan-400';
   return (
     <div className="space-y-2">
-      <div>
-        <div className={`text-xs font-semibold uppercase tracking-wider ${accent}`}>{title}</div>
-        <div className="text-[10px] text-[#4a5070] mt-0.5">{subtitle}</div>
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className={`text-xs font-semibold uppercase tracking-wider ${accent}`}>{title}</div>
+          <div className="text-[10px] text-[#4a5070] mt-0.5">{subtitle}</div>
+        </div>
+        {(onBulkApprove || onBulkDismiss) && (
+          <div className="flex items-center gap-1.5 shrink-0">
+            {onBulkApprove && (
+              <button
+                onClick={onBulkApprove}
+                disabled={bulkBusy}
+                className="text-[10px] px-2 py-1 rounded bg-emerald-500/10 border border-emerald-500/25 text-emerald-300 hover:bg-emerald-500/20 transition-colors disabled:opacity-50"
+                title="Approve every actionable item in this tier"
+              >
+                Approve all
+              </button>
+            )}
+            {onBulkDismiss && (
+              <button
+                onClick={onBulkDismiss}
+                disabled={bulkBusy}
+                className="text-[10px] px-2 py-1 rounded bg-white/[0.04] border border-[#3d4468] text-[#7c82a0] hover:bg-white/[0.08] transition-colors disabled:opacity-50"
+                title="Dismiss every item in this tier"
+              >
+                Dismiss all
+              </button>
+            )}
+          </div>
+        )}
       </div>
       <div className="space-y-2">{children}</div>
     </div>

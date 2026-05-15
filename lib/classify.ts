@@ -112,9 +112,17 @@ export const GROWTH_ANCHORS = new Set([
 
 export function classifySymbol(symbol: string): PillarType {
   const s = symbol.toUpperCase();
-  if (TRIPLES_SYMBOLS.has(s)) return 'triples';
-  if (CORNERSTONE_SYMBOLS.has(s)) return 'cornerstone';
-  if (HEDGE_SYMBOLS.has(s)) return 'hedge';
+  // Canonical metadata wins. The legacy sets below are kept only as a fallback
+  // for symbols that haven't been added to the canonical table yet (and as a
+  // mental cross-reference for the strategy). When the canonical table and the
+  // legacy sets disagree, the canonical table is authoritative — Phase 1
+  // consolidation made it the single source of truth.
+  const meta = getFundMetadata(s);
+  if (meta) return meta.pillar;
+
+  if (TRIPLES_SYMBOLS.has(s))      return 'triples';
+  if (CORNERSTONE_SYMBOLS.has(s))  return 'cornerstone';
+  if (HEDGE_SYMBOLS.has(s))        return 'hedge';
   if (INCOME_SYMBOLS.has(s) || GROWTH_ANCHORS.has(s)) return 'income';
   // Options: classify based on instrument asset type downstream
   return 'other';

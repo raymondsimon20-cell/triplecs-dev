@@ -34,6 +34,7 @@ import { autoExecute, type AutoExecuteResult } from './auto-execute';
 import type { InboxItem } from '../inbox';
 import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
+import { classifySignalTier } from './daily-plan';
 import type { TradeHistoryEntry } from '@/app/api/orders/route';
 
 const CACHE_STORE = 'signal-engine-cache';
@@ -248,6 +249,10 @@ function signalsToInbox(
       rationale:   `[${s.rule}] ${s.reason}`,
       aiMode:      'signal_engine',
       violations:  [],
+      // Tag the tier at stage time so auto-execute can filter to tier 1 only
+      // when running unattended. Without this, mode=auto would fire tier-2
+      // items too (the safety gap that motivated this).
+      tier:        classifySignalTier(s),
     });
   }
   return out;

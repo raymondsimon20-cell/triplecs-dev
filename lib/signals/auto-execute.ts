@@ -277,10 +277,32 @@ export async function autoExecute(
   // Filter inbox items to only equity BUY/SELL — auto-execute shouldn't touch
   // options or odd instructions. Stable-sort by priority is preserved (engine
   // already sorted by priority before staging).
-  const eligible = stagedItems.filter((it) =>
-    (it.instruction === 'BUY' || it.instruction === 'SELL') && it.status === 'pending',
-  );
-  const { allowed, rejected } = applyCaps(eligible, config, portfolioValue, todays);
+  //
+  // Phase 5 safety gate: when running in real-money 'auto' mode, only items
+  // tagged `tier === 'auto'` are eligible for unattended execution. Items
+  // missing a tier (legacy stage paths, third-party sources) default to
+  // requiring approval — fail-closed. 'dry-run' is permissive so the user can
+  // observe tier-2 behavior in paper trades before flipping anything live.
+  const isAutoMode  = config.mode === 'auto';
+  const tierGateRejected: Array<{ item: InboxItem; reason: string }> = [];
+  const eligible = stagedItems.filter((it) => {
+    if (it.instruction !== 'BUY' && it.instruction !== 'SELL') return false;
+    if (it.status !== 'pending') return false;
+    if (isAutoMode && it.tier !== 'auto') {
+      tierGateRejected.push({
+        item:   it,
+        reason: it.tier === 'approval'
+          ? 'Tier 2 — requires approval; not eligible for unattended execution'
+          : it.tier === 'alert'
+          ? 'Tier 3 — alert-only; not tradeable'
+          : 'No tier tag (legacy path); defaults to requiring approval',
+      });
+      return false;
+    }
+    return true;
+  });
+  const { allowed, rejected: capRejected } = applyCaps(eligible, config, portfolioValue, todays);
+  const rejected = [...tierGateRejected, ...capRejected];
 
   const rejectedSummaries = rejected.map((r) => ({
     symbol:      r.item.symbol,

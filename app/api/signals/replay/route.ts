@@ -38,7 +38,7 @@ import {
   type EnginePosition,
   type TradeSignal,
 } from '@/lib/signals/engine';
-import { loadSignalState } from '@/lib/signals/state';
+import { defaultSignalState, type SignalEngineState } from '@/lib/signals/state';
 
 export const dynamic = 'force-dynamic';
 
@@ -66,11 +66,18 @@ export async function GET(req: Request) {
   const ruleFilter = url.searchParams.get('rule')?.trim() || null;
 
   try {
-    const [snapshots, strategy, state] = await Promise.all([
+    const [snapshots, strategy] = await Promise.all([
       getSnapshotHistory(limit),
       getServerStrategyTargets(),
-      loadSignalState(),
     ]);
+
+    // Replay seeds a fresh default state and rolls it forward run-by-run, so
+    // each historical day sees gate flags consistent with what would have been
+    // persisted at that point in time. Using `loadSignalState()` (today's
+    // persisted state) for every day would replay history with future
+    // information — defense-mode flagged today would silence rules on a day
+    // when defense mode wasn't actually active.
+    let rollingState: SignalEngineState = defaultSignalState();
 
     // Replay newest-last so output reads chronologically.
     const realChronological = snapshots
@@ -149,7 +156,7 @@ export async function GET(req: Request) {
         prices,
         spyHistory,
         vix: 20,   // replay doesn't have historical VIX — AIRBAG-dependent rules degrade
-        state,
+        state: rollingState,
         pillarTargets: {
           triplesPct:     strategy.triplesPct,
           cornerstonePct: strategy.cornerstonePct,
@@ -161,6 +168,10 @@ export async function GET(req: Request) {
       };
 
       const result = runSignalEngine(inputs);
+      // Roll state forward so the next day's replay sees realistic gate flags
+      // (defenseMode entered/exited, kill switch tripped, AFW already fired
+      // this month, pivot-tracking low, etc.).
+      rollingState = result.nextState;
       const fired = result.signals
         .filter((s) => !ruleFilter || s.rule === ruleFilter)
         .map((s) => ({
@@ -196,7 +207,7 @@ export async function GET(req: Request) {
       caveats: [
         'VIX is held at 20 — AIRBAG-dependent rules may under-fire.',
         'recentSells30d is empty during replay — wash-sale filter does not engage.',
-        'Engine state (defenseMode, killSwitch) uses the current persisted state, not a replayed timeline.',
+        'Engine state is seeded with defaults and rolled forward run-by-run — gate flags reflect the replayed timeline, not today\'s persisted state.',
         'Fund metadata (pillar, family, maintenance %) is sourced from the current canonical table; historical reclassifications are not preserved.',
       ],
     });

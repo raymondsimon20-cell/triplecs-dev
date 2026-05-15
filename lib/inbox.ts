@@ -62,6 +62,13 @@ export interface InboxItem {
   violations:   GuardrailViolation[];
   /** True when at least one violation is severity 'block'. */
   blocked:      boolean;
+  /**
+   * Phase 5 autopilot tier. 'auto' items are eligible for unattended execution
+   * when auto-config.mode === 'auto'. 'approval' items always require a human.
+   * 'alert' items aren't tradeable. Optional for backward compatibility with
+   * historical inbox items that were staged before tiering shipped.
+   */
+  tier?:        'auto' | 'approval' | 'alert';
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────
@@ -118,6 +125,8 @@ export interface AppendInput {
   rationale?:  string;
   aiMode?:     string;
   violations?: GuardrailViolation[];
+  /** Phase 5 tier metadata — see InboxItem.tier. */
+  tier?:       'auto' | 'approval' | 'alert';
   /** Override default 24h TTL for this item (rare). */
   ttlMs?:      number;
 }
@@ -208,6 +217,7 @@ export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
       aiMode:      input.aiMode,
       violations,
       blocked:     violations.some((v) => v.severity === 'block'),
+      tier:        input.tier,
     };
     fresh.push(item);
     // Update cross-source map so duplicates within the same batch are also caught.

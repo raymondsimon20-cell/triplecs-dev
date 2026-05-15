@@ -96,7 +96,12 @@ const ALERT_ONLY_RULES: ReadonlySet<string> = new Set([
 /** Per-trade ceiling above which tier-1 candidates get pushed to tier 2. */
 const AUTO_TIER_MAX_DOLLARS = 2_000;
 
-function classifySignal(signal: TradeSignal): PlanTier {
+/**
+ * Pure classifier — exported so `lib/signals/run.ts` can tag inbox items with
+ * tier metadata at stage time. Auto-execute reads this back when deciding
+ * which items to fire unattended.
+ */
+export function classifySignalTier(signal: TradeSignal): PlanTier {
   if (ALERT_ONLY_RULES.has(signal.rule)) return 'alert';
   if (signal.direction === 'ALERT' || signal.direction === 'INFO') return 'alert';
   if (signal.direction !== 'BUY' && signal.direction !== 'SELL') return 'approval';
@@ -106,6 +111,9 @@ function classifySignal(signal: TradeSignal): PlanTier {
   }
   return 'approval';
 }
+
+// Internal alias retained for the rest of this module.
+const classifySignal = classifySignalTier;
 
 function findInboxMatch(
   signal: TradeSignal,

@@ -37,6 +37,45 @@ function saveTargets(t: StrategyTargets) {
   try { localStorage.setItem(STORAGE_KEY, JSON.stringify(t)); } catch { /* ignore */ }
 }
 
+/**
+ * Mirror targets to the server-side blob via /api/strategy. Fire-and-forget —
+ * the localStorage write is the source of truth for the UI; the server copy
+ * exists so the daily cron + signal engine can read what the user wants.
+ * Failures are logged but don't surface to the UI: the user's local state is
+ * already saved, and the next save retries.
+ */
+async function mirrorTargetsToServer(t: StrategyTargets): Promise<void> {
+  try {
+    await fetch('/api/strategy', {
+      method:  'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body:    JSON.stringify(t),
+      keepalive: true,
+    });
+  } catch (err) {
+    console.warn('[SettingsPanel] mirror to /api/strategy failed:', err);
+  }
+}
+
+/**
+ * Fetch the server-side strategy on mount. If the server copy is newer than
+ * localStorage (different from defaults), use it as the source of truth so
+ * cross-device + cron-side state agree with the UI.
+ */
+async function fetchServerTargets(): Promise<StrategyTargets | null> {
+  try {
+    const r = await fetch('/api/strategy', { credentials: 'include' });
+    if (!r.ok) return null;
+    const d = await r.json();
+    if (d?.targets && typeof d.targets === 'object') {
+      return { ...DEFAULT_TARGETS, ...d.targets };
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 // ─── Public hook — read targets from anywhere ─────────────────────────────────
 
 let _listeners: Array<(t: StrategyTargets) => void> = [];
@@ -49,6 +88,23 @@ export function useStrategyTargets(): StrategyTargets {
     // Sync from localStorage on mount (handles SSR)
     setTargets(loadTargets());
 
+    // Then check the server. If the server copy differs from local, merge
+    // server values forward — this catches the case where the user edited
+    // settings on another device, and avoids the engine running with stale
+    // localStorage values after a cross-device change.
+    void (async () => {
+      const server = await fetchServerTargets();
+      if (!server) return;
+      const local = loadTargets();
+      const differs = (Object.keys(server) as Array<keyof StrategyTargets>)
+        .some((k) => server[k] !== local[k]);
+      if (differs) {
+        // Server wins on conflict; broadcast updates listeners + writes localStorage.
+        broadcast(server);
+        setTargets(server);
+      }
+    })();
+
     const handler = (t: StrategyTargets) => setTargets(t);
     _listeners.push(handler);
     return () => { _listeners = _listeners.filter((l) => l !== handler); };
@@ -60,6 +116,9 @@ export function useStrategyTargets(): StrategyTargets {
 function broadcast(t: StrategyTargets) {
   _current = t;
   saveTargets(t);
+  // Mirror to server so the daily cron + signal engine see the same targets.
+  // Async + fire-and-forget; UI doesn't block on this.
+  void mirrorTargetsToServer(t);
   _listeners.forEach((l) => l(t));
 }
 
