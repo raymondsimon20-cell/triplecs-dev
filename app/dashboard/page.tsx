@@ -324,9 +324,13 @@ function TopPositionsCard({
   positions: EnrichedPosition[];
   onSeeAll: () => void;
 }) {
+  // Ranked by total unrealized return ($) descending — biggest winners on top,
+  // so the card answers "which positions are paying the rent". A position with
+  // a -$8k loss won't show even if it's a huge holding — see View all → for
+  // the full picture sortable by any column.
   const top = useMemo(() => {
     return [...positions]
-      .sort((a, b) => Math.abs(b.marketValue) - Math.abs(a.marketValue))
+      .sort((a, b) => (b.gainLoss ?? 0) - (a.gainLoss ?? 0))
       .slice(0, 5);
   }, [positions]);
 
@@ -336,6 +340,7 @@ function TopPositionsCard({
         <div className="flex items-center gap-2">
           <List className="w-4 h-4 text-[#9aa2c0]" />
           <span className="text-sm font-semibold text-white">Top positions</span>
+          <span className="text-[9px] text-[#4a5070] uppercase tracking-wider">by total return</span>
         </div>
         <button
           onClick={onSeeAll}
@@ -346,8 +351,8 @@ function TopPositionsCard({
       </div>
       <div className="space-y-0">
         {top.map((p, i) => {
-          const dayGL = p.todayGainLoss ?? 0;
-          const dayPct = p.marketValue > 0 ? (dayGL / p.marketValue) * 100 : 0;
+          const gl    = p.gainLoss ?? 0;
+          const glPct = p.gainLossPercent ?? 0;
           return (
             <div
               key={p.instrument.symbol}
@@ -359,9 +364,14 @@ function TopPositionsCard({
                 <span className="font-semibold tabular-nums truncate">{p.instrument.symbol}</span>
                 <span className="text-[10px] text-[#4a5070] tabular-nums">{p.portfolioPercent.toFixed(1)}%</span>
               </div>
-              <span className={`font-medium tabular-nums ${gainLossColor(dayGL)}`}>
-                {dayGL >= 0 ? '+' : ''}{dayPct.toFixed(2)}%
-              </span>
+              <div className="flex items-center gap-2 flex-shrink-0">
+                <span className={`font-medium tabular-nums ${gainLossColor(gl)}`}>
+                  {gl >= 0 ? '+' : ''}{fmt$(gl)}
+                </span>
+                <span className={`text-[10px] tabular-nums ${gainLossColor(gl)} opacity-70`}>
+                  {gl >= 0 ? '+' : ''}{glPct.toFixed(1)}%
+                </span>
+              </div>
             </div>
           );
         })}
