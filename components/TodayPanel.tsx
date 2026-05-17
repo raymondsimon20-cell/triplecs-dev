@@ -18,13 +18,23 @@
 import { Inbox, Sparkles } from 'lucide-react';
 import { TradeInbox } from './TradeInbox';
 
+interface AccountSummary {
+  accountHash:   string;
+  accountNumber: string;
+}
+
 interface Props {
   accountHash: string;
+  /**
+   * Linked accounts — passed through to TradeInbox so each row can show
+   * the account it'll target on approve.
+   */
+  accounts?: AccountSummary[];
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
 }
 
-export function TodayPanel({ accountHash, onChanged }: Props) {
+export function TodayPanel({ accountHash, accounts, onChanged }: Props) {
   return (
     <div className="bg-[#12151f] border border-[#1f2334] border-l-2 border-l-blue-500/60 rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#1a1e2e]">
@@ -46,7 +56,7 @@ export function TodayPanel({ accountHash, onChanged }: Props) {
       </div>
 
       <div className="p-5">
-        <TradeInbox accountHash={accountHash} onChanged={onChanged} />
+        <TradeInbox accountHash={accountHash} accounts={accounts} onChanged={onChanged} />
       </div>
     </div>
   );

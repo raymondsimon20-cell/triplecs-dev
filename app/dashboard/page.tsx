@@ -1083,6 +1083,7 @@ export default function DashboardPage() {
             ) : (
               <TodayPanel
                 accountHash={account.accountHash}
+                accounts={accounts}
                 onChanged={() => fetchAccounts(true)}
               />
             )}

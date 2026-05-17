@@ -14,8 +14,9 @@ import { useCallback, useEffect, useMemo, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Inbox, CheckCircle2, XCircle, AlertTriangle, RefreshCw,
-  ShieldAlert, Layers, Zap, Loader2, Activity,
+  ShieldAlert, Layers, Zap, Loader2, Activity, Wallet,
 } from 'lucide-react';
+import { useAccountNicknames } from './AccountSwitcher';
 
 interface GuardrailViolation {
   code:     string;
@@ -45,6 +46,13 @@ interface InboxItem {
   resolvedAt?:  number;
   orderId?:     string | null;
   message?:     string;
+  /**
+   * Schwab account hash this order targets. Set by the per-account engine
+   * loop and per-account rebalance staging. When omitted (legacy items or
+   * sources that don't tag accounts) the item falls through to the
+   * currently-selected account on approve.
+   */
+  accountHash?: string;
 }
 
 interface InboxPayload {
@@ -56,8 +64,21 @@ interface InboxPayload {
   };
 }
 
+interface AccountSummary {
+  accountHash:   string;
+  accountNumber: string;
+}
+
 interface Props {
+  /** The account that owns the dashboard view. Items WITHOUT their own
+   *  accountHash fall back to this hash on approve. */
   accountHash: string;
+  /**
+   * Linked accounts — passed by the dashboard so each row can show which
+   * account it targets. When omitted the row chips collapse to just the
+   * hash prefix.
+   */
+  accounts?:  AccountSummary[];
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
 }
@@ -102,12 +123,31 @@ function notional(item: InboxItem): number {
   return (item.price ?? 0) * item.quantity;
 }
 
-export function TradeInbox({ accountHash, onChanged }: Props) {
+export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
   const [data, setData]         = useState<InboxPayload | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [busyIds, setBusyIds]   = useState<Set<string>>(new Set());
   const [bulkBusy, setBulkBusy] = useState(false);
+  const nicknames = useAccountNicknames();
+
+  /**
+   * Resolve an inbox item's accountHash to a display label.
+   *   - Match in `accounts` → nickname (if set) or `···last4`
+   *   - Hash present but no match → `···{hash prefix}` (account was disconnected)
+   *   - No hash → `→ selected` indicating it'll route to the current header
+   *     account on approve. Useful for legacy items staged before per-account
+   *     tagging was wired up.
+   */
+  const labelForItem = useCallback((item: InboxItem): { text: string; isFallback: boolean } => {
+    if (!item.accountHash) return { text: '→ selected', isFallback: true };
+    const match = accounts.find((a) => a.accountHash === item.accountHash);
+    if (match) {
+      const nick = nicknames[match.accountHash];
+      return { text: nick && nick.trim() ? nick.trim() : `···${match.accountNumber.slice(-4)}`, isFallback: false };
+    }
+    return { text: `···${item.accountHash.slice(0, 6)}`, isFallback: false };
+  }, [accounts, nicknames]);
 
   const load = useCallback(async () => {
     try {
@@ -142,7 +182,11 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
   }
 
   async function execute(item: InboxItem) {
-    if (!accountHash) { setError('No account selected'); return; }
+    // Route to the item's own accountHash when one was stored at stage time
+    // (per-account engine, drift auto-rebalance, etc.); fall back to the
+    // header-selected account for legacy items that weren't tagged.
+    const targetHash = item.accountHash || accountHash;
+    if (!targetHash) { setError('No account selected'); return; }
     if (item.blocked) {
       const reasons = item.violations
         .filter((v) => v.severity === 'block')
@@ -158,7 +202,7 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
       const isOpt = isOption(item);
       const body = isOpt
         ? {
-            accountHash,
+            accountHash: targetHash,
             optionOrders: [{
               occSymbol:   item.occSymbol!,
               instruction: item.instruction,
@@ -169,7 +213,7 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
             }],
           }
         : {
-            accountHash,
+            accountHash: targetHash,
             orders: [{
               symbol:      item.symbol,
               instruction: item.instruction,
@@ -346,6 +390,28 @@ export function TradeInbox({ accountHash, onChanged }: Props) {
                       <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${SOURCE_TONE[item.source]}`}>
                         {SOURCE_ICON[item.source]} {SOURCE_LABEL[item.source]}
                       </span>
+                      {/* Account chip — tells the user which account this row
+                          will hit on approve. Items without an explicit
+                          accountHash get a "→ selected" fallback so the
+                          routing intent is never invisible. */}
+                      {(() => {
+                        const { text, isFallback } = labelForItem(item);
+                        return (
+                          <span
+                            className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${
+                              isFallback
+                                ? 'bg-white/[0.03] border-[#252840] text-[#7c82a0]'
+                                : 'bg-[#1a1e2e] border-[#2d3248] text-[#9aa2c0]'
+                            }`}
+                            title={item.accountHash
+                              ? `Routes to ${text}`
+                              : 'No account tagged — will route to the currently selected account on approve'}
+                          >
+                            <Wallet className="w-3 h-3" />
+                            {text}
+                          </span>
+                        );
+                      })()}
                       <span className="font-mono font-semibold text-white text-sm">
                         {item.instruction} {item.quantity} {isOption(item) ? item.occSymbol : item.symbol}
                       </span>
