@@ -122,8 +122,19 @@ export async function GET(req: Request) {
     const tokens = await getTokens();
     if (!tokens) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
-    const accountNums = await getAccountNumbers(tokens);
-    if (!accountNums.length) return NextResponse.json({ dividends: [], total: 0 });
+    const allAccountNums = await getAccountNumbers(tokens);
+    if (!allAccountNums.length) return NextResponse.json({ dividends: [], total: 0 });
+
+    // ?accountHash=… scopes to a single account; 'all'/'global'/empty returns
+    // dividends across every linked account (legacy behaviour).
+    const accountHashParam = searchParams.get('accountHash');
+    const accountHash      = accountHashParam && accountHashParam !== 'all' && accountHashParam !== 'global'
+      ? accountHashParam
+      : undefined;
+    const accountNums = accountHash
+      ? allAccountNums.filter((a) => a.hashValue === accountHash)
+      : allAccountNums;
+    if (!accountNums.length) return NextResponse.json({ dividends: [], total: 0, scope: accountHash ?? 'all' });
 
     const client = await createClient();
 

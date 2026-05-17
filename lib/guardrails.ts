@@ -294,28 +294,52 @@ export function validateBatch<T extends ProposedTrade>(
 
 // ─── Kill switch helpers ─────────────────────────────────────────────────────
 
-const PAUSE_KEY = 'pause-flag';
+const PAUSE_KEY            = 'pause-flag';                  // legacy household pause
+const PAUSE_ACCOUNT_PREFIX = 'pause-flag:account:';          // per-account pause
+
+function pauseKeyFor(accountHash?: string): string {
+  if (!accountHash || accountHash === 'all' || accountHash === 'global') return PAUSE_KEY;
+  return `${PAUSE_ACCOUNT_PREFIX}${accountHash}`;
+}
 
 /**
- * Check whether the user has tripped the global "Pause Automation" kill switch.
+ * Check whether the user has tripped the "Pause Automation" kill switch.
  * Persisted in the `system-state` blob so it survives across requests.
  *
- * Implemented as a free function rather than a class so it can be tree-shaken
- * out of bundles that don't need it.
+ * With an `accountHash`, returns true if EITHER the account-specific pause
+ * OR the global household pause is active — household pause is the
+ * "everything stop" master switch that overrides per-account state.
+ * Without an `accountHash`, returns the household pause only (legacy).
  */
-export async function isAutomationPaused(): Promise<boolean> {
+export async function isAutomationPaused(accountHash?: string): Promise<boolean> {
   const { getStore } = await import('@netlify/blobs');
   try {
-    const v = await getStore('system-state').get(PAUSE_KEY, { type: 'json' }) as { paused?: boolean } | null;
+    const store = getStore('system-state');
+    if (accountHash && accountHash !== 'all' && accountHash !== 'global') {
+      const [own, household] = await Promise.all([
+        store.get(pauseKeyFor(accountHash), { type: 'json' }) as Promise<{ paused?: boolean } | null>,
+        store.get(PAUSE_KEY,                 { type: 'json' }) as Promise<{ paused?: boolean } | null>,
+      ]);
+      return Boolean(own?.paused) || Boolean(household?.paused);
+    }
+    const v = await store.get(PAUSE_KEY, { type: 'json' }) as { paused?: boolean } | null;
     return Boolean(v?.paused);
   } catch {
     return false;
   }
 }
 
-export async function setAutomationPaused(paused: boolean): Promise<void> {
+/**
+ * Persist the pause flag. With an `accountHash`, scopes the flag to that
+ * account (does NOT touch the household master pause). Without, sets the
+ * household master pause that overrides every account.
+ */
+export async function setAutomationPaused(paused: boolean, accountHash?: string): Promise<void> {
   const { getStore } = await import('@netlify/blobs');
-  await getStore('system-state').setJSON(PAUSE_KEY, { paused, updatedAt: Date.now() });
+  await getStore('system-state').setJSON(pauseKeyFor(accountHash), {
+    paused,
+    updatedAt: Date.now(),
+  });
 }
 
 // ─── Combined automation gate (user pause + signal-engine flags) ─────────────
@@ -357,8 +381,15 @@ export interface AutomationGateState {
  * dependency — guardrails is broadly imported, signals/state is narrow.
  */
 export async function getAutomationGate(accountHash?: string): Promise<AutomationGateState> {
-  if (await isAutomationPaused()) {
-    return { paused: true, source: 'user', reason: 'Automation paused by user', since: null };
+  if (await isAutomationPaused(accountHash)) {
+    return {
+      paused: true,
+      source: 'user',
+      reason: accountHash
+        ? 'Automation paused (account or household master)'
+        : 'Automation paused by user',
+      since:  null,
+    };
   }
 
   try {

@@ -25,6 +25,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Settings, RotateCcw, Check, Trash2 } from 'lucide-react';
 import { DEFAULT_TARGETS, type StrategyTargets } from '@/lib/utils';
+import { AutoConfigSection } from './AutoConfigSection';
 
 // ─── Storage helpers ──────────────────────────────────────────────────────────
 
@@ -484,6 +485,10 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
                   Current target: ${draft.fireNumber.toLocaleString()}/mo · ${(draft.fireNumber * 12).toLocaleString()}/yr
                 </div>
               </section>
+
+              {/* Per-account / household autopilot config — independent of the
+                  strategy-targets draft above. Its own load + save lifecycle. */}
+              <AutoConfigSection accountKey={accountKey} accountLabel={accountLabel} />
             </div>
 
             <div className="flex items-center justify-between px-6 py-4 border-t border-[#2d3248]">

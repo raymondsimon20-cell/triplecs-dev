@@ -40,6 +40,7 @@ import { sendNotification } from '../notifications';
 import { runOptionScan } from './option-scan';
 import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
+import { savePerAccountSnapshot, savePortfolioSnapshot } from '../storage';
 import type { TradeHistoryEntry } from '@/app/api/orders/route';
 
 const CACHE_STORE        = 'signal-engine-cache';
@@ -596,6 +597,36 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
       // / kill switch flip per-account from here on.
       await saveSignalState(result.nextState, bucket.accountHash);
 
+      // 2026-05 — capture a per-account snapshot from the engine's run so
+      // the circuit breaker has a recent prior value to compare against on
+      // the next intraday run, even when the user never opens the dashboard
+      // (which would otherwise be the only path that writes snapshots).
+      // Fire-and-forget; storage failures don't poison the engine result.
+      savePerAccountSnapshot(bucket.accountHash, {
+        savedAt:    Date.now(),
+        totalValue: result.valuation.totalValue,
+        equity:     result.valuation.equityValue,
+        marginBalance:        result.valuation.marginDebt,
+        marginUtilizationPct: result.valuation.totalValue > 0
+          ? (result.valuation.marginDebt / result.valuation.totalValue) * 100
+          : 0,
+        afwDollars: bucket.afwDollars,
+        pillarSummary: [],   // engine result doesn't track pillarSummary
+                             // in this shape; the /api/accounts path still
+                             // writes the richer snapshot when the user
+                             // loads the dashboard.
+        positions:  bucket.positions.map((p) => ({
+          symbol:       p.symbol,
+          pillar:       p.pillar ?? 'other',
+          marketValue:  p.marketValue,
+          shares:       p.shares,
+          unrealizedGL: 0,   // not tracked by EnginePosition
+          ...(p.family            !== undefined ? { family:            p.family            } : {}),
+          ...(p.maintenancePct    !== undefined ? { maintenancePct:    p.maintenancePct    } : {}),
+          ...(p.maintenancePctSource           ? { maintenancePctSource: p.maintenancePctSource } : {}),
+        })),
+      }).catch((e) => console.warn(`[signals/run] per-account snapshot save failed for ${bucket.accountHash}:`, e));
+
       // Stage signals tagged with this account's hash (both BUY and SELL).
       const stageInputs = signalsToInbox(
         result.actionableTrades,
@@ -662,6 +693,31 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
     saveCache(result),
     ...perAccount.map((pa) => savePerAccountCache(pa.accountHash, pa.result)),
   ]);
+
+  // Household-level snapshot for the legacy `latest` blob and household
+  // performance chart. Cron-side write so the snapshot history isn't held
+  // hostage by whether the dashboard happens to be open.
+  savePortfolioSnapshot({
+    savedAt:    Date.now(),
+    totalValue: result.valuation.totalValue,
+    equity:     result.valuation.equityValue,
+    marginBalance:        result.valuation.marginDebt,
+    marginUtilizationPct: result.valuation.totalValue > 0
+      ? (result.valuation.marginDebt / result.valuation.totalValue) * 100
+      : 0,
+    afwDollars: portfolio.afwDollars,
+    pillarSummary: [],
+    positions: portfolio.positions.map((p) => ({
+      symbol:       p.symbol,
+      pillar:       p.pillar ?? 'other',
+      marketValue:  p.marketValue,
+      shares:       p.shares,
+      unrealizedGL: 0,
+      ...(p.family            !== undefined ? { family:            p.family            } : {}),
+      ...(p.maintenancePct    !== undefined ? { maintenancePct:    p.maintenancePct    } : {}),
+      ...(p.maintenancePctSource           ? { maintenancePctSource: p.maintenancePctSource } : {}),
+    })),
+  }).catch((e) => console.warn('[signals/run] household snapshot save failed:', e));
 
   // ─── Daily put autopilot scan ────────────────────────────────────────────
   // Examines open option positions: close shorts at >=75% profit, roll shorts

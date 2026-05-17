@@ -201,6 +201,18 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
 
   return (
     <div className="space-y-5">
+      {/* ── Scope chip ──────────────────────────────────────────────────────── */}
+      {accountHash && (
+        <div className="flex items-center gap-2 text-[10px]">
+          <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/30 text-blue-300 uppercase tracking-wider">
+            Account scope · ···{accountHash.slice(0, 6)}
+          </span>
+          <span className="text-[#4a5070]">
+            Performance shown reflects this account only. Switch the dashboard account or pick "All accounts" for the household roll-up.
+          </span>
+        </div>
+      )}
+
       {/* ── Pace gauge ──────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
         <motion.div

@@ -211,6 +211,17 @@ export function PerformanceReviewPanel({ currentTargets, accountHash }: Props) {
 
   return (
     <div className="space-y-5">
+      {accountHash && (
+        <div className="flex items-center gap-2 text-[10px]">
+          <span className="px-2 py-0.5 rounded bg-blue-500/10 border border-blue-500/30 text-blue-300 uppercase tracking-wider">
+            Account scope · ···{accountHash.slice(0, 6)}
+          </span>
+          <span className="text-[#4a5070]">
+            Recap + AI review reflect this account only.
+          </span>
+        </div>
+      )}
+
       {/* ── Header: window switch + AI button ─────────────────────────────── */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-1 text-xs">

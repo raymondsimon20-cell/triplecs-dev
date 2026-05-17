@@ -38,6 +38,20 @@ const STORES_AND_PREFIXES: Array<{ store: string; prefix: string }> = [
   { store: 'signal-engine-auto-config',   prefix: 'account:' },
   { store: 'signal-engine-cache',         prefix: 'latest:account:' },
   { store: 'portfolio-snapshots',         prefix: 'account:' },
+  // system-state per-account pause flags.
+  { store: 'system-state',                prefix: 'pause-flag:account:' },
+];
+
+/**
+ * Stores whose legacy `current` (unscoped) blob can be deleted once every
+ * live account has its own per-account slot. Keeps the read-fallback chain
+ * tidy and frees storage. Snapshots and trade-history have their own legacy
+ * keys we intentionally keep ('latest', 'log') because the household view
+ * still reads them.
+ */
+const LEGACY_GLOBAL_KEYS: Array<{ store: string; key: string }> = [
+  { store: 'signal-engine-state',       key: 'current' },
+  { store: 'signal-engine-auto-config', key: 'current' },
 ];
 
 /** Extract the accountHash from a blob key like `account:HASH` or
@@ -62,6 +76,11 @@ async function liveAccountHashes(): Promise<Set<string>> {
 export interface CleanupReport {
   liveAccounts: number;
   stale:        StaleHits[];
+  /**
+   * Legacy unscoped blobs whose per-account replacement exists for every
+   * live account. Safe to delete — purge will remove them.
+   */
+  legacyShakeable: Array<{ store: string; key: string }>;
 }
 
 /**
@@ -72,20 +91,23 @@ export interface CleanupReport {
 export async function scanStaleAccounts(): Promise<CleanupReport> {
   const live = await liveAccountHashes();
   const stale: StaleHits[] = [];
+  // Track which live accounts have a per-account slot in each store; used to
+  // decide whether the legacy unscoped blob is safe to delete.
+  const liveHashesByStore = new Map<string, Set<string>>();
 
   for (const { store: storeName, prefix } of STORES_AND_PREFIXES) {
     try {
       const store = getStore(storeName);
       const { blobs } = await store.list({ prefix });
-      // De-duplicate by hash so snapshots with many `day-…` entries collapse
-      // to one stale-hash bucket per stale account; the actual purge will
-      // still walk every key.
       const staleKeys = new Set<string>();
+      const livePresent = new Set<string>();
       for (const b of blobs) {
         const hash = hashFromKey(b.key, prefix);
         if (!hash) continue;
-        if (!live.has(hash)) staleKeys.add(b.key);
+        if (live.has(hash)) livePresent.add(hash);
+        else staleKeys.add(b.key);
       }
+      liveHashesByStore.set(storeName, livePresent);
       if (staleKeys.size > 0) {
         stale.push({ store: storeName, keys: Array.from(staleKeys) });
       }
@@ -94,17 +116,41 @@ export async function scanStaleAccounts(): Promise<CleanupReport> {
     }
   }
 
-  return { liveAccounts: live.size, stale };
+  // Legacy blob shake-out: a `current` key is safe to delete when every live
+  // account already has its own per-account slot AND there are live accounts
+  // at all (we never delete a legacy blob if the user disconnected
+  // everything — that would lose history).
+  const legacyShakeable: Array<{ store: string; key: string }> = [];
+  if (live.size > 0) {
+    for (const { store: storeName, key } of LEGACY_GLOBAL_KEYS) {
+      const present = liveHashesByStore.get(storeName) ?? new Set();
+      const allCovered = Array.from(live).every((h) => present.has(h));
+      if (!allCovered) continue;
+      // Also confirm the legacy blob actually exists — no point reporting
+      // a deletion that's a no-op.
+      try {
+        const exists = await getStore(storeName).get(key, { type: 'json' });
+        if (exists != null) legacyShakeable.push({ store: storeName, key });
+      } catch {
+        /* swallow */
+      }
+    }
+  }
+
+  return { liveAccounts: live.size, stale, legacyShakeable };
 }
 
 export interface PurgeReport {
-  deleted: Array<{ store: string; count: number }>;
+  deleted:       Array<{ store: string; count: number }>;
+  legacyDeleted: Array<{ store: string; key: string }>;
 }
 
 /**
- * Delete every blob keyed off a stale (no-longer-linked) accountHash. Returns
- * a per-store count of deletions. Best-effort: failures on individual keys
- * are logged but don't abort the rest of the purge.
+ * Delete every blob keyed off a stale (no-longer-linked) accountHash. Also
+ * deletes any legacy unscoped blob whose per-account replacement now covers
+ * every live account. Returns a per-store count of deletions. Best-effort:
+ * failures on individual keys are logged but don't abort the rest of the
+ * purge.
  */
 export async function purgeStaleAccounts(): Promise<PurgeReport> {
   const report = await scanStaleAccounts();
@@ -124,5 +170,16 @@ export async function purgeStaleAccounts(): Promise<PurgeReport> {
     deleted.push({ store: hit.store, count });
   }
 
-  return { deleted };
+  // Legacy shake-out: drop any unscoped blob now covered by per-account slots.
+  const legacyDeleted: Array<{ store: string; key: string }> = [];
+  for (const entry of report.legacyShakeable) {
+    try {
+      await getStore(entry.store).delete(entry.key);
+      legacyDeleted.push(entry);
+    } catch (err) {
+      console.warn(`[account-cleanup] legacy delete ${entry.store}/${entry.key} failed:`, err);
+    }
+  }
+
+  return { deleted, legacyDeleted };
 }

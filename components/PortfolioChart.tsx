@@ -44,13 +44,21 @@ const CustomTooltip = ({ active, payload, label }: any) => {
   );
 };
 
-export function PortfolioChart() {
+interface PortfolioChartProps {
+  /** Account to scope the snapshot series to. Omit for household. */
+  accountHash?: string;
+}
+
+export function PortfolioChart({ accountHash }: PortfolioChartProps = {}) {
   const [data,    setData]    = useState<ChartPoint[]>([]);
   const [loading, setLoading] = useState(true);
   const [view,    setView]    = useState<'value' | 'equity' | 'margin'>('value');
 
   useEffect(() => {
-    fetch('/api/snapshots?limit=90')
+    setLoading(true);
+    const params = new URLSearchParams({ limit: '90' });
+    if (accountHash) params.set('accountHash', accountHash);
+    fetch(`/api/snapshots?${params.toString()}`)
       .then((r) => r.json())
       .then((d) => {
         const snapshots: SnapshotPoint[] = d.snapshots ?? [];
@@ -66,7 +74,7 @@ export function PortfolioChart() {
       })
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, []);
+  }, [accountHash]);
 
   if (loading) {
     return (

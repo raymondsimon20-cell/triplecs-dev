@@ -567,6 +567,18 @@ export default function DashboardPage() {
   const [view, setView]                 = useState<View>('today');
   const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('positions');
 
+  // Persist account selection across reloads. We store the accountHash (not
+  // index, since the array order is sensitive to Schwab response ordering)
+  // or '__all__' for the aggregate roll-up. On mount, restore the matching
+  // index when accounts load; new accounts default to 0.
+  const SELECTED_ACCOUNT_KEY = 'triplec_selected_account';
+  const restoredAccountHashRef = useRef<string | null>(null);
+  if (typeof window !== 'undefined' && restoredAccountHashRef.current === null) {
+    restoredAccountHashRef.current = (() => {
+      try { return localStorage.getItem(SELECTED_ACCOUNT_KEY); } catch { return null; }
+    })();
+  }
+
   // ── selectedIdx semantics ──────────────────────────────────────────────────
   //   • 0..N-1  → single account
   //   • -1      → "All accounts" aggregate roll-up
@@ -672,6 +684,46 @@ export default function DashboardPage() {
     const interval = setInterval(() => fetchAccounts(true), 60_000);
     return () => clearInterval(interval);
   }, [fetchAccounts, fetchDividends]);
+
+  // ── Restore persisted account selection once accounts load ────────────────
+  // Runs only when the accounts array changes; matches by hash so re-ordering
+  // on the Schwab side doesn't break the restore. The `restoredAccountHashRef`
+  // tracks whether we've already applied a restore so we don't fight the user
+  // after they've changed selection.
+  const hasRestoredSelectionRef = useRef(false);
+  useEffect(() => {
+    if (hasRestoredSelectionRef.current) return;
+    if (accounts.length === 0) return;
+    const stored = restoredAccountHashRef.current;
+    if (stored === '__all__' && accounts.length > 1) {
+      setSelectedIdx(-1);
+      hasRestoredSelectionRef.current = true;
+      return;
+    }
+    if (stored) {
+      const idx = accounts.findIndex((a) => a.accountHash === stored);
+      if (idx >= 0) {
+        setSelectedIdx(idx);
+        hasRestoredSelectionRef.current = true;
+        return;
+      }
+    }
+    hasRestoredSelectionRef.current = true;
+  }, [accounts]);
+
+  // Persist selection when the user changes it.
+  useEffect(() => {
+    if (!hasRestoredSelectionRef.current) return;  // skip initial restore burst
+    if (accounts.length === 0) return;
+    try {
+      if (selectedIdx === -1) {
+        localStorage.setItem(SELECTED_ACCOUNT_KEY, '__all__');
+      } else {
+        const hash = accounts[selectedIdx]?.accountHash;
+        if (hash) localStorage.setItem(SELECTED_ACCOUNT_KEY, hash);
+      }
+    } catch { /* localStorage can be unavailable */ }
+  }, [selectedIdx, accounts]);
 
   // `account` is the resolved view: a single Schwab account, or the aggregate
   // when isAll. Most panels are read-only and don't care which.
@@ -920,7 +972,10 @@ export default function DashboardPage() {
 
             <div className="flex items-center gap-1.5 pl-2 border-l border-[#1f2334]">
               <SettingsPanel accountKey={accountKey} accountLabel={accountLabel} />
-              <AutomationToggle />
+              <AutomationToggle
+                accountHash={isAll ? undefined : account?.accountHash}
+                accountLabel={isAll ? 'household' : accountLabel}
+              />
               <ThemeToggle />
               <PortfolioExport
                 positions={account.positions}
@@ -1154,6 +1209,7 @@ export default function DashboardPage() {
                   marginBalance={account.marginBalance}
                   pillarSummary={account.pillarSummary}
                   onProjectedMonthly={setMonthlyIncome}
+                  accountHash={isAll ? undefined : account.accountHash}
                 />
                 <CollapsiblePanel
                   id="portfolio-chart"
@@ -1163,7 +1219,7 @@ export default function DashboardPage() {
                   iconContainerClass="bg-blue-500/10 border border-blue-500/20"
                   defaultOpen={true}
                 >
-                  <div className="pt-4"><PortfolioChart /></div>
+                  <div className="pt-4"><PortfolioChart accountHash={isAll ? undefined : account?.accountHash} /></div>
                 </CollapsiblePanel>
               </>
             )}

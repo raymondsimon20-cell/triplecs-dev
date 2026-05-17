@@ -51,6 +51,8 @@ interface Props {
   marginBalance?: number;
   pillarSummary?: PillarSummary[];
   onProjectedMonthly?: (monthly: number) => void;
+  /** Account scope for dividend fetches. Omit for household-aggregate. */
+  accountHash?: string;
 }
 
 type Tab = 'historical' | 'projected' | 'fire' | 'expenses' | 'margin';
@@ -1403,7 +1405,7 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [], onProjectedMonthly }: Props) {
+export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [], onProjectedMonthly, accountHash }: Props) {
   const [open, setOpen] = useState(true);
   const [activeTab, setActiveTab] = useState<Tab>('historical');
   const [data, setData] = useState<DividendData | null>(null);
@@ -1414,7 +1416,10 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
     try {
       setLoading(true);
       setError(null);
-      const res = await fetch('/api/dividends');
+      const url = accountHash
+        ? `/api/dividends?accountHash=${encodeURIComponent(accountHash)}`
+        : '/api/dividends';
+      const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       setData(await res.json());
     } catch (e) {
@@ -1422,7 +1427,7 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accountHash]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
 
