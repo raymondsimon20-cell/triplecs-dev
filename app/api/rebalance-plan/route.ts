@@ -590,6 +590,10 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
                 aiMode:      'rebalance_plan',
                 violations,
                 tier:        classifyTier(o.instruction, orderValue, violations.length > 0),
+                // Tag with the request's account so the inbox row labels
+                // correctly and the manual-approve path routes the order
+                // to the right Schwab account.
+                accountHash: body.accountHash,
               };
             }),
             ...blockedOrders.map((o) => ({
@@ -605,6 +609,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
               violations:  o.violations,
               // Blocked items always require human review.
               tier:        'approval' as const,
+              accountHash: body.accountHash,
             })),
           ];
           if (stageInputs.length > 0) {

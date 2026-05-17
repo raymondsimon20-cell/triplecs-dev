@@ -694,6 +694,10 @@ export function AIAnalysisPanel({
           orderType:   'MARKET' as const,
           rationale:   rec.rationale,
           aiMode:      analysis.mode,
+          // Tag with the account this AI analysis ran against so the inbox
+          // row labels and approve-path routing land at the right Schwab
+          // account.
+          accountHash: accountHash || undefined,
         };
       });
 

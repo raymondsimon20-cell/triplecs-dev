@@ -467,6 +467,9 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
               // Option trades always require human approval — auto-execute
               // does not touch contracts regardless of order size.
               tier:        'approval',
+              // Tag with the request's account so the inbox row labels and
+              // approve-path routing land at the right Schwab account.
+              accountHash: body.accountHash,
             }]),
             new Promise((_, reject) => setTimeout(() => reject(new Error('staging timeout')), 5000)),
           ]);

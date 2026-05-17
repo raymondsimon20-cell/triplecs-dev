@@ -132,22 +132,38 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
   const nicknames = useAccountNicknames();
 
   /**
-   * Resolve an inbox item's accountHash to a display label.
+   * Resolve any accountHash to a display label.
    *   - Match in `accounts` → nickname (if set) or `···last4`
    *   - Hash present but no match → `···{hash prefix}` (account was disconnected)
-   *   - No hash → `→ selected` indicating it'll route to the current header
-   *     account on approve. Useful for legacy items staged before per-account
-   *     tagging was wired up.
+   *   - No hash → empty string (callers handle "unknown" themselves).
    */
-  const labelForItem = useCallback((item: InboxItem): { text: string; isFallback: boolean } => {
-    if (!item.accountHash) return { text: '→ selected', isFallback: true };
-    const match = accounts.find((a) => a.accountHash === item.accountHash);
+  const labelForHash = useCallback((hash: string | undefined): string => {
+    if (!hash) return '';
+    const match = accounts.find((a) => a.accountHash === hash);
     if (match) {
       const nick = nicknames[match.accountHash];
-      return { text: nick && nick.trim() ? nick.trim() : `···${match.accountNumber.slice(-4)}`, isFallback: false };
+      return nick && nick.trim() ? nick.trim() : `···${match.accountNumber.slice(-4)}`;
     }
-    return { text: `···${item.accountHash.slice(0, 6)}`, isFallback: false };
+    return `···${hash.slice(0, 6)}`;
   }, [accounts, nicknames]);
+
+  /**
+   * Resolve an inbox item's chip label and routing intent.
+   *   - Item tagged with accountHash → that account's nickname / last4.
+   *   - Untagged (legacy items or sources that don't tag) → fall back to the
+   *     currently-selected account's label, prefixed with "→" so the user
+   *     can see the order will route there on approve.
+   */
+  const labelForItem = useCallback((item: InboxItem): { text: string; isFallback: boolean } => {
+    if (item.accountHash) {
+      return { text: labelForHash(item.accountHash) || '···unknown', isFallback: false };
+    }
+    const selected = labelForHash(accountHash);
+    return {
+      text: selected ? `→ ${selected}` : '→ selected',
+      isFallback: true,
+    };
+  }, [labelForHash, accountHash]);
 
   const load = useCallback(async () => {
     try {
