@@ -838,13 +838,15 @@ export default function DashboardPage() {
             ═══════════════════════════════════════════════════════════════════ */}
         {view === 'today' && (
           <>
-            {/* 4-metric strip — Equity + Buying Power dropped; Max Drift added */}
+            {/* 4-metric strip — Equity is the headline (what's actually yours
+                after margin debt). Gross market value sits in the sub for
+                leverage context. Buying Power dropped (AFW carries that role). */}
             <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
               <MetricCard
-                label="Portfolio value"
-                value={fmt$(account.totalValue)}
-                rawValue={account.totalValue}
-                sub={`${account.positions.length} positions`}
+                label="Equity"
+                value={fmt$(account.equity)}
+                rawValue={account.equity}
+                sub={`${account.positions.length} positions · ${fmt$(account.totalValue)} gross`}
               />
               <MetricCard
                 label="Day P&L"
@@ -852,7 +854,7 @@ export default function DashboardPage() {
                 rawValue={dayGL}
                 colorClass={gainLossColor(dayGL)}
                 trend={dayGL > 0 ? 'up' : dayGL < 0 ? 'down' : null}
-                sub={account.totalValue > 0 ? `${((dayGL / account.totalValue) * 100).toFixed(2)}% today` : undefined}
+                sub={account.equity > 0 ? `${((dayGL / account.equity) * 100).toFixed(2)}% on equity` : undefined}
               />
               <MetricCard
                 label="AFW"
