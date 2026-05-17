@@ -345,17 +345,25 @@ export interface AutomationGateState {
  * instead of bare `isAutomationPaused()` so they respect signal-engine flags
  * without needing to know about the engine internals.
  *
+ * 2026-05: per-account gates. Callers acting on a specific account should
+ * pass that account's hash so they're gated by that account's defense-mode /
+ * kill-switch only. Callers without an account context (or working at the
+ * household level) omit the arg — the gate then aggregates across all
+ * accounts and bails if ANY of them is in defense or kill-switch (the
+ * conservative choice — we'd rather pause more than fewer endpoints when a
+ * household-level signal trips).
+ *
  * Dynamically imports the signal-engine state module to avoid a hard
  * dependency — guardrails is broadly imported, signals/state is narrow.
  */
-export async function getAutomationGate(): Promise<AutomationGateState> {
+export async function getAutomationGate(accountHash?: string): Promise<AutomationGateState> {
   if (await isAutomationPaused()) {
     return { paused: true, source: 'user', reason: 'Automation paused by user', since: null };
   }
 
   try {
     const { getSignalGates } = await import('./signals/state');
-    const gates = await getSignalGates();
+    const gates = await getSignalGates(accountHash);
     if (gates.killSwitch.active) {
       return {
         paused: true,

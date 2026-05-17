@@ -78,6 +78,12 @@ interface OptionPlanRequest {
     value:  number;
     pillar: string;
   };
+  /**
+   * Schwab account hash. Scopes the automation gate to this account's
+   * defense-mode / kill-switch state. Omit only when the caller genuinely
+   * wants household-aggregate gating.
+   */
+  accountHash?: string;
 }
 
 interface ClaudeOptionPlan {
@@ -222,10 +228,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  let body: OptionPlanRequest;
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+
   // Automation gate — user pause + signal-engine kill switch + defense mode.
-  // Must use stream sentinel format; the client reads the body as a stream
-  // and parses after __RESULT__.
-  const gate = await getAutomationGate();
+  // Scoped to the request's accountHash when supplied so only THAT account's
+  // gates pause its option plan. Must use stream sentinel format; the client
+  // reads the body as a stream and parses after __RESULT__.
+  const gate = await getAutomationGate(body.accountHash);
   if (gate.paused) {
     const payload = JSON.stringify({
       paused:     true,
@@ -234,8 +245,8 @@ export async function POST(req: Request) {
       gateSince:  gate.since,
       error:      `Automation paused (${gate.source}): ${gate.reason}`,
     });
-    const body = `__RESULT__${payload}\n__DONE__`;
-    return new Response(body, {
+    const responseBody = `__RESULT__${payload}\n__DONE__`;
+    return new Response(responseBody, {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
         'X-Accel-Buffering': 'no',
@@ -243,10 +254,6 @@ export async function POST(req: Request) {
       },
     });
   }
-
-  let body: OptionPlanRequest;
-  try { body = await req.json(); }
-  catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
 
   const { symbol, mode, contracts: requestedContracts = 1, vix, marketTrend, position } = body;
 

@@ -250,7 +250,10 @@ export function RebalanceWorkflow({
       const res = await fetch('/api/rebalance-plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ totalValue, equity, positions, pillarSummary, targets }),
+        // Pass accountHash so the server scopes its automation gate (defense
+        // mode / kill-switch / user pause) to this account rather than the
+        // household aggregate.
+        body: JSON.stringify({ totalValue, equity, positions, pillarSummary, targets, accountHash }),
       });
 
       if (!res.ok || !res.body) {

@@ -166,10 +166,15 @@ export async function POST(req: Request) {
       try {
         const client = new Anthropic({ apiKey });
 
+        // Scope the automation gate to the request's account when available
+        // so only THAT account's defense-mode / kill-switch state affects this
+        // analysis. Falls back to household-aggregate gating when no hash is
+        // attached to the portfolio payload.
+        const aiAccountHash = (body.portfolio as Record<string, unknown>)?.accountHash as string | undefined;
         const [feedbackBlock, paceBlock, gate] = await Promise.all([
           loadFeedbackBlock(),
           loadPaceBlock(),
-          getAutomationGate(),
+          getAutomationGate(aiAccountHash),
         ]);
 
         // When an automation gate is active, inject a context block so Claude's

@@ -39,15 +39,27 @@ function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 }
 
-// ─── GET — read-only view of the state blob ──────────────────────────────────
+/** Read `?accountHash=` and normalise. Empty/`all`/`global` → undefined. */
+function readScope(req: Request): string | undefined {
+  const raw = new URL(req.url).searchParams.get('accountHash');
+  if (!raw || raw === 'all' || raw === 'global') return undefined;
+  return raw;
+}
 
-export async function GET() {
+// ─── GET — read-only view of the state blob ──────────────────────────────────
+// With ?accountHash=… returns that account's slot; without, returns the legacy
+// global state (same as pre-2026-05 behaviour).
+
+export async function GET(req: Request) {
   try { await requireAuth(); } catch { return unauthorized(); }
-  const state = await loadSignalState();
-  return NextResponse.json({ state });
+  const scope = readScope(req);
+  const state = await loadSignalState(scope);
+  return NextResponse.json({ state, scope: scope ?? 'global' });
 }
 
 // ─── PATCH — apply one of the supported mutations ────────────────────────────
+// Mutations apply at the scope passed via ?accountHash=… (or the legacy global
+// slot when omitted).
 
 export async function PATCH(req: Request) {
   try { await requireAuth(); } catch { return unauthorized(); }
@@ -67,11 +79,12 @@ export async function PATCH(req: Request) {
     );
   }
 
-  const state = await loadSignalState();
+  const scope = readScope(req);
+  const state = await loadSignalState(scope);
   const next: SignalEngineState = applyAction(state, action as Action);
-  await saveSignalState(next);
+  await saveSignalState(next, scope);
 
-  return NextResponse.json({ ok: true, action, state: next });
+  return NextResponse.json({ ok: true, action, scope: scope ?? 'global', state: next });
 }
 
 function applyAction(state: SignalEngineState, action: Action): SignalEngineState {

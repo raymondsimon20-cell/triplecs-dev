@@ -91,13 +91,17 @@ function clearOverride(scope: string) {
 }
 
 /**
- * Mirror GLOBAL targets to the server-side blob via /api/strategy. Per-account
- * overrides are UI-only and never mirrored — the cron + signal engine has no
- * concept of per-account targets. Fire-and-forget.
+ * Mirror targets to the server-side blob via /api/strategy. Per-account
+ * overrides land at `/api/strategy?accountHash=<hash>` so the engine's
+ * per-account loop reads them on the next run. Global writes hit the
+ * unscoped endpoint as before. Fire-and-forget.
  */
-async function mirrorTargetsToServer(t: StrategyTargets): Promise<void> {
+async function mirrorTargetsToServer(t: StrategyTargets, scope?: string): Promise<void> {
   try {
-    await fetch('/api/strategy', {
+    const url = scope
+      ? `/api/strategy?accountHash=${encodeURIComponent(scope)}`
+      : '/api/strategy';
+    await fetch(url, {
       method:  'POST',
       headers: { 'Content-Type': 'application/json' },
       body:    JSON.stringify(t),
@@ -105,6 +109,21 @@ async function mirrorTargetsToServer(t: StrategyTargets): Promise<void> {
     });
   } catch (err) {
     console.warn('[SettingsPanel] mirror to /api/strategy failed:', err);
+  }
+}
+
+/**
+ * Clear a per-account override on the server so the engine falls back to
+ * global next run. Fire-and-forget.
+ */
+async function clearOverrideOnServer(scope: string): Promise<void> {
+  try {
+    await fetch(`/api/strategy?accountHash=${encodeURIComponent(scope)}`, {
+      method: 'DELETE',
+      keepalive: true,
+    });
+  } catch (err) {
+    console.warn('[SettingsPanel] clear override on server failed:', err);
   }
 }
 
@@ -135,9 +154,11 @@ let _listeners: Listener[] = [];
 function broadcast(t: StrategyTargets, accountKey?: string, opts?: { skipServerMirror?: boolean }) {
   const scope = normaliseScope(accountKey);
   writeTargets(t, accountKey);
-  if (!scope && !opts?.skipServerMirror) {
-    // Only mirror global writes to the server (cron-side state).
-    void mirrorTargetsToServer(t);
+  if (!opts?.skipServerMirror) {
+    // Mirror writes to the server-side blob so the cron + per-account engine
+    // pick them up on the next run. Global writes hit the unscoped endpoint;
+    // per-account overrides include ?accountHash=<scope>.
+    void mirrorTargetsToServer(t, scope);
   }
   _listeners.forEach((l) => l(scope, t));
 }
@@ -306,10 +327,15 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
     } else if (overrideActive) {
       broadcast(draft, scope);  // per-account override
     } else {
-      // Toggle was off and user hit Save — treat as a "use global" intent:
-      // clear any override and re-broadcast global so listeners refresh.
-      if (scope) clearOverride(scope);
-      broadcast(loadGlobal(), scope);
+      // Toggle was off and user hit Save — treat as a "use global" intent.
+      // Clear the override locally and on the server so the engine falls back
+      // to global on next run, then refresh listeners.
+      if (scope) {
+        clearOverride(scope);
+        void clearOverrideOnServer(scope);
+      }
+      const g = loadGlobal();
+      _listeners.forEach((l) => l(scope, g));
     }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -320,12 +346,17 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
       setDraft({ ...DEFAULT_TARGETS });
       broadcast({ ...DEFAULT_TARGETS });
     } else {
-      // For a per-account scope, "Reset" clears the override.
-      if (scope) clearOverride(scope);
+      // For a per-account scope, "Reset" clears the override locally AND on
+      // the server so the engine's next run falls back to global.
+      if (scope) {
+        clearOverride(scope);
+        void clearOverrideOnServer(scope);
+      }
       setOverrideActive(false);
       const g = loadGlobal();
       setDraft(g);
-      // Broadcast at our scope so listeners re-resolve to global.
+      // Broadcast at our scope so listeners re-resolve to global. Skip the
+      // server mirror — we just hit DELETE.
       _listeners.forEach((l) => l(scope, g));
     }
     setSaved(true);

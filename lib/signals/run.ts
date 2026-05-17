@@ -42,8 +42,9 @@ import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
 import type { TradeHistoryEntry } from '@/app/api/orders/route';
 
-const CACHE_STORE = 'signal-engine-cache';
-const CACHE_KEY   = 'latest';
+const CACHE_STORE        = 'signal-engine-cache';
+const CACHE_KEY          = 'latest';                  // household-combined result
+const CACHE_ACCOUNT_PREFIX = 'latest:account:';        // per-account result
 
 /** Tickers we always price even if not currently held so the engine can size
  *  buys / detect baseline weights for hedges and triples without an undefined. */
@@ -80,6 +81,44 @@ export async function saveCache(result: EngineResult): Promise<void> {
 
 export async function loadCache(): Promise<CachedRun | null> {
   return getStore(CACHE_STORE).get(CACHE_KEY, { type: 'json' }) as Promise<CachedRun | null>;
+}
+
+/**
+ * 2026-05 per-account cache. Stored alongside the legacy combined cache so
+ * UI consumers that want a single account's view can fetch it directly
+ * without splitting the combined result back apart.
+ */
+export async function savePerAccountCache(accountHash: string, result: EngineResult): Promise<void> {
+  await getStore(CACHE_STORE).setJSON(`${CACHE_ACCOUNT_PREFIX}${accountHash}`, {
+    cachedAt: Date.now(),
+    result,
+  } satisfies CachedRun);
+}
+
+export async function loadPerAccountCache(accountHash: string): Promise<CachedRun | null> {
+  return getStore(CACHE_STORE).get(
+    `${CACHE_ACCOUNT_PREFIX}${accountHash}`, { type: 'json' },
+  ) as Promise<CachedRun | null>;
+}
+
+export async function loadAllPerAccountCaches(): Promise<Array<{ accountHash: string; cached: CachedRun }>> {
+  const store = getStore(CACHE_STORE);
+  try {
+    const { blobs } = await store.list({ prefix: CACHE_ACCOUNT_PREFIX });
+    const out: Array<{ accountHash: string; cached: CachedRun }> = [];
+    await Promise.all(blobs.map(async (b) => {
+      const cached = await store.get(b.key, { type: 'json' }) as CachedRun | null;
+      if (!cached) return;
+      out.push({
+        accountHash: b.key.slice(CACHE_ACCOUNT_PREFIX.length),
+        cached,
+      });
+    }));
+    return out;
+  } catch (err) {
+    console.warn('[signals/run] loadAllPerAccountCaches failed:', err);
+    return [];
+  }
 }
 
 // ─── Market context ──────────────────────────────────────────────────────────
@@ -119,6 +158,18 @@ async function fetchMarketContext(): Promise<{ spyHistory: number[]; vix: number
 
 // ─── Portfolio ───────────────────────────────────────────────────────────────
 
+/** Per-account slice the engine runs against. The engine sees one of these
+ *  at a time so its rules (margin %, AFW gating, pillar drift, family caps)
+ *  operate on the account's own balances rather than the household sum. */
+export interface AccountPortfolio {
+  accountHash: string;
+  positions:   EnginePosition[];
+  cash:        number;
+  marginDebt:  number;
+  /** AFW for THIS account — Schwab's `availableFunds`. */
+  afwDollars:  number;
+}
+
 async function fetchAggregatedPortfolio(): Promise<{
   positions:  EnginePosition[];
   cash:       number;
@@ -142,6 +193,14 @@ async function fetchAggregatedPortfolio(): Promise<{
     averagePrice:  number;
     marketValue:   number;
   }>;
+  /**
+   * Per-account breakdown for the per-account engine loop (2026-05). Aggregate
+   * fields above (`positions`, `cash`, etc.) remain for the household-level
+   * computations (combined cache, digest). The accountBuckets slice the same
+   * data so each account can be run independently with its own targets and
+   * state.
+   */
+  accountBuckets: AccountPortfolio[];
 }> {
   const tokens = await getTokens();
   if (!tokens) throw new Error('Schwab not connected');
@@ -167,19 +226,25 @@ async function fetchAggregatedPortfolio(): Promise<{
     averagePrice:  number;
     marketValue:   number;
   }> = [];
+  const accountBuckets: AccountPortfolio[] = [];
   let cash       = 0;
   let marginDebt = 0;
   let afwDollars = 0;
 
   for (const { hashValue, wrapper } of wrappers) {
     const acct = wrapper.securitiesAccount;
-    cash       += acct.currentBalances.cashBalance ?? 0;
-    marginDebt += Math.abs(acct.currentBalances.marginBalance ?? 0);
+    const acctCash       = acct.currentBalances.cashBalance     ?? 0;
+    const acctMarginDebt = Math.abs(acct.currentBalances.marginBalance ?? 0);
     // AFW: sum availableFunds across accounts. This is what Schwab reports as
     // your true buying-power-after-maintenance headroom — exactly the Vol-7
     // AFW metric, sourced directly from the broker (not derived).
-    afwDollars += acct.currentBalances.availableFunds ?? 0;
+    const acctAfw        = acct.currentBalances.availableFunds  ?? 0;
 
+    cash       += acctCash;
+    marginDebt += acctMarginDebt;
+    afwDollars += acctAfw;
+
+    const acctPositions: EnginePosition[] = [];
     for (const p of acct.positions ?? []) {
       // Capture option positions for the daily put autopilot scanner (close
       // at gain / roll near expiry / propose new). Equity engine ignores
@@ -197,7 +262,7 @@ async function fetchAggregatedPortfolio(): Promise<{
       if (p.instrument.symbol.includes(' ')) continue;
       if (p.longQuantity <= 0) continue;
       const meta = getFundMetadata(p.instrument.symbol);
-      positions.push({
+      const pos: EnginePosition = {
         symbol:      p.instrument.symbol,
         shares:      p.longQuantity,
         marketValue: p.marketValue ?? 0,
@@ -210,8 +275,17 @@ async function fetchAggregatedPortfolio(): Promise<{
               maintenancePctSource: meta.maintenancePctSource,
             }
           : {}),
-      });
+      };
+      positions.push(pos);
+      acctPositions.push(pos);
     }
+    accountBuckets.push({
+      accountHash: hashValue,
+      positions:   acctPositions,
+      cash:        acctCash,
+      marginDebt:  acctMarginDebt,
+      afwDollars:  acctAfw,
+    });
   }
 
   const tickers = Array.from(new Set([
@@ -227,7 +301,7 @@ async function fetchAggregatedPortfolio(): Promise<{
     }
   }
 
-  return { positions, cash, marginDebt, prices, afwDollars, optionPositions };
+  return { positions, cash, marginDebt, prices, afwDollars, optionPositions, accountBuckets };
 }
 
 // ─── Phase 2 inputs ──────────────────────────────────────────────────────────
@@ -282,20 +356,22 @@ async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
 
 // ─── Signal → inbox mapper ───────────────────────────────────────────────────
 
-/** Convert engine signals into inbox AppendInputs. Skips composite-ticker and
- *  zero-sized signals; computes shares from sizeDollars × current price.
+/** Convert engine signals into inbox AppendInputs for a SINGLE account.
  *
- *  Multi-account routing:
- *   - SELLs target the account that actually holds the position.
- *   - BUYs target the primary (first) account.
- *  Accounts not yet known at signal time (rare race) fall through with no
- *  accountHash; auto-execute then uses its own default-first-account logic.
+ *  Multi-account routing (2026-05 per-account engine):
+ *   - Both BUYs and SELLs are tagged with the running account's hash. The
+ *     engine itself is now scoped to one account at a time, so every signal
+ *     it emits belongs to that account by construction.
+ *   - Sells that target a symbol held in *another* account would normally
+ *     never appear here (the engine's `positions` input is the account's own
+ *     holdings) — defense-in-depth: we still cross-check against
+ *     `positionAccount` and skip mismatches to avoid mis-routed orders.
  */
 function signalsToInbox(
   signals: TradeSignal[],
   prices: Record<string, number>,
   positions: EnginePosition[],
-  primaryAccountHash: string | undefined,
+  accountHash: string,
 ): AppendInput[] {
   const positionAccount = new Map<string, string>();
   for (const p of positions) {
@@ -314,9 +390,14 @@ function signalsToInbox(
     const shares = Math.floor(s.sizeDollars / price);
     if (shares <= 0) continue;
 
-    const accountHash =
-      s.direction === 'SELL' ? positionAccount.get(s.ticker) ?? primaryAccountHash :
-                               primaryAccountHash;
+    // Cross-check: a SELL must be for a symbol THIS account actually holds.
+    // The engine's per-account input already enforces this, but the check is
+    // cheap and prevents mis-routing if a future engine change ever returns
+    // a SELL for a symbol not in `positions`.
+    if (s.direction === 'SELL') {
+      const owner = positionAccount.get(s.ticker);
+      if (owner && owner !== accountHash) continue;
+    }
 
     out.push({
       source:      'signal-engine',
@@ -337,6 +418,78 @@ function signalsToInbox(
     });
   }
   return out;
+}
+
+// ─── Engine combine ──────────────────────────────────────────────────────────
+
+/**
+ * Roll up per-account EngineResults into one household-level EngineResult.
+ * Used for:
+ *   • The legacy single-cache write (`saveCache(result)`), so existing
+ *     consumers (`/api/signals` GET, `/api/signals/daily-plan` GET) keep
+ *     working unchanged.
+ *   • The combined daily plan that backs the digest + plan archive.
+ *
+ * Combine rules:
+ *   - generatedAt: latest of the inputs (they're typically within ms).
+ *   - marketSnapshot: identical across accounts (one market) — pick first.
+ *   - valuation: sum the dollar fields; recompute equityRatio and weightPcts
+ *     against the combined totalValue so household weights sum to 100%.
+ *   - signals / actionableTrades / alerts / info: concat in input order.
+ *   - inDefenseMode / killSwitchActive: OR across accounts.
+ *   - nextState: synthesise — the combined result's state isn't persisted
+ *     (each account's state is already saved per-account). Use the first
+ *     account's state as a representative value.
+ */
+function combineEngineResults(results: EngineResult[]): EngineResult {
+  if (results.length === 0) {
+    throw new Error('combineEngineResults: no per-account results');
+  }
+  if (results.length === 1) return results[0];
+
+  const sum = (pick: (r: EngineResult) => number) => results.reduce((s, r) => s + pick(r), 0);
+
+  const holdingsValue = sum((r) => r.valuation.holdingsValue);
+  const cash          = sum((r) => r.valuation.cash);
+  const marginDebt    = sum((r) => r.valuation.marginDebt);
+  const totalValue    = sum((r) => r.valuation.totalValue);
+  const equityValue   = sum((r) => r.valuation.equityValue);
+  const equityRatio   = totalValue > 0 ? equityValue / totalValue : 1;
+
+  // Rebuild weight pcts: per-account weight% × that account's totalValue → $,
+  // sum per symbol, then divide by combined totalValue.
+  const dollarsBySymbol: Record<string, number> = {};
+  for (const r of results) {
+    const acctTotal = r.valuation.totalValue;
+    for (const [sym, pct] of Object.entries(r.valuation.weightPcts)) {
+      dollarsBySymbol[sym] = (dollarsBySymbol[sym] ?? 0) + (pct / 100) * acctTotal;
+    }
+  }
+  const weightPcts: Record<string, number> = {};
+  if (totalValue > 0) {
+    for (const [sym, $$] of Object.entries(dollarsBySymbol)) {
+      weightPcts[sym] = ($$ / totalValue) * 100;
+    }
+  }
+
+  const generatedAt = results.map((r) => r.generatedAt).sort().slice(-1)[0]!;
+
+  return {
+    generatedAt,
+    marketSnapshot:   results[0].marketSnapshot,
+    valuation: {
+      holdingsValue, cash, marginDebt, totalValue, equityValue, equityRatio, weightPcts,
+    },
+    signals:          results.flatMap((r) => r.signals),
+    actionableTrades: results.flatMap((r) => r.actionableTrades),
+    alerts:           results.flatMap((r) => r.alerts),
+    info:             results.flatMap((r) => r.info),
+    inDefenseMode:    results.some((r) => r.inDefenseMode),
+    killSwitchActive: results.some((r) => r.killSwitchActive),
+    // Representative only — not persisted. Each account's state was already
+    // saved to its own slot by the per-account loop.
+    nextState:        results[0].nextState,
+  };
 }
 
 // ─── Main entry point ────────────────────────────────────────────────────────
@@ -368,68 +521,100 @@ export async function runSignalsAndStage(): Promise<RunResult> {
 }
 
 async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult> {
-  const [portfolio, market, state, strategy, recentSells30d] = await Promise.all([
+  // 2026-05: per-account autopilot. The engine now runs once per Schwab
+  // account, scoped to that account's own positions, cash, margin debt,
+  // AFW, signal-engine state, and strategy targets (override → global).
+  //
+  // Shared inputs (one fetch, used across all accounts):
+  //   • market context (SPY history + VIX) — household-level
+  //   • wash-sale recent sells — IRS rule is household-wide
+  //
+  // Per-account inputs (fetched in parallel):
+  //   • signal state (loadSignalState(accountHash))
+  //   • strategy targets (getServerStrategyTargets(accountHash) → override
+  //     → global → DEFAULT_TARGETS)
+  const [portfolio, market, recentSells30d] = await Promise.all([
     fetchAggregatedPortfolio(),
     fetchMarketContext(),
-    loadSignalState(),
-    getServerStrategyTargets(),
     loadRecentSells(30),
   ]);
 
   if (market.spyPrice > 0) portfolio.prices['SPY'] = market.spyPrice;
 
-  const inputs: EngineInputs = {
-    positions:  portfolio.positions,
-    cash:       portfolio.cash,
-    marginDebt: portfolio.marginDebt,
-    prices:     portfolio.prices,
-    spyHistory: market.spyHistory,
-    vix:        market.vix,
-    state,
-    // Phase 2 — server-side strategy targets + recent sells unlock
-    // MAINTENANCE_RANKED_TRIM and PILLAR_FILL.
-    pillarTargets: {
-      triplesPct:     strategy.triplesPct,
-      cornerstonePct: strategy.cornerstonePct,
-      incomePct:      strategy.incomePct,
-      hedgePct:       strategy.hedgePct,
-    },
-    // Runtime margin thresholds from strategy store. When the user updates
-    // their preferred leverage range, these flow into the engine on the next
-    // cron without a redeploy.
-    marginThresholds: {
-      trimAbovePct:     strategy.marginLimitPct,
-      trimTargetPct:    strategy.marginTrimTargetPct,
-      newBuyCeilingPct: strategy.marginNewBuyCeilingPct,
-    },
-    recentSells30d,
-    // Buying power = AFW when available (true headroom net of maintenance
-    // requirements). Falls back to cash when AFW is missing — strictly more
-    // conservative since cash ≤ AFW for a margin account.
-    buyingPowerAvailable: portfolio.afwDollars > 0
-      ? portfolio.afwDollars
-      : Math.max(0, portfolio.cash),
-    // AFW from Schwab: lets AFW_TRIGGER gate against true margin headroom
-    // rather than just deploying blindly. Falls back to undefined if the
-    // broker didn't return availableFunds (rare).
-    afwDollars: portfolio.afwDollars > 0 ? portfolio.afwDollars : undefined,
+  // Per-account engine loop. We run them in parallel so total wall time
+  // stays close to a single-account run; the engine itself is pure-function
+  // so concurrency is safe.
+  type PerAccountRun = {
+    accountHash: string;
+    portfolio:   AccountPortfolio;
+    result:      EngineResult;
+    /** Staged inputs ready to append to the inbox. */
+    stageInputs: AppendInput[];
   };
 
-  const result = runSignalEngine(inputs);
+  const perAccount: PerAccountRun[] = await Promise.all(
+    portfolio.accountBuckets.map(async (bucket) => {
+      const [state, strategy] = await Promise.all([
+        loadSignalState(bucket.accountHash),
+        getServerStrategyTargets(bucket.accountHash),
+      ]);
 
-  // Persist updated state — this is what flips defenseMode / killSwitch flags
-  // for the other endpoints to consult via getAutomationGate().
-  await saveSignalState(result.nextState);
+      const inputs: EngineInputs = {
+        positions:  bucket.positions,
+        cash:       bucket.cash,
+        marginDebt: bucket.marginDebt,
+        prices:     portfolio.prices,
+        spyHistory: market.spyHistory,
+        vix:        market.vix,
+        state,
+        // Per-account targets — Phase 2 rules (MAINTENANCE_RANKED_TRIM,
+        // PILLAR_FILL) now drift / size against this account's allocation,
+        // not the household sum.
+        pillarTargets: {
+          triplesPct:     strategy.triplesPct,
+          cornerstonePct: strategy.cornerstonePct,
+          incomePct:      strategy.incomePct,
+          hedgePct:       strategy.hedgePct,
+        },
+        marginThresholds: {
+          trimAbovePct:     strategy.marginLimitPct,
+          trimTargetPct:    strategy.marginTrimTargetPct,
+          newBuyCeilingPct: strategy.marginNewBuyCeilingPct,
+        },
+        recentSells30d,
+        // Buying power scoped to this account. Cash floor protects against
+        // negative AFW edge cases.
+        buyingPowerAvailable: bucket.afwDollars > 0
+          ? bucket.afwDollars
+          : Math.max(0, bucket.cash),
+        afwDollars: bucket.afwDollars > 0 ? bucket.afwDollars : undefined,
+      };
 
-  // Stage actionable trades with a hard timeout so a slow inbox doesn't hang
-  // the whole run. Staging failures are non-fatal.
-  const primaryAccountHash = portfolio.positions[0]?.accountHash;
-  const stageInputs = signalsToInbox(
-    result.actionableTrades,
-    portfolio.prices,
-    portfolio.positions,
-    primaryAccountHash,
+      const result = runSignalEngine(inputs);
+
+      // Persist THIS account's updated state to its own slot. Defense mode
+      // / kill switch flip per-account from here on.
+      await saveSignalState(result.nextState, bucket.accountHash);
+
+      // Stage signals tagged with this account's hash (both BUY and SELL).
+      const stageInputs = signalsToInbox(
+        result.actionableTrades,
+        portfolio.prices,
+        bucket.positions,
+        bucket.accountHash,
+      );
+
+      return { accountHash: bucket.accountHash, portfolio: bucket, result, stageInputs };
+    }),
   );
+
+  // Combined household-level result, used for the legacy single cache + the
+  // digest. Each account's state was already saved by the loop above.
+  const result = combineEngineResults(perAccount.map((r) => r.result));
+
+  // One append to the inbox for the whole household so staging is atomic and
+  // the cross-source dedup window sees all proposals in one shot.
+  const stageInputs = perAccount.flatMap((r) => r.stageInputs);
   let staged = 0;
   let freshItems: InboxItem[] = [];
   if (stageInputs.length > 0) {
@@ -461,7 +646,13 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
     }
   }
 
-  await saveCache(result);
+  // Cache writes: legacy combined cache for backward-compat consumers
+  // (`/api/signals` GET, `/api/signals/daily-plan` GET), plus per-account
+  // caches so UI consumers can fetch a single account's view directly.
+  await Promise.all([
+    saveCache(result),
+    ...perAccount.map((pa) => savePerAccountCache(pa.accountHash, pa.result)),
+  ]);
 
   // ─── Daily put autopilot scan ────────────────────────────────────────────
   // Examines open option positions: close shorts at >=75% profit, roll shorts

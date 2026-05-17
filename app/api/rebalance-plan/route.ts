@@ -88,6 +88,13 @@ interface RebalancePlanRequest {
   pillarSummary: PillarSummary[];
   targets:       Targets;
   /**
+   * Schwab account hash the rebalance applies to. Required to scope the
+   * automation gate to this account's defense-mode / kill-switch state
+   * (rather than aggregating across all accounts). Omit only when the
+   * caller genuinely wants household-aggregate gating.
+   */
+  accountHash?:  string;
+  /**
    * When true, run the full plan (Claude → validate → guardrails → emit __RESULT__)
    * but SKIP the appendInbox staging step. Used by the Daily Pulse preview flow:
    * the wizard shows the orders inline and the user explicitly stages them via
@@ -130,12 +137,18 @@ async function handlePost(req: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Read the body up front so we can scope the gate to this account.
+  let body: RebalancePlanRequest;
+  try { body = await req.json(); }
+  catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+
   // Automation gate — short-circuit before calling Claude. Combines the
   // user-toggle, the signal-engine margin kill switch, and the signal-engine
-  // defense-mode flag. Must use the stream sentinel format because the client
-  // reads the body as a stream and looks for __RESULT__; a plain JSON response
-  // would never deliver a result.
-  const gate = await getAutomationGate();
+  // defense-mode flag. Scoped to the request's accountHash when supplied so
+  // only THAT account's gates pause its rebalance. Must use the stream
+  // sentinel format because the client reads the body as a stream and looks
+  // for __RESULT__; a plain JSON response would never deliver a result.
+  const gate = await getAutomationGate(body.accountHash);
   if (gate.paused) {
     const payload = JSON.stringify({
       paused:     true,
@@ -147,8 +160,8 @@ async function handlePost(req: Request) {
       summary:       `Automation paused (${gate.source}): ${gate.reason}`,
       drifts:        [],
     });
-    const body = `__RESULT__${payload}\n__DONE__`;
-    return new Response(body, {
+    const responseBody = `__RESULT__${payload}\n__DONE__`;
+    return new Response(responseBody, {
       headers: {
         'Content-Type': 'text/plain; charset=utf-8',
         'X-Accel-Buffering': 'no',
@@ -160,10 +173,6 @@ async function handlePost(req: Request) {
   const apiKey = process.env.ANTHROPIC_API_KEY;
   if (!apiKey)
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 503 });
-
-  let body: RebalancePlanRequest;
-  try { body = await req.json(); }
-  catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
 
   const { totalValue, equity, positions, pillarSummary, targets, preview = false } = body;
 

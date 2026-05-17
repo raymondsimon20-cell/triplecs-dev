@@ -725,12 +725,16 @@ export default function DashboardPage() {
         const res = await fetch('/api/rebalance-plan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          // accountHash scopes the automation gate to THIS account on the
+          // server so drift auto-rebalance against this account isn't paused
+          // by some other account's defense-mode / kill-switch state.
           body: JSON.stringify({
             totalValue:    account.totalValue,
             equity:        account.equity,
             positions:     account.positions,
             pillarSummary: account.pillarSummary,
             targets:       strategyTargets,
+            accountHash:   account.accountHash,
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
