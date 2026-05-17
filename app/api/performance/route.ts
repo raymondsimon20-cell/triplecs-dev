@@ -38,11 +38,17 @@ export async function GET(req: Request) {
   }
 
   const { searchParams } = new URL(req.url);
-  const limit = Math.max(1, Math.min(365, Number(searchParams.get('limit') ?? 90)));
+  const limit            = Math.max(1, Math.min(365, Number(searchParams.get('limit') ?? 90)));
+  // ?accountHash=… scopes the performance series to a single Schwab account.
+  // Empty / 'all' / 'global' returns the household-aggregate series (legacy).
+  const accountHashParam = searchParams.get('accountHash');
+  const accountHash      = accountHashParam && accountHashParam !== 'all' && accountHashParam !== 'global'
+    ? accountHashParam
+    : undefined;
 
   try {
     const [snapshots, cashFlows] = await Promise.all([
-      getSnapshotHistory(limit),
+      getSnapshotHistory(limit, accountHash),
       getCashFlows(),
     ]);
 
@@ -64,6 +70,7 @@ export async function GET(req: Request) {
       attribution,
       alpha,
       progress,
+      scope: accountHash ?? 'all',
       meta: {
         snapshotCount: chronological.length,
         realCount: realOnly.length,

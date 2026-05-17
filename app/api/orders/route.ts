@@ -60,6 +60,13 @@ export interface TradeHistoryEntry {
    * Undefined for BUYs and when the position couldn't be located.
    */
   costBasisPerShare?: number;
+  /**
+   * 2026-05 per-account autopilot. Schwab account hash this order was placed
+   * against. Used by per-account daily-cap counting in auto-execute and by
+   * per-account performance / recap views. Optional for backward compat with
+   * entries written before this field shipped.
+   */
+  accountHash?: string;
 }
 
 async function saveTradeHistory(entries: TradeHistoryEntry[]) {
@@ -148,6 +155,7 @@ export async function POST(req: Request) {
       rationale:   orders[i].rationale,
       aiMode:      orders[i].aiMode,
       costBasisPerShare: costBasisFor(orders[i].instruction, r.symbol, costBasisMap),
+      accountHash,
     }));
 
     const optionHistory: TradeHistoryEntry[] = optionResults.map((r, i) => ({
@@ -163,6 +171,7 @@ export async function POST(req: Request) {
       message:     r.message,
       rationale:   optionOrders[i].rationale,
       aiMode:      optionOrders[i].aiMode,
+      accountHash,
     }));
 
     await saveTradeHistory([...equityHistory, ...optionHistory]);

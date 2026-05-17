@@ -91,6 +91,32 @@ function actionLine(prefix: string, ticker: string, dir: string, size: number, r
   return `${prefix} ${dir} ${ticker} — ${rule}`;
 }
 
+/**
+ * Group plan actions by account so the digest can render
+ *   Tier 1 — Roth: …
+ *           Taxable: …
+ * instead of one flat list. Untagged actions (legacy / no accountHash) fall
+ * into the "—" bucket and are rendered last.
+ */
+function groupByAccount<T extends { accountHash?: string }>(items: T[]): Array<{ hash: string; items: T[] }> {
+  const map = new Map<string, T[]>();
+  for (const it of items) {
+    const key = it.accountHash || '—';
+    if (!map.has(key)) map.set(key, []);
+    map.get(key)!.push(it);
+  }
+  return Array.from(map.entries())
+    // Put untagged ("—") last; everything else sorts by hash for stable output.
+    .sort(([a], [b]) => (a === '—' ? 1 : b === '—' ? -1 : a.localeCompare(b)))
+    .map(([hash, items]) => ({ hash, items }));
+}
+
+/** Short, scannable identifier for an account hash in the digest. */
+function shortHash(hash: string): string {
+  if (hash === '—' || !hash) return 'unassigned';
+  return `${hash.slice(0, 6)}…`;
+}
+
 export function buildDigest(input: DigestInput): FormattedDigest {
   const { plan, autoExecute, dashboardUrl, cronHealth } = input;
   const subject = buildSubject(plan, autoExecute, cronHealth);
@@ -114,6 +140,18 @@ export function buildDigest(input: DigestInput): FormattedDigest {
     if (autoExecute.breakerTripped) {
       lines.push(`Circuit breaker: ${autoExecute.breakerReason}`);
     }
+    // Per-account breakdown — surfaces "Roth: 2 placed, Taxable: paused
+    // (breaker)" so the digest reflects which accounts actually fired.
+    if (autoExecute.byAccount && autoExecute.byAccount.length > 1) {
+      lines.push('Per-account:');
+      for (const a of autoExecute.byAccount) {
+        const head = `  [${shortHash(a.accountHash)}] mode=${a.mode}`;
+        const exec = a.executed > 0 ? ` placed=${a.executed}` : '';
+        const brk  = a.breakerTripped ? ` breaker=${a.breakerReason || 'tripped'}` : '';
+        const rej  = a.rejectedCount > 0 ? ` rejected=${a.rejectedCount}` : '';
+        lines.push(`${head}${exec}${rej}${brk}`);
+      }
+    }
     if (autoExecute.rejected.length > 0) {
       lines.push(`Rejected by gates/caps: ${autoExecute.rejected.length}`);
       for (const r of autoExecute.rejected.slice(0, 5)) {
@@ -126,27 +164,50 @@ export function buildDigest(input: DigestInput): FormattedDigest {
     lines.push('');
   }
 
+  // ── Tier 1 / Tier 2 / Tier 3 — grouped by account ─────────────────────
+  // When multiple accounts have items, the digest shows a sub-header per
+  // account so the reader can tell at a glance which account each trade is
+  // for. With one account (single-account user, or all items unbucketed)
+  // the header is omitted to keep the digest compact.
   if (plan.actions.auto.length > 0) {
     lines.push(`TIER 1 — Auto-eligible (${plan.actions.auto.length}):`);
-    for (const a of plan.actions.auto) {
-      lines.push(`  ${actionLine('•', a.ticker, a.direction, a.sizeDollars, a.rule)}`);
+    const groups = groupByAccount(plan.actions.auto);
+    const multi  = groups.length > 1;
+    for (const g of groups) {
+      if (multi) lines.push(`  [${shortHash(g.hash)}]`);
+      for (const a of g.items) {
+        lines.push(`  ${actionLine('•', a.ticker, a.direction, a.sizeDollars, a.rule)}`);
+      }
     }
     lines.push('');
   }
 
   if (plan.actions.approval.length > 0) {
     lines.push(`TIER 2 — Needs approval (${plan.actions.approval.length}):`);
-    for (const a of plan.actions.approval) {
-      lines.push(`  ${actionLine('•', a.ticker, a.direction, a.sizeDollars, a.rule)}`);
-      lines.push(`    ${a.reason}`);
+    const groups = groupByAccount(plan.actions.approval);
+    const multi  = groups.length > 1;
+    for (const g of groups) {
+      if (multi) lines.push(`  [${shortHash(g.hash)}]`);
+      for (const a of g.items) {
+        lines.push(`  ${actionLine('•', a.ticker, a.direction, a.sizeDollars, a.rule)}`);
+        lines.push(`    ${a.reason}`);
+      }
     }
     lines.push('');
   }
 
   if (plan.actions.alert.length > 0) {
+    // Alerts don't always carry an accountHash (some are household-level
+    // gates like DEFENSE_MODE). Group anyway so per-account alerts surface
+    // clearly when present.
     lines.push(`TIER 3 — Alerts (${plan.actions.alert.length}):`);
-    for (const a of plan.actions.alert) {
-      lines.push(`  • ${a.rule}: ${a.reason}`);
+    const groups = groupByAccount(plan.actions.alert);
+    const multi  = groups.length > 1;
+    for (const g of groups) {
+      if (multi) lines.push(`  [${shortHash(g.hash)}]`);
+      for (const a of g.items) {
+        lines.push(`  • ${a.rule}: ${a.reason}`);
+      }
     }
     lines.push('');
   }

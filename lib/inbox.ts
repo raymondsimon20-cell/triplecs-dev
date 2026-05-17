@@ -330,6 +330,51 @@ export async function dismissAllPending(): Promise<number> {
   return count;
 }
 
+/**
+ * Dismiss every pending item that has no accountHash. Useful one-shot cleanup
+ * for legacy items staged before per-account tagging shipped — those items
+ * would otherwise appear in every per-account inbox view (the filter treats
+ * untagged items as belonging to the active account).
+ */
+export async function dismissUntaggedPending(): Promise<number> {
+  const items = await readAll();
+  const { items: aged } = expireStale(items);
+  const now = Date.now();
+  let count = 0;
+  const next = aged.map((it) => {
+    if (it.status === 'pending' && !it.accountHash) {
+      count++;
+      return { ...it, status: 'dismissed' as const, resolvedAt: now };
+    }
+    return it;
+  });
+  if (count > 0) await writeAll(next);
+  return count;
+}
+
+/**
+ * Tag every untagged pending item with the supplied accountHash so they
+ * stop appearing in other accounts' views. Returns the number updated.
+ * Use when the user knows the legacy items all belonged to one account
+ * (typical: items staged before multi-account work shipped were all for
+ * the primary account).
+ */
+export async function tagUntaggedPending(accountHash: string): Promise<number> {
+  if (!accountHash) return 0;
+  const items = await readAll();
+  const { items: aged } = expireStale(items);
+  let count = 0;
+  const next = aged.map((it) => {
+    if (it.status === 'pending' && !it.accountHash) {
+      count++;
+      return { ...it, accountHash };
+    }
+    return it;
+  });
+  if (count > 0) await writeAll(next);
+  return count;
+}
+
 /** Generic in-place update by id. Internal helper. */
 async function updateItem(id: string, patch: (it: InboxItem) => InboxItem): Promise<InboxItem | null> {
   const items = await readAll();

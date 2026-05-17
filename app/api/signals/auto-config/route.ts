@@ -31,6 +31,8 @@ import { requireAuth } from '@/lib/session';
 import {
   loadAutoConfig,
   saveAutoConfig,
+  clearAutoConfigOverride,
+  hasAutoConfigOverride,
   type AutoConfig,
   type AutoMode,
 } from '@/lib/signals/auto-config';
@@ -43,10 +45,19 @@ function unauthorized() {
   return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
 }
 
-export async function GET() {
+/** Parse ?accountHash=. Empty / 'all' / 'global' → undefined (global scope). */
+function readScope(req: Request): string | undefined {
+  const raw = new URL(req.url).searchParams.get('accountHash');
+  if (!raw || raw === 'all' || raw === 'global') return undefined;
+  return raw;
+}
+
+export async function GET(req: Request) {
   try { await requireAuth(); } catch { return unauthorized(); }
-  const config = await loadAutoConfig();
-  return NextResponse.json({ config });
+  const scope = readScope(req);
+  const config = await loadAutoConfig(scope);
+  const hasOverride = scope ? await hasAutoConfigOverride(scope) : false;
+  return NextResponse.json({ config, scope: scope ?? 'global', hasOverride });
 }
 
 interface PatchBody {
@@ -72,7 +83,8 @@ export async function PATCH(req: Request) {
     return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 });
   }
 
-  const current = await loadAutoConfig();
+  const scope = readScope(req);
+  const current = await loadAutoConfig(scope);
   const next: AutoConfig = JSON.parse(JSON.stringify(current));
 
   // Mode
@@ -129,6 +141,24 @@ export async function PATCH(req: Request) {
     }
   }
 
-  await saveAutoConfig(next);
-  return NextResponse.json({ ok: true, config: next });
+  await saveAutoConfig(next, scope);
+  return NextResponse.json({ ok: true, scope: scope ?? 'global', config: next });
+}
+
+/**
+ * DELETE clears a per-account override so the engine falls back to global.
+ * The global config can't be cleared through this endpoint (only overwritten).
+ */
+export async function DELETE(req: Request) {
+  try { await requireAuth(); } catch { return unauthorized(); }
+  const scope = readScope(req);
+  if (!scope) {
+    return NextResponse.json(
+      { error: 'DELETE requires ?accountHash=<hash>. Global config cannot be cleared, only overwritten.' },
+      { status: 400 },
+    );
+  }
+  await clearAutoConfigOverride(scope);
+  const fallback = await loadAutoConfig();
+  return NextResponse.json({ ok: true, scope, fellBackTo: 'global', config: fallback });
 }

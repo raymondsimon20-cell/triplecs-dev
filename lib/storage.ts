@@ -136,14 +136,56 @@ export async function savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promis
   ]);
 }
 
-export async function getLatestPortfolioSnapshot(): Promise<PortfolioSnapshot | null> {
-  return getStore('portfolio-snapshots').get('latest', { type: 'json' });
+/**
+ * 2026-05 per-account snapshots. Stored at `account:{hash}:latest` and
+ * `account:{hash}:day-YYYY-MM-DD`. Used by the per-account performance
+ * panels and by per-account circuit breakers (drawdown reference). The
+ * household-level snapshot (above) continues to be written for legacy
+ * consumers that don't yet split by account.
+ */
+export async function savePerAccountSnapshot(
+  accountHash: string,
+  snapshot: PortfolioSnapshot,
+): Promise<void> {
+  if (!accountHash) return;
+  const store  = getStore('portfolio-snapshots');
+  const latestKey = `account:${accountHash}:latest`;
+  const dayKey    = `account:${accountHash}:day-${new Date(snapshot.savedAt).toISOString().slice(0, 10)}`;
+  if (snapshot.synthetic) {
+    const existing = await store.get(dayKey, { type: 'json' }) as PortfolioSnapshot | null;
+    if (existing && !existing.synthetic) return;
+    await store.setJSON(dayKey, snapshot);
+    return;
+  }
+  await Promise.all([
+    store.setJSON(latestKey, snapshot),
+    store.setJSON(dayKey, snapshot),
+  ]);
 }
 
-/** Returns up to `limit` daily snapshots sorted newest-first. */
-export async function getSnapshotHistory(limit = 90): Promise<PortfolioSnapshot[]> {
+export async function getLatestPortfolioSnapshot(accountHash?: string): Promise<PortfolioSnapshot | null> {
+  const store = getStore('portfolio-snapshots');
+  if (accountHash) {
+    const own = await store.get(`account:${accountHash}:latest`, { type: 'json' }) as PortfolioSnapshot | null;
+    if (own) return own;
+    // Fall back to household snapshot for accounts with no per-account
+    // history yet. Better than nothing for AI-context preambles.
+  }
+  return store.get('latest', { type: 'json' });
+}
+
+/** Returns up to `limit` daily snapshots sorted newest-first. With an
+ *  accountHash, returns per-account snapshots (falling back to household
+ *  snapshots if none exist for this account yet). */
+export async function getSnapshotHistory(limit = 90, accountHash?: string): Promise<PortfolioSnapshot[]> {
   const store  = getStore('portfolio-snapshots');
-  const { blobs } = await store.list({ prefix: 'day-' });
+  const prefix = accountHash ? `account:${accountHash}:day-` : 'day-';
+  const { blobs } = await store.list({ prefix });
+  if (blobs.length === 0 && accountHash) {
+    // No per-account history yet — fall back to household snapshots so
+    // performance panels show *something* instead of an empty chart.
+    return getSnapshotHistory(limit);
+  }
   const sorted = blobs
     .map((b) => b.key)
     .sort()          // lexicographic = chronological for YYYY-MM-DD keys

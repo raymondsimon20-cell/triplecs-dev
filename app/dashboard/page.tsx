@@ -1358,7 +1358,7 @@ export default function DashboardPage() {
               iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
               defaultOpen={false}
             >
-              <div className="pt-4"><PerformancePanel /></div>
+              <div className="pt-4"><PerformancePanel accountHash={isAll ? undefined : account?.accountHash} /></div>
             </CollapsiblePanel>
 
             <CollapsiblePanel
@@ -1381,7 +1381,10 @@ export default function DashboardPage() {
               defaultOpen={false}
             >
               <div className="pt-4">
-                <PerformanceReviewPanel currentTargets={strategyTargets} />
+                <PerformanceReviewPanel
+                  currentTargets={strategyTargets}
+                  accountHash={isAll ? undefined : account?.accountHash}
+                />
               </div>
             </CollapsiblePanel>
 

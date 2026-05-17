@@ -42,6 +42,7 @@ import {
   autoExecuteActive,
   shouldHitSchwab,
   type AutoConfig,
+  type AutoMode,
 } from './auto-config';
 
 // ─── Trade history shape (mirrors app/api/orders/route.ts TradeHistoryEntry) ──
@@ -61,6 +62,9 @@ interface TradeHistoryEntry {
   aiMode?:     string;
   /** Avg cost basis (USD/share) for SELLs; undefined for BUYs. */
   costBasisPerShare?: number;
+  /** Schwab account hash the trade ran against. Optional for backward compat
+   *  with entries written before this field shipped. */
+  accountHash?: string;
 }
 
 interface PaperTrade extends TradeHistoryEntry {
@@ -74,7 +78,12 @@ function isoDate(d: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-async function countTodaysExecutions(): Promise<{ count: number; dollars: number }> {
+/**
+ * Count today's executions. With an accountHash, only counts trades placed
+ * against THAT account (so per-account daily caps apply per-account). Without,
+ * counts the whole trade-history blob (legacy / household-aggregate).
+ */
+async function countTodaysExecutions(accountHash?: string): Promise<{ count: number; dollars: number }> {
   try {
     const store = getStore('trade-history');
     const log = await store.get('log', { type: 'json' }) as TradeHistoryEntry[] | null;
@@ -86,6 +95,7 @@ async function countTodaysExecutions(): Promise<{ count: number; dollars: number
     for (const t of log) {
       if (!t.timestamp.startsWith(today)) continue;
       if (t.status !== 'placed') continue;
+      if (accountHash && t.accountHash && t.accountHash !== accountHash) continue;
       count += 1;
       const px = t.price ?? 0;
       dollars += t.quantity * px;
@@ -175,12 +185,20 @@ export function applyCaps(
 
 // ─── Circuit breaker ─────────────────────────────────────────────────────────
 
-/** Compares today's portfolio value against the most recent prior snapshot.
- *  If today's totalValue dropped more than `dailyLossPct`, trip the breaker
- *  (sticky pause until tomorrow) and return true. */
+/**
+ * Compares today's portfolio value against the most recent prior snapshot.
+ * If today's totalValue dropped more than `dailyLossPct`, trip the breaker
+ * (sticky pause until tomorrow) and return true.
+ *
+ * With an accountHash: prefers per-account snapshots if any exist (per-account
+ * snapshot store added 2026-05); falls back to household snapshots so accounts
+ * with no per-account history yet still get *some* breaker protection. Trips
+ * the per-account breaker only.
+ */
 export async function checkCircuitBreaker(
   currentPortfolioValue: number,
   config: AutoConfig,
+  accountHash?: string,
 ): Promise<{ tripped: boolean; reason: string }> {
   if (!Number.isFinite(currentPortfolioValue) || currentPortfolioValue <= 0) {
     return { tripped: false, reason: '' };
@@ -189,8 +207,17 @@ export async function checkCircuitBreaker(
   let priorValue: number | null = null;
   try {
     const store = getStore('snapshots');
-    const log = await store.get('log', { type: 'json' }) as
-      Array<{ savedAt: number; totalValue: number }> | null;
+    // Per-account snapshot lookup first; fall back to household log when no
+    // per-account history exists yet.
+    let log: Array<{ savedAt: number; totalValue: number }> | null = null;
+    if (accountHash) {
+      log = await store.get(`account:${accountHash}`, { type: 'json' }) as
+        Array<{ savedAt: number; totalValue: number }> | null;
+    }
+    if (!Array.isArray(log) || log.length === 0) {
+      log = await store.get('log', { type: 'json' }) as
+        Array<{ savedAt: number; totalValue: number }> | null;
+    }
     if (Array.isArray(log) && log.length > 0) {
       // Snapshots are saved newest-first. Find the most recent one BEFORE today.
       const today = isoDate(new Date());
@@ -210,7 +237,7 @@ export async function checkCircuitBreaker(
       `Intraday loss ${pctChange.toFixed(2)}% breached threshold ` +
       `${config.circuitBreaker.dailyLossPct}% (prior $${priorValue.toFixed(0)} → ` +
       `current $${currentPortfolioValue.toFixed(0)}). Auto-execute paused for the rest of today.`;
-    await tripCircuitBreaker(reason);
+    await tripCircuitBreaker(reason, accountHash);
     return { tripped: true, reason };
   }
 
@@ -220,6 +247,13 @@ export async function checkCircuitBreaker(
 // ─── Execution ───────────────────────────────────────────────────────────────
 
 export interface AutoExecuteResult {
+  /**
+   * Aggregated mode summary. When accounts disagree (e.g. one 'auto', one
+   * 'manual'), this reflects the most permissive mode any account ran in
+   * (auto > dry-run > manual) so the digest accurately describes the live
+   * surface area. The per-account breakdown (when present) tells the full
+   * story.
+   */
   mode:        'manual' | 'dry-run' | 'auto';
   considered:  number;
   executed:    number;
@@ -227,68 +261,198 @@ export interface AutoExecuteResult {
   breakerTripped: boolean;
   breakerReason:  string;
   dryRun:      boolean;
+  /**
+   * 2026-05 per-account autopilot. One entry per Schwab account that had
+   * staged items in this run, recording that account's own mode + outcome
+   * (so the digest can render "Roth: 2 placed, Taxable: paused (breaker)").
+   */
+  byAccount?: Array<{
+    accountHash:    string;
+    mode:           AutoMode;
+    considered:     number;
+    executed:       number;
+    rejectedCount:  number;
+    breakerTripped: boolean;
+    breakerReason:  string;
+  }>;
 }
 
 /**
- * Main entry. Takes freshly-staged inbox items + portfolio value and:
- *   1. Loads auto-config. If 'manual' → no-op (returns considered=0).
- *   2. Checks circuit breaker. If tripped → no-op + flag.
- *   3. Applies caps. Allowed items proceed; rejected items stay in inbox.
- *   4. If 'dry-run' → write paper-trades, leave inbox items as 'pending'.
- *   5. If 'auto' → place orders, write trade-history, mark inbox 'executed'.
+ * Main entry. Takes freshly-staged inbox items + a household portfolio value
+ * (and optional per-account totals) and:
+ *   1. Groups items by accountHash. Items without one fall through to the
+ *      primary (first) account bucket.
+ *   2. For EACH account bucket:
+ *        a. Loads that account's auto-config (override → global → defaults).
+ *        b. If 'manual' → no-op for that bucket.
+ *        c. Checks the per-account circuit breaker (against per-account
+ *           snapshots when available, else household). If tripped → no-op.
+ *        d. Applies that account's caps using THAT account's count of today's
+ *           executions (so caps are truly per-account, not household-pooled).
+ *        e. If 'dry-run' → paper-trades; if 'auto' → real orders + history.
+ *   3. Aggregates all per-account outcomes into one AutoExecuteResult plus
+ *      a per-account breakdown.
  */
 export async function autoExecute(
   stagedItems: InboxItem[],
   portfolioValue: number,
+  perAccountValues?: Map<string, number>,
 ): Promise<AutoExecuteResult> {
-  const config = await loadAutoConfig();
+  // Resolve the primary account once — items without a hash get bucketed here.
+  // If we can't reach Schwab we don't even know which account is primary, so
+  // we still run the manual / dry-run paths but skip live order placement.
+  const tokens = await getTokens();
+  let primaryAccountHash: string | undefined;
+  if (tokens) {
+    try {
+      const nums = await getAccountNumbers(tokens);
+      primaryAccountHash = nums[0]?.hashValue;
+    } catch (err) {
+      console.warn('[auto-execute] getAccountNumbers failed:', err);
+    }
+  }
 
-  // Manual mode is the default and does nothing.
+  // Group items by their target account. Untagged items go to `primary` if
+  // we know it; otherwise we tag them as `__untagged` and disclose at the end.
+  const byAccount = new Map<string, InboxItem[]>();
+  for (const it of stagedItems) {
+    const hash = it.accountHash || primaryAccountHash || '__untagged';
+    if (!byAccount.has(hash)) byAccount.set(hash, []);
+    byAccount.get(hash)!.push(it);
+  }
+
+  // Lazy import once — used by the live-mode branches.
+  const { fetchCostBasisMap, costBasisFor } = await import('../schwab/cost-basis');
+
+  // Per-account execution. Run buckets in parallel — they're independent
+  // (different account hashes, different configs, different breakers).
+  const buckets = await Promise.all(
+    Array.from(byAccount.entries()).map(async ([accountHash, items]) =>
+      executeAccountBucket({
+        accountHash,
+        items,
+        tokens,
+        portfolioValue: perAccountValues?.get(accountHash) ?? portfolioValue,
+        fetchCostBasisMap,
+        costBasisFor,
+      }),
+    ),
+  );
+
+  // ─── Aggregate ──────────────────────────────────────────────────────────
+  const allRejected   = buckets.flatMap((b) => b.rejected);
+  const totalExecuted = buckets.reduce((s, b) => s + b.executed, 0);
+  const totalConsidered = stagedItems.length;
+  const anyBreakerTripped = buckets.some((b) => b.breakerTripped);
+  const breakerReasons    = buckets
+    .filter((b) => b.breakerTripped && b.breakerReason)
+    .map((b) => b.breakerReason);
+  const modes = new Set(buckets.map((b) => b.mode));
+  // Most-permissive aggregate: prefer 'auto' > 'dry-run' > 'manual' so the
+  // digest reflects whether ANY account fired live trades.
+  const aggregateMode: AutoMode =
+    modes.has('auto')     ? 'auto'    :
+    modes.has('dry-run')  ? 'dry-run' :
+                            'manual';
+  const dryRun = aggregateMode === 'dry-run';
+
+  return {
+    mode:           aggregateMode,
+    considered:     totalConsidered,
+    executed:       totalExecuted,
+    rejected:       allRejected,
+    breakerTripped: anyBreakerTripped,
+    breakerReason:  breakerReasons.join(' · '),
+    dryRun,
+    byAccount: buckets.map((b) => ({
+      accountHash:    b.accountHash,
+      mode:           b.mode,
+      considered:     b.considered,
+      executed:       b.executed,
+      rejectedCount:  b.rejected.length,
+      breakerTripped: b.breakerTripped,
+      breakerReason:  b.breakerReason,
+    })),
+  };
+}
+
+/**
+ * Run the auto-execute pipeline for a single account's bucket of staged
+ * items. Returns a per-bucket outcome; the caller aggregates across buckets.
+ */
+async function executeAccountBucket(args: {
+  accountHash:    string;
+  items:          InboxItem[];
+  tokens:         Awaited<ReturnType<typeof getTokens>>;
+  portfolioValue: number;
+  fetchCostBasisMap: (typeof import('../schwab/cost-basis'))['fetchCostBasisMap'];
+  costBasisFor:      (typeof import('../schwab/cost-basis'))['costBasisFor'];
+}): Promise<{
+  accountHash:    string;
+  mode:           AutoMode;
+  considered:     number;
+  executed:       number;
+  rejected:       Array<{ symbol: string; instruction: string; reason: string }>;
+  breakerTripped: boolean;
+  breakerReason:  string;
+}> {
+  const { accountHash, items, tokens, portfolioValue, fetchCostBasisMap, costBasisFor } = args;
+
+  // __untagged is the synthetic bucket for items with no account hash AND no
+  // primary fallback (e.g. fresh install with no Schwab connection). Nothing
+  // we can act on — surface as rejected.
+  if (accountHash === '__untagged') {
+    return {
+      accountHash, mode: 'manual',
+      considered: items.length,
+      executed: 0,
+      rejected: items.map((it) => ({
+        symbol: it.symbol, instruction: it.instruction,
+        reason: 'No accountHash on item and no primary account available',
+      })),
+      breakerTripped: false, breakerReason: '',
+    };
+  }
+
+  // Load THIS account's auto-config. Override → global → defaults.
+  const config = await loadAutoConfig(accountHash);
+
+  // Manual mode: items stay in the inbox for human approval.
   if (config.mode === 'manual') {
     return {
-      mode: 'manual',
+      accountHash, mode: 'manual',
       considered: 0, executed: 0, rejected: [],
       breakerTripped: false, breakerReason: '',
-      dryRun: false,
     };
   }
 
-  // If breaker is already paused for today, bail without further checks.
+  // Breaker already paused for today.
   if (!autoExecuteActive(config)) {
     return {
-      mode: config.mode,
-      considered: stagedItems.length, executed: 0, rejected: [],
+      accountHash, mode: config.mode,
+      considered: items.length, executed: 0, rejected: [],
       breakerTripped: true,
       breakerReason: config.circuitBreaker.pausedReason || 'Auto-execute paused for today',
-      dryRun: config.mode === 'dry-run',
     };
   }
 
-  // Live breaker check against the latest portfolio value.
-  const breaker = await checkCircuitBreaker(portfolioValue, config);
+  // Live breaker check.
+  const breaker = await checkCircuitBreaker(portfolioValue, config, accountHash);
   if (breaker.tripped) {
     return {
-      mode: config.mode,
-      considered: stagedItems.length, executed: 0, rejected: [],
+      accountHash, mode: config.mode,
+      considered: items.length, executed: 0, rejected: [],
       breakerTripped: true, breakerReason: breaker.reason,
-      dryRun: config.mode === 'dry-run',
     };
   }
 
-  // Apply caps.
-  const todays = await countTodaysExecutions();
-  // Filter inbox items to only equity BUY/SELL — auto-execute shouldn't touch
-  // options or odd instructions. Stable-sort by priority is preserved (engine
-  // already sorted by priority before staging).
-  //
-  // Phase 5 safety gate: when running in real-money 'auto' mode, only items
-  // tagged `tier === 'auto'` are eligible for unattended execution. Items
-  // missing a tier (legacy stage paths, third-party sources) default to
-  // requiring approval — fail-closed. 'dry-run' is permissive so the user can
-  // observe tier-2 behavior in paper trades before flipping anything live.
+  // Per-account daily-cap accounting. Counts trades placed against THIS
+  // account today only.
+  const todays = await countTodaysExecutions(accountHash);
+
   const isAutoMode  = config.mode === 'auto';
   const tierGateRejected: Array<{ item: InboxItem; reason: string }> = [];
-  const eligible = stagedItems.filter((it) => {
+  const eligible = items.filter((it) => {
     if (it.instruction !== 'BUY' && it.instruction !== 'SELL') return false;
     if (it.status !== 'pending') return false;
     if (isAutoMode && it.tier !== 'auto') {
@@ -305,22 +469,16 @@ export async function autoExecute(
     return true;
   });
   const { allowed, rejected: capRejected } = applyCaps(eligible, config, portfolioValue, todays);
-  const rejected = [...tierGateRejected, ...capRejected];
-
-  const rejectedSummaries = rejected.map((r) => ({
-    symbol:      r.item.symbol,
-    instruction: r.item.instruction,
-    reason:      r.reason,
+  const rejectedRaw = [...tierGateRejected, ...capRejected];
+  const rejected = rejectedRaw.map((r) => ({
+    symbol: r.item.symbol, instruction: r.item.instruction, reason: r.reason,
   }));
 
   if (allowed.length === 0) {
     return {
-      mode: config.mode,
-      considered: stagedItems.length,
-      executed: 0,
-      rejected: rejectedSummaries,
+      accountHash, mode: config.mode,
+      considered: items.length, executed: 0, rejected,
       breakerTripped: false, breakerReason: '',
-      dryRun: config.mode === 'dry-run',
     };
   }
 
@@ -328,7 +486,7 @@ export async function autoExecute(
   if (!shouldHitSchwab(config)) {
     const now = Date.now();
     const paperEntries: PaperTrade[] = allowed.map((it, i) => ({
-      id:          `${now}-paper-${i}`,
+      id:          `${now}-paper-${accountHash.slice(0, 4)}-${i}`,
       timestamp:   new Date().toISOString(),
       symbol:      it.symbol,
       instruction: it.instruction as 'BUY' | 'SELL',
@@ -339,109 +497,46 @@ export async function autoExecute(
       status:      'placed',
       rationale:   it.rationale,
       aiMode:      it.aiMode,
+      accountHash,
       dryRun:      true,
     }));
     await savePaperTradeEntries(paperEntries);
-    console.log(`[auto-execute] DRY-RUN: would have placed ${allowed.length} order(s).`);
+    console.log(`[auto-execute] DRY-RUN ${accountHash.slice(0, 6)}: would have placed ${allowed.length} order(s).`);
     return {
-      mode: 'dry-run',
-      considered: stagedItems.length,
-      executed: 0,
-      rejected: rejectedSummaries,
+      accountHash, mode: 'dry-run',
+      considered: items.length, executed: 0, rejected,
       breakerTripped: false, breakerReason: '',
-      dryRun: true,
     };
   }
 
   // Live mode: real Schwab orders.
-  const tokens = await getTokens();
   if (!tokens) {
-    console.warn('[auto-execute] no Schwab tokens — cannot execute in auto mode');
     return {
-      mode: 'auto',
-      considered: stagedItems.length,
-      executed: 0,
-      rejected: [...rejectedSummaries, ...allowed.map((it) => ({
+      accountHash, mode: 'auto',
+      considered: items.length, executed: 0,
+      rejected: [...rejected, ...allowed.map((it) => ({
         symbol: it.symbol, instruction: it.instruction, reason: 'No Schwab tokens',
       }))],
       breakerTripped: false, breakerReason: '',
-      dryRun: false,
     };
   }
 
-  // Multi-account routing: group allowed items by their target accountHash.
-  // Items without one fall through to the primary (first) account. Each
-  // bucket gets its own placeOrders call and cost-basis fetch so SELLs land
-  // against the account that actually holds the position.
-  const accountNums = await getAccountNumbers(tokens);
-  const primaryAccountHash = accountNums[0]?.hashValue;
-  if (!primaryAccountHash) {
-    return {
-      mode: 'auto',
-      considered: stagedItems.length,
-      executed: 0,
-      rejected: [...rejectedSummaries, ...allowed.map((it) => ({
-        symbol: it.symbol, instruction: it.instruction, reason: 'No Schwab accounts available',
-      }))],
-      breakerTripped: false, breakerReason: '',
-      dryRun: false,
-    };
-  }
-
-  const allowedByAccount = new Map<string, InboxItem[]>();
-  for (const it of allowed) {
-    const hash = it.accountHash ?? primaryAccountHash;
-    if (!allowedByAccount.has(hash)) allowedByAccount.set(hash, []);
-    allowedByAccount.get(hash)!.push(it);
-  }
-
-  const { fetchCostBasisMap, costBasisFor } = await import('../schwab/cost-basis');
-
-  // Per-account placement, but parallelized across accounts so total wall
-  // time stays close to single-account latency.
-  type PerAccountResult = {
-    accountHash: string;
-    items:       InboxItem[];
-    results:     Awaited<ReturnType<typeof placeOrders>>;
-    costBasisMap: Record<string, number>;
-  };
-  const perAccountResults: PerAccountResult[] = await Promise.all(
-    Array.from(allowedByAccount.entries()).map(async ([hash, items]) => {
-      const reqs: OrderRequest[] = items.map((it) => ({
-        symbol:      it.symbol,
-        instruction: it.instruction as 'BUY' | 'SELL',
-        quantity:    it.quantity,
-        orderType:   it.orderType,
-        price:       it.price,
-      }));
-      const hasSell = items.some((it) => it.instruction === 'SELL');
-      const [results, costBasisMap] = await Promise.all([
-        placeOrders(tokens, hash, reqs),
-        hasSell ? fetchCostBasisMap(tokens, hash) : Promise.resolve({} as Record<string, number>),
-      ]);
-      return { accountHash: hash, items, results, costBasisMap };
-    }),
-  );
-
-  // Reassemble a flat results list aligned with the original `allowed` order
-  // so downstream code (history entries, markExecuted/markFailed loops) keeps
-  // working without re-keying.
-  const itemIdToResult = new Map<string, { r: PerAccountResult['results'][number]; basis: number | undefined }>();
-  for (const par of perAccountResults) {
-    par.results.forEach((r, i) => {
-      const item = par.items[i];
-      itemIdToResult.set(item.id, {
-        r,
-        basis: costBasisFor(item.instruction, r.symbol, par.costBasisMap),
-      });
-    });
-  }
-  const results = allowed.map((it) => itemIdToResult.get(it.id)!.r);
-  const basisForItem = (i: number) => itemIdToResult.get(allowed[i].id)?.basis;
+  const reqs: OrderRequest[] = allowed.map((it) => ({
+    symbol:      it.symbol,
+    instruction: it.instruction as 'BUY' | 'SELL',
+    quantity:    it.quantity,
+    orderType:   it.orderType,
+    price:       it.price,
+  }));
+  const hasSell = allowed.some((it) => it.instruction === 'SELL');
+  const [results, costBasisMap] = await Promise.all([
+    placeOrders(tokens, accountHash, reqs),
+    hasSell ? fetchCostBasisMap(tokens, accountHash) : Promise.resolve({} as Record<string, number>),
+  ]);
 
   const now = Date.now();
   const historyEntries: TradeHistoryEntry[] = results.map((r, i) => ({
-    id:          `${now}-sig-${i}`,
+    id:          `${now}-sig-${accountHash.slice(0, 4)}-${i}`,
     timestamp:   new Date().toISOString(),
     symbol:      r.symbol,
     instruction: allowed[i].instruction as 'BUY' | 'SELL',
@@ -453,14 +548,12 @@ export async function autoExecute(
     message:     r.message,
     rationale:   allowed[i].rationale,
     aiMode:      'signal_engine_auto',
-    costBasisPerShare: basisForItem(i),
+    costBasisPerShare: costBasisFor(allowed[i].instruction, r.symbol, costBasisMap),
+    accountHash,
   }));
   await saveTradeHistoryEntries(historyEntries);
 
-  // Mark each inbox item with the broker outcome:
-  //   - 'placed' → status 'executed', orderId attached
-  //   - anything else → status 'failed', reason recorded. Failed items will
-  //     not be re-attempted on the next cron — they need user intervention.
+  // Mark each inbox item with the broker outcome.
   let executed = 0;
   for (let i = 0; i < results.length; i += 1) {
     const r = results[i];
@@ -475,17 +568,12 @@ export async function autoExecute(
       const reason = r.message ?? 'Schwab rejected the order';
       try {
         await markFailed(allowed[i].id, reason, reason);
-        console.warn(
-          `[auto-execute] Schwab failed ${allowed[i].instruction} ${allowed[i].symbol}: ${reason}. ` +
-          `Inbox item marked failed; no retry on next cron.`,
-        );
       } catch (err) {
         console.warn(`[auto-execute] markFailed write failed for ${allowed[i].id}:`, err);
       }
     }
   }
 
-  // Surface broker errors in the autoExecute summary so the digest can show them.
   const erroredSummaries = results
     .map((r, i) => ({ r, item: allowed[i] }))
     .filter(({ r }) => r.status !== 'placed')
@@ -495,13 +583,11 @@ export async function autoExecute(
       reason:      `Schwab error: ${r.message ?? 'unknown'} — item marked failed`,
     }));
 
-  console.log(`[auto-execute] AUTO: placed ${executed}/${allowed.length} order(s).`);
+  console.log(`[auto-execute] AUTO ${accountHash.slice(0, 6)}: placed ${executed}/${allowed.length}.`);
   return {
-    mode: 'auto',
-    considered: stagedItems.length,
-    executed,
-    rejected: [...rejectedSummaries, ...erroredSummaries],
+    accountHash, mode: 'auto',
+    considered: items.length, executed,
+    rejected: [...rejected, ...erroredSummaries],
     breakerTripped: false, breakerReason: '',
-    dryRun: false,
   };
 }

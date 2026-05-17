@@ -94,16 +94,26 @@ export async function loadPaceBlock(): Promise<string | null> {
   return buildPaceBlock(ctx);
 }
 
-/** Same as loadFeedbackBlock but returns the raw recap (for the review panel). */
-export async function loadRecap(lookbackDays = 90): Promise<FullRecap | null> {
+/**
+ * Same as loadFeedbackBlock but returns the raw recap (for the review panel).
+ * With an `accountHash`, the recap is scoped to that account: trade history is
+ * filtered to entries tagged with this hash (legacy untagged entries are
+ * included because they predate per-account tagging), inbox is filtered the
+ * same way, and snapshots come from the per-account series (falling back to
+ * the household series for accounts with no per-account history yet).
+ */
+export async function loadRecap(lookbackDays = 90, accountHash?: string): Promise<FullRecap | null> {
   try {
     const [trades, inbox, snapshots, latest] = await Promise.all([
       loadTradeHistory(),
-      listInbox(),
-      getSnapshotHistory(120),
-      getLatestPortfolioSnapshot(),
+      listInbox(accountHash ? { accountHash } : undefined),
+      getSnapshotHistory(120, accountHash),
+      getLatestPortfolioSnapshot(accountHash),
     ]);
-    return buildRecap(trades, inbox, snapshots, latest, lookbackDays);
+    const scopedTrades = accountHash
+      ? trades.filter((t) => !t.accountHash || t.accountHash === accountHash)
+      : trades;
+    return buildRecap(scopedTrades, inbox, snapshots, latest, lookbackDays);
   } catch (err) {
     console.warn('[recap-loader] recap load failed:', err);
     return null;

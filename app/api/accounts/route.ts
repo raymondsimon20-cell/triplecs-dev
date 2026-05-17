@@ -1,7 +1,10 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers } from '@/lib/schwab/client';
-import { getCachedPortfolio, cachePortfolio, getTokens, savePortfolioSnapshot } from '@/lib/storage';
+import {
+  getCachedPortfolio, cachePortfolio, getTokens,
+  savePortfolioSnapshot, savePerAccountSnapshot,
+} from '@/lib/storage';
 import { enrichPositions, summarizeByPillar, checkMarginRules, getTaxHarvestCandidates } from '@/lib/classify';
 import { buildSnapshot } from '@/lib/portfolio/fetch';
 import type { SchwabAccountWrapper } from '@/lib/schwab/types';
@@ -144,9 +147,15 @@ export async function GET(req: Request) {
         // Cache for 60 seconds
         await cachePortfolio(acct.accountNumber, result);
 
-        // Persist snapshot for AI history and proactive alerts (fire-and-forget)
+        // Persist snapshot for AI history and proactive alerts (fire-and-forget).
+        // Writes both:
+        //   • A household-level snapshot at 'latest' / 'day-…' (legacy path
+        //     consumed by performance / chart / breaker fallback).
+        //   • A per-account snapshot at 'account:{hash}:…' so per-account
+        //     performance panels and per-account circuit breakers can read
+        //     this account's history independently of the household sum.
         const marginBal = Math.abs(acct.currentBalances.marginBalance ?? 0);
-        savePortfolioSnapshot(buildSnapshot([{
+        const snap = buildSnapshot([{
           accountNumber: acct.accountNumber,
           totalValue,
           equity: acct.currentBalances.equity,
@@ -157,7 +166,13 @@ export async function GET(req: Request) {
           afwDollars: acct.currentBalances.availableFunds ?? 0,
           pillarSummary,
           positions: enrichedPositions,
-        }])).catch((e) => console.warn('[snapshot] save failed:', e));
+        }]);
+        savePortfolioSnapshot(snap).catch((e) => console.warn('[snapshot] save failed:', e));
+        const acctHash = accountNumMap[acct.accountNumber];
+        if (acctHash) {
+          savePerAccountSnapshot(acctHash, snap)
+            .catch((e) => console.warn('[snapshot] per-account save failed:', e));
+        }
 
         return result;
       }))

@@ -60,7 +60,13 @@ const ChartTooltip = ({ active, payload, label }: any) => {
   );
 };
 
-export function PerformancePanel() {
+interface PerformancePanelProps {
+  /** Account to scope the series to. Omit (or 'all' / 'global') for the
+   *  household-aggregate view. */
+  accountHash?: string;
+}
+
+export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
   const [data, setData]       = useState<PerfPayload | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError]     = useState<string | null>(null);
@@ -70,7 +76,9 @@ export function PerformancePanel() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch('/api/performance?limit=120');
+      const params = new URLSearchParams({ limit: '120' });
+      if (accountHash) params.set('accountHash', accountHash);
+      const r = await fetch(`/api/performance?${params.toString()}`);
       const d: PerfPayload | { error: string } = await r.json();
       if ('error' in d) setError(d.error); else { setData(d); setError(null); }
     } catch (err) {
@@ -78,7 +86,7 @@ export function PerformancePanel() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accountHash]);
 
   useEffect(() => { load(); }, [load]);
 

@@ -57,13 +57,18 @@ function extractJSON(text: string): string {
 
 // ─── GET — recap only (no Claude) ────────────────────────────────────────────
 
-export async function GET() {
+export async function GET(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
-  const recap90 = await loadRecap(90);
-  const recap30 = await loadRecap(30);
-  return NextResponse.json({ recap90, recap30 });
+  // ?accountHash=… scopes the recap to a single Schwab account.
+  const accountHashParam = new URL(req.url).searchParams.get('accountHash');
+  const accountHash      = accountHashParam && accountHashParam !== 'all' && accountHashParam !== 'global'
+    ? accountHashParam
+    : undefined;
+  const recap90 = await loadRecap(90, accountHash);
+  const recap30 = await loadRecap(30, accountHash);
+  return NextResponse.json({ recap90, recap30, scope: accountHash ?? 'all' });
 }
 
 // ─── POST — full Claude review ───────────────────────────────────────────────

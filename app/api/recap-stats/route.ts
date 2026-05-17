@@ -52,12 +52,22 @@ function summarize(recap: Awaited<ReturnType<typeof loadRecap>>, windowDays: num
   };
 }
 
-export async function GET() {
+export async function GET(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const [recap30, recap90] = await Promise.all([loadRecap(30), loadRecap(90)]);
+  // ?accountHash=… scopes the recap to a single Schwab account. Empty /
+  // 'all' / 'global' returns the household-aggregate recap (legacy).
+  const accountHashParam = new URL(req.url).searchParams.get('accountHash');
+  const accountHash      = accountHashParam && accountHashParam !== 'all' && accountHashParam !== 'global'
+    ? accountHashParam
+    : undefined;
+
+  const [recap30, recap90] = await Promise.all([
+    loadRecap(30, accountHash),
+    loadRecap(90, accountHash),
+  ]);
 
   const window30 = summarize(recap30, 30);
   const window90 = summarize(recap90, 90);
@@ -68,5 +78,5 @@ export async function GET() {
     performanceReview:{ needed: 30, have: window90.decided, met: window90.decided >= 30 },
   };
 
-  return NextResponse.json({ window30, window90, gates });
+  return NextResponse.json({ window30, window90, gates, scope: accountHash ?? 'all' });
 }

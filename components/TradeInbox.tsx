@@ -291,7 +291,25 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
 
   async function approveAllAllowed() {
     if (allowed.length === 0) return;
-    if (!confirm(`Submit ${allowed.length} order${allowed.length === 1 ? '' : 's'} to Schwab? This is irreversible once placed.`)) return;
+    // Group by target account so the user knows whether bulk-approve fires
+    // orders into one account or spans the household. Each item carries its
+    // own accountHash now; untagged ones fall back to the header-selected
+    // account (already reflected in the label resolver).
+    const grouped = new Map<string, number>();
+    for (const it of allowed) {
+      const targetHash = it.accountHash || accountHash;
+      grouped.set(targetHash, (grouped.get(targetHash) ?? 0) + 1);
+    }
+    const accountLines = Array.from(grouped.entries())
+      .map(([hash, n]) => `  • ${labelForHash(hash) || `···${hash.slice(0, 6)}`} — ${n} order${n === 1 ? '' : 's'}`)
+      .join('\n');
+    const spanLabel = grouped.size > 1
+      ? `\n\nThis spans ${grouped.size} accounts:\n${accountLines}`
+      : '';
+    if (!confirm(
+      `Submit ${allowed.length} order${allowed.length === 1 ? '' : 's'} to Schwab? ` +
+      `This is irreversible once placed.${spanLabel}`,
+    )) return;
     setBulkBusy(true);
     try {
       // Sequential to keep error reporting accurate and avoid Schwab rate limits.
@@ -313,6 +331,54 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
         method:  'DELETE',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({ all: true }),
+      });
+      await load();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  /**
+   * Clean up legacy items: pending items without an accountHash. These show
+   * up in every per-account view because the filter treats them as "belongs
+   * to the active account on approve". One-shot dismissal.
+   */
+  async function cleanupLegacyUntagged() {
+    const untagged = items.filter((it) => !it.accountHash);
+    if (untagged.length === 0) return;
+    if (!confirm(
+      `Dismiss ${untagged.length} untagged legacy item${untagged.length === 1 ? '' : 's'}? ` +
+      `These are pending items staged before per-account tagging. They appear in every account's queue today.`,
+    )) return;
+    setBulkBusy(true);
+    try {
+      await fetch('/api/inbox', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ cleanup: 'untagged' }),
+      });
+      await load();
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
+  /** Bulk-tag every untagged pending item with the currently-selected
+   *  account hash so they stop bleeding across views. */
+  async function cleanupTagLegacy() {
+    const untagged = items.filter((it) => !it.accountHash);
+    if (untagged.length === 0 || !accountHash) return;
+    const accountLabel = labelForHash(accountHash) || `···${accountHash.slice(0, 6)}`;
+    if (!confirm(
+      `Tag ${untagged.length} untagged legacy item${untagged.length === 1 ? '' : 's'} with ${accountLabel}? ` +
+      `They'll then route to this account only and disappear from other accounts' queues.`,
+    )) return;
+    setBulkBusy(true);
+    try {
+      await fetch('/api/inbox', {
+        method:  'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ cleanup: 'tag-untagged', accountHash }),
       });
       await load();
     } finally {
@@ -354,6 +420,26 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
           </button>
           {items.length > 0 && (
             <>
+              {items.some((it) => !it.accountHash) && (
+                <>
+                  <button
+                    onClick={cleanupTagLegacy}
+                    disabled={bulkBusy}
+                    className="text-[10px] px-2 py-1 rounded text-blue-300 border border-blue-500/30 bg-blue-500/5 hover:bg-blue-500/15 disabled:opacity-50 transition-colors"
+                    title="Tag legacy untagged items with the currently-selected account"
+                  >
+                    Tag legacy → this account
+                  </button>
+                  <button
+                    onClick={cleanupLegacyUntagged}
+                    disabled={bulkBusy}
+                    className="text-[10px] px-2 py-1 rounded text-amber-300 border border-amber-500/30 bg-amber-500/5 hover:bg-amber-500/15 disabled:opacity-50 transition-colors"
+                    title="Dismiss legacy untagged items"
+                  >
+                    Dismiss legacy
+                  </button>
+                </>
+              )}
               <button
                 onClick={dismissAll}
                 disabled={bulkBusy}

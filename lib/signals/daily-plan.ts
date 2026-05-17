@@ -46,6 +46,12 @@ export interface PlannedAction {
   status?: InboxItem['status'];
   /** Guardrail-attached violations (when the item is staged). */
   blockedByGuardrails: boolean;
+  /**
+   * Schwab account hash this action targets. Sourced from the matching inbox
+   * item when present (signal engine tags every staged item with its
+   * accountHash). Used by the daily digest to group actions per-account.
+   */
+  accountHash?: string;
 }
 
 export interface DailyPlan {
@@ -174,6 +180,7 @@ export function buildDailyPlan(
       requiresApproval,
       status:             inboxMatch?.status,
       blockedByGuardrails: blocked,
+      accountHash:        inboxMatch?.accountHash,
     };
 
     actions[tier].push(action);

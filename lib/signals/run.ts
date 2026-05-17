@@ -640,7 +640,16 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
   let autoExecuteResult: AutoExecuteResult | undefined;
   if (freshItems.length > 0) {
     try {
-      autoExecuteResult = await autoExecute(freshItems, result.valuation.totalValue);
+      // Per-account totals let autoExecute's per-account caps + circuit
+      // breaker work against THAT account's value, not the household pool.
+      const perAccountValues = new Map<string, number>(
+        perAccount.map((pa) => [pa.accountHash, pa.result.valuation.totalValue]),
+      );
+      autoExecuteResult = await autoExecute(
+        freshItems,
+        result.valuation.totalValue,
+        perAccountValues,
+      );
     } catch (err) {
       console.warn('[signals/run] auto-execute failed:', err);
     }

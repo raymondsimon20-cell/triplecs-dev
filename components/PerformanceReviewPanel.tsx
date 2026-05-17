@@ -70,6 +70,8 @@ interface ReviewResponse {
 
 interface Props {
   currentTargets: StrategyTargets;
+  /** Account to scope review data to. Omit for household-aggregate. */
+  accountHash?: string;
 }
 
 function fmtPct(n: number, dp = 1): string {
@@ -92,7 +94,7 @@ const MODE_LABELS: Record<string, string> = {
   unknown:        'Unknown',
 };
 
-export function PerformanceReviewPanel({ currentTargets }: Props) {
+export function PerformanceReviewPanel({ currentTargets, accountHash }: Props) {
   const [data, setData]         = useState<RecapPayload | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -105,7 +107,8 @@ export function PerformanceReviewPanel({ currentTargets }: Props) {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch('/api/performance-review');
+      const params = accountHash ? `?accountHash=${encodeURIComponent(accountHash)}` : '';
+      const r = await fetch(`/api/performance-review${params}`);
       const d: RecapPayload | { error: string } = await r.json();
       if ('error' in d) setError(d.error);
       else { setData(d); setError(null); }
@@ -114,7 +117,7 @@ export function PerformanceReviewPanel({ currentTargets }: Props) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accountHash]);
 
   useEffect(() => { load(); }, [load]);
 

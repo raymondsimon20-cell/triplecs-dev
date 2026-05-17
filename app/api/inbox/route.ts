@@ -16,8 +16,10 @@ import {
   appendInbox,
   dismissAllPending,
   dismissItem,
+  dismissUntaggedPending,
   listInbox,
   markExecuted,
+  tagUntaggedPending,
   type AppendInput,
   type InboxSource,
   type InboxStatus,
@@ -157,9 +159,36 @@ export async function PATCH(req: Request) {
 export async function DELETE(req: Request) {
   try { await requireAuth(); } catch { return unauthorized(); }
 
-  let body: { id?: string; all?: boolean; cleanup?: 'put-rec-equity' };
+  let body: {
+    id?:        string;
+    all?:       boolean;
+    cleanup?:   'put-rec-equity' | 'untagged' | 'tag-untagged';
+    accountHash?: string;
+  };
   try { body = await req.json(); }
   catch { return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 }); }
+
+  // 2026-05 cleanup paths for legacy items left over from before per-account
+  // tagging shipped:
+  //   • cleanup: 'untagged'      — dismisses every pending item with no
+  //     accountHash. One-shot to clear the queue of items that would
+  //     otherwise appear in every per-account view.
+  //   • cleanup: 'tag-untagged'  — bulk-tags every pending untagged item
+  //     with body.accountHash so they stop bleeding across accounts.
+  if (body.cleanup === 'untagged') {
+    const dismissed = await dismissUntaggedPending();
+    return NextResponse.json({ dismissed, kind: 'untagged' });
+  }
+  if (body.cleanup === 'tag-untagged') {
+    if (!body.accountHash) {
+      return NextResponse.json(
+        { error: 'tag-untagged requires accountHash' },
+        { status: 400 },
+      );
+    }
+    const tagged = await tagUntaggedPending(body.accountHash);
+    return NextResponse.json({ tagged, accountHash: body.accountHash });
+  }
 
   // Targeted cleanup: dismiss pending inbox items that were mis-staged as
   // equity orders for put recommendations (the same pattern the POST guard
