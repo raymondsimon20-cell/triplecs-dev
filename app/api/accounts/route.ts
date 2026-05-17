@@ -112,10 +112,14 @@ export async function GET(req: Request) {
           (sum, p) => sum + p.gainLoss, 0
         );
 
-        // Available for withdrawal = cash + money market (dividends land here)
-        const availableForWithdrawal =
-          (acct.currentBalances.cashBalance ?? 0) +
-          (acct.currentBalances.moneyMarketFund ?? 0);
+        // AFW = Available For Withdrawal — Schwab's authoritative margin
+        // headroom field (`availableFunds`). The rest of the codebase
+        // (signals/run, portfolio/fetch, backtest, snapshot capture) reads
+        // this same field; until 2026-05 this endpoint was returning
+        // cashBalance + moneyMarketFund instead, which silently disagreed
+        // with every other AFW consumer and read as $0 for fully-invested
+        // accounts with no cash sitting around.
+        const availableForWithdrawal = acct.currentBalances.availableFunds ?? 0;
 
         const taxHarvestCandidates = getTaxHarvestCandidates(enrichedPositions);
 
