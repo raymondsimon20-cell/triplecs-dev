@@ -4,6 +4,13 @@ import { useState, useEffect, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
+/**
+ * Pillar tints + per-pillar hover glows were removed in the 2026-05 redesign.
+ * The type stays for backwards compatibility (call sites pass it harmlessly);
+ * the values are intentionally ignored so every panel renders with one neutral
+ * card style. Pillar identity is carried only by the `accentClass` left-edge
+ * stripe — that's the single channel for "what pillar is this about".
+ */
 type GlowColor =
   | 'triples'
   | 'cornerstone'
@@ -22,28 +29,22 @@ interface Props {
   defaultOpen?: boolean;
   children: ReactNode;
   className?: string;
-  /** Tailwind border-color class for the left accent stripe, e.g. "border-amber-500/60" */
+  /** Tailwind border-color class for the left accent stripe, e.g. "border-amber-500/60" — the ONE place pillar color is carried */
   accentClass?: string;
-  /** Tailwind gradient tint applied to card bg, e.g. "from-amber-500/[0.04]" */
+  /** @deprecated — tinted gradient backgrounds were removed. Prop accepted but ignored. */
   tintClass?: string;
   /** Classes for the icon wrapper pill, e.g. "bg-amber-500/10 border border-amber-500/20" */
   iconContainerClass?: string;
-  /** Brand color used for the intensified hover glow */
+  /** @deprecated — colored hover glows were removed. Prop accepted but ignored. */
   glowColor?: GlowColor;
 }
 
 const STORAGE_PREFIX = 'triplec_panel_';
 
-const GLOW_HOVER: Record<GlowColor, string> = {
-  triples:     '0 0 32px rgba(245,158,11,0.22), 0 12px 36px rgba(0,0,0,0.5)',
-  cornerstone: '0 0 32px rgba(59,130,246,0.22), 0 12px 36px rgba(0,0,0,0.5)',
-  income:      '0 0 32px rgba(16,185,129,0.22), 0 12px 36px rgba(0,0,0,0.5)',
-  hedge:       '0 0 32px rgba(139,92,246,0.22), 0 12px 36px rgba(0,0,0,0.5)',
-  cyan:        '0 0 32px rgba(6,182,212,0.22),  0 12px 36px rgba(0,0,0,0.5)',
-  orange:      '0 0 32px rgba(249,115,22,0.22), 0 12px 36px rgba(0,0,0,0.5)',
-  red:         '0 0 32px rgba(239,68,68,0.28),  0 12px 36px rgba(0,0,0,0.5)',
-  purple:      '0 0 32px rgba(168,85,247,0.22), 0 12px 36px rgba(0,0,0,0.5)',
-};
+// One neutral hover elevation, no color. Pre-redesign every panel had its own
+// glow tint — the cumulative effect was a dashboard where everything competed
+// for attention. Subtle lift only now; pillar identity travels via accentClass.
+const HOVER_SHADOW = '0 6px 22px rgba(0,0,0,0.4)';
 
 export function CollapsiblePanel({
   id,
@@ -54,12 +55,9 @@ export function CollapsiblePanel({
   children,
   className = '',
   accentClass,
-  tintClass,
   iconContainerClass = 'bg-white/[0.06]',
-  glowColor,
 }: Props) {
   const storageKey = `${STORAGE_PREFIX}${id}`;
-  const hoverShadow = glowColor ? GLOW_HOVER[glowColor] : '0 8px 32px rgba(0,0,0,0.5)';
 
   const [open, setOpen] = useState<boolean>(() => {
     if (typeof window === 'undefined') return defaultOpen;
@@ -82,19 +80,18 @@ export function CollapsiblePanel({
     <motion.div
       id={`panel-${id}`}
       className={[
-        'card-glass border border-[#252840] rounded-xl overflow-hidden scroll-mt-20',
-        'shadow-card transition-shadow duration-200',
-        tintClass ? `bg-gradient-to-br ${tintClass} to-transparent` : '',
+        'bg-[#12151f] border border-[#1f2334] rounded-xl overflow-hidden scroll-mt-20',
+        'transition-shadow duration-200',
         accentClass ? `border-l-2 ${accentClass}` : '',
         className,
       ].join(' ')}
-      whileHover={{ y: -2, boxShadow: hoverShadow }}
+      whileHover={{ y: -1, boxShadow: HOVER_SHADOW }}
       transition={{ type: 'spring', stiffness: 300, damping: 24 }}
     >
       {/* Header bar */}
       <button
         onClick={toggle}
-        className="w-full flex items-center justify-between px-5 py-4 text-left hover:bg-white/[0.03] transition-colors group"
+        className="w-full flex items-center justify-between px-5 py-3.5 text-left hover:bg-white/[0.02] transition-colors group"
         aria-expanded={open}
         aria-label={`${open ? 'Collapse' : 'Expand'} ${title}`}
       >
@@ -123,7 +120,7 @@ export function CollapsiblePanel({
             transition={{ duration: 0.22, ease: [0.4, 0, 0.2, 1] }}
             style={{ overflow: 'hidden' }}
           >
-            <div className="px-5 pb-5 pt-0 border-t border-[#252840]">
+            <div className="px-5 pb-5 pt-0 border-t border-[#1f2334]">
               {children}
             </div>
           </motion.div>

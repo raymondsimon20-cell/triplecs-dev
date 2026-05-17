@@ -1,11 +1,31 @@
 'use client';
 
+/**
+ * Dashboard — 2026-05 redesign.
+ *
+ * The old single-scroll page with 16 panels and a 14-item section nav has been
+ * replaced with three top-level tabs:
+ *
+ *   • Today      — TodayPanel (unified action queue) + 4-metric hero + pillar
+ *                  bar + Market Read + Top Positions. Morning check-in fits
+ *                  above the fold.
+ *   • Portfolio  — sub-tabs (Positions, Income, Trades, Market, Strategy).
+ *                  Weekly rebalance + deep dives.
+ *   • History    — forensics (AI Analysis, Performance, Plan Archive, Replay,
+ *                  Rollback, Strategy Guide).
+ *
+ * All existing data plumbing (Schwab fetch, live stream, drift auto-rebalance,
+ * alerts) is preserved. The change is purely IA + visual.
+ */
+
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
-  RefreshCw, LogOut, AlertTriangle, CheckCircle, AlertCircle,
+  RefreshCw, LogOut, AlertTriangle, AlertCircle, CheckCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
-  List, Calculator, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target, Inbox, X,
+  List, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
+  Inbox, X, Wallet, History, Calculator, Activity,
 } from 'lucide-react';
+import { motion } from 'framer-motion';
 import { AccountSwitcher } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
@@ -13,17 +33,16 @@ import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { IncomeHub } from '@/components/IncomeHub';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
-import { TradeHub } from '@/components/TradeHub';
+import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { PositionsTable } from '@/components/PositionsTable';
-import { usePendingOrderSymbols } from '@/components/TradeHub';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
-import { SettingsPanel, useStrategyTargets } from '@/components/SettingsPanel';
+import { SettingsPanel, useStrategyTargets, updateStrategyTargets } from '@/components/SettingsPanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
-import { TradeInbox } from '@/components/TradeInbox';
+import { TodayPanel } from '@/components/TodayPanel';
 import { DailyPlanPanel } from '@/components/DailyPlanPanel';
 import { ReplayPanel } from '@/components/ReplayPanel';
 import { PlanArchivePanel } from '@/components/PlanArchivePanel';
@@ -35,15 +54,12 @@ import { WatchlistPanel } from '@/components/WatchlistPanel';
 import { StrategyGuide } from '@/components/StrategyGuide';
 import { MarketConditionsDashboard } from '@/components/MarketConditionsDashboard';
 import { RebalanceWorkflow } from '@/components/RebalanceWorkflow';
-import { updateStrategyTargets } from '@/components/SettingsPanel';
 import { PortfolioChart } from '@/components/PortfolioChart';
 import { usePortfolioStream } from '@/lib/hooks/usePortfolioStream';
-import type { RuleAlert, PillarSummary } from '@/lib/classify';
+import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
-import type { StrategyTargets } from '@/lib/utils';
 import { fmt$, gainLossColor } from '@/lib/utils';
 import { AnimatedNumber } from '@/components/AnimatedNumber';
-import { motion } from 'framer-motion';
 
 interface AccountData {
   accountNumber: string;
@@ -61,18 +77,14 @@ interface AccountData {
   marginAlerts: RuleAlert[];
 }
 
-// ─── Alert icons ──────────────────────────────────────────────────────────────
+type View = 'today' | 'portfolio' | 'history';
+type PortfolioSub = 'positions' | 'income' | 'trades' | 'market' | 'strategy';
 
-const ALERT_ICON = {
-  danger: <AlertTriangle className="w-4 h-4 text-red-400 flex-shrink-0" />,
-  warn:   <AlertCircle   className="w-4 h-4 text-orange-400 flex-shrink-0" />,
-  ok:     <CheckCircle   className="w-4 h-4 text-emerald-400 flex-shrink-0" />,
-};
-
-// ─── Metric card ──────────────────────────────────────────────────────────────
-
+// ─── Slim metric card ─────────────────────────────────────────────────────────
+// Pre-redesign every card had a gradient text fill + colored hover glow. Now
+// one neutral surface, optional colorClass for the value only (used for P&L).
 function MetricCard({
-  label, value, rawValue, colorClass = 'text-white', sub, trend, gradientClass, hoverShadow,
+  label, value, rawValue, colorClass = 'text-white', sub, trend,
 }: {
   label: string;
   value: string;
@@ -80,48 +92,40 @@ function MetricCard({
   colorClass?: string;
   sub?: string;
   trend?: 'up' | 'down' | null;
-  /** Tailwind gradient classes for value text, e.g. "from-amber-400 to-orange-500". Overrides colorClass. */
-  gradientClass?: string;
-  /** Optional colored hover shadow override */
-  hoverShadow?: string;
 }) {
-  const valueClass = gradientClass
-    ? `bg-gradient-to-r ${gradientClass} bg-clip-text text-transparent`
-    : colorClass;
   return (
     <motion.div
-      className="card-glass border border-[#252840] rounded-xl p-4 flex flex-col gap-1.5 shadow-card cursor-default"
-      whileHover={{ y: -2, boxShadow: hoverShadow ?? '0 8px 28px rgba(0,0,0,0.5)', borderColor: 'rgba(53,56,96,1)' }}
+      className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3 flex flex-col gap-1 cursor-default"
+      whileHover={{ y: -1, boxShadow: '0 6px 22px rgba(0,0,0,0.4)', borderColor: 'rgba(45,50,72,1)' }}
       transition={{ type: 'spring', stiffness: 300, damping: 24 }}
     >
-      <div className="text-[11px] text-[#7c82a0] font-semibold tracking-widest uppercase">{label}</div>
-      <div className="text-2xl font-extrabold tabular-nums tracking-tight flex items-center gap-1.5 leading-none">
+      <div className="text-[10px] text-[#7c82a0] font-semibold tracking-widest uppercase">{label}</div>
+      <div className={`text-xl font-bold tabular-nums tracking-tight flex items-center gap-1.5 leading-none ${colorClass}`}>
         {rawValue !== undefined
-          ? <AnimatedNumber value={rawValue} format={fmt$} className={valueClass} />
-          : <span className={valueClass}>{value}</span>}
-        {trend === 'up'   && <TrendingUp className="w-3.5 h-3.5 text-emerald-400 opacity-80" />}
-        {trend === 'down' && <TrendingUp className="w-3.5 h-3.5 text-red-400 opacity-80 rotate-180" />}
+          ? <AnimatedNumber value={rawValue} format={(v) => value.includes('%') ? `${v.toFixed(1)}%` : fmt$(v)} className={colorClass} />
+          : <span>{value}</span>}
+        {trend === 'up'   && <TrendingUp className="w-3 h-3 text-emerald-400 opacity-80" />}
+        {trend === 'down' && <TrendingUp className="w-3 h-3 text-red-400 opacity-80 rotate-180" />}
       </div>
-      {sub && <div className="text-[11px] text-[#4a5070] leading-snug">{sub}</div>}
+      {sub && <div className="text-[10px] text-[#4a5070] leading-snug">{sub}</div>}
     </motion.div>
   );
 }
 
-// ─── FIRE progress bar ────────────────────────────────────────────────────────
-
+// ─── FIRE progress pill ───────────────────────────────────────────────────────
 function FireProgress({ monthly, target }: { monthly: number; target: number }) {
   const pct = target > 0 ? Math.min((monthly / target) * 100, 100) : 0;
   const reached = pct >= 100;
   return (
-    <div className="hidden md:flex items-center gap-2 min-w-[160px]" title={`FIRE target: $${target.toLocaleString()}/mo`}>
-      <span className="text-[11px] text-[#7c82a0] whitespace-nowrap">FIRE</span>
-      <div className="flex-1 h-1.5 bg-[#2d3248] rounded-full overflow-hidden">
+    <div className="hidden md:flex items-center gap-2 min-w-[140px]" title={`FIRE target: $${target.toLocaleString()}/mo`}>
+      <span className="text-[10px] text-[#7c82a0] uppercase tracking-wider">FIRE</span>
+      <div className="flex-1 h-1.5 bg-[#1f2334] rounded-full overflow-hidden">
         <div
           className={`h-full rounded-full transition-all duration-700 ${reached ? 'bg-emerald-400' : 'bg-blue-500'}`}
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className={`text-[11px] font-semibold tabular-nums ${reached ? 'text-emerald-400' : 'text-[#7c82a0]'}`}>
+      <span className={`text-[11px] font-semibold tabular-nums ${reached ? 'text-emerald-400' : 'text-[#9aa2c0]'}`}>
         {pct.toFixed(0)}%
       </span>
     </div>
@@ -129,136 +133,266 @@ function FireProgress({ monthly, target }: { monthly: number; target: number }) 
 }
 
 // ─── Data age indicator ───────────────────────────────────────────────────────
-
 function DataAge({ updated }: { updated: Date }) {
   const [, forceRender] = useState(0);
-
-  // Re-render every 15 seconds to update the age display
   useEffect(() => {
     const id = setInterval(() => forceRender((n) => n + 1), 15_000);
     return () => clearInterval(id);
   }, []);
-
   const ageSec = Math.floor((Date.now() - updated.getTime()) / 1000);
   const ageMin = Math.floor(ageSec / 60);
-
-  let dotColor = 'bg-emerald-400';   // fresh (< 2 min)
+  let dotColor = 'bg-emerald-400';
   let label = `${ageSec}s ago`;
-  if (ageMin >= 5) {
-    dotColor = 'bg-orange-400';
-    label = `${ageMin}m ago`;
-  } else if (ageMin >= 2) {
-    dotColor = 'bg-yellow-400';
-    label = `${ageMin}m ago`;
-  } else if (ageSec >= 60) {
-    label = `1m ago`;
-  }
-
+  if (ageMin >= 5)       { dotColor = 'bg-orange-400';  label = `${ageMin}m ago`; }
+  else if (ageMin >= 2)  { dotColor = 'bg-yellow-400';  label = `${ageMin}m ago`; }
+  else if (ageSec >= 60) {                              label = `1m ago`;          }
   return (
     <span className="hidden sm:flex items-center gap-1.5">
-      <span className={`w-2 h-2 rounded-full ${dotColor} dot-live shadow-[0_0_6px_currentColor]`} />
+      <span className={`w-1.5 h-1.5 rounded-full ${dotColor} dot-live shadow-[0_0_6px_currentColor]`} />
       <span className="tabular-nums text-[#7c82a0]">{label}</span>
     </span>
   );
 }
 
-// ─── Section jump nav ─────────────────────────────────────────────────────────
-
-const NAV_ITEMS = [
-  { id: 'overview',     label: 'Overview',      icon: BarChart2   },
-  { id: 'review',       label: 'AI Review',     icon: Brain       },
-  { id: 'market',       label: 'Market',        icon: TrendingUp  },
-  { id: 'cornerstone',  label: 'Cornerstone',   icon: PieChart    },
-  { id: 'margin',       label: 'Margin',        icon: Gauge       },
-  { id: 'triples',      label: 'Triples',       icon: Zap         },
-  { id: 'options',      label: 'Options & Puts', icon: Shield      },
-  { id: 'ai',           label: 'AI Analysis',   icon: Brain       },
-  { id: 'income',       label: 'Income',        icon: DollarSign  },
-  { id: 'rebalance',    label: 'Rebalance',     icon: Calculator  },
-  { id: 'orders',       label: 'Orders',        icon: ClipboardList },
-  { id: 'watchlist',    label: 'Watchlist',     icon: Eye         },
-  { id: 'positions',    label: 'Positions',     icon: List        },
-  { id: 'strategy',     label: 'Strategy Guide', icon: BookOpen   },
-];
-
-function SectionNav() {
-  const [active, setActive] = useState<string>('');
-
-  useEffect(() => {
-    const observer = new IntersectionObserver(
-      (entries) => {
-        const visible = entries.filter((e) => e.isIntersecting);
-        if (visible.length > 0) {
-          // Pick the topmost visible section
-          const top = visible.reduce((a, b) =>
-            a.boundingClientRect.top < b.boundingClientRect.top ? a : b
-          );
-          setActive(top.target.id.replace('panel-', ''));
-        }
-      },
-      { rootMargin: '-60px 0px -60% 0px', threshold: 0 }
-    );
-    NAV_ITEMS.forEach(({ id }) => {
-      const el = document.getElementById(`panel-${id}`);
-      if (el) observer.observe(el);
-    });
-    return () => observer.disconnect();
-  }, []);
-
-  function scrollTo(id: string) {
-    const el = document.getElementById(`panel-${id}`);
-    if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  }
-
+// ─── Top tabs ─────────────────────────────────────────────────────────────────
+function TopTabs({ view, onChange }: { view: View; onChange: (v: View) => void }) {
+  const items: { id: View; label: string; icon: typeof BarChart2 }[] = [
+    { id: 'today',     label: 'Today',     icon: Zap     },
+    { id: 'portfolio', label: 'Portfolio', icon: Wallet  },
+    { id: 'history',   label: 'History',   icon: History },
+  ];
   return (
-    <nav className="w-full overflow-x-auto border-b border-[#252840] card-glass sticky top-[57px] z-30">
-      <div className="max-w-7xl mx-auto px-4 flex gap-0.5 py-1.5">
-        {NAV_ITEMS.map(({ id, label, icon: Icon }) => (
-          <button
-            key={id}
-            onClick={() => scrollTo(id)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium whitespace-nowrap transition-colors
-              ${active === id
-                ? 'bg-blue-600/20 text-blue-400'
-                : 'text-[#7c82a0] hover:text-white hover:bg-white/5'
+    <nav className="w-full border-b border-[#1a1e2e] bg-[rgba(18,21,31,0.6)] backdrop-blur sticky top-[57px] z-30">
+      <div className="max-w-7xl mx-auto px-4 flex gap-1">
+        {items.map(({ id, label, icon: Icon }) => {
+          const active = view === id;
+          return (
+            <button
+              key={id}
+              onClick={() => onChange(id)}
+              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors border-b-2 ${
+                active
+                  ? 'text-white border-blue-500'
+                  : 'text-[#7c82a0] border-transparent hover:text-white'
               }`}
-          >
-            <Icon className="w-3 h-3 flex-shrink-0" />
-            {label}
-          </button>
-        ))}
+            >
+              <Icon className="w-3.5 h-3.5" />
+              {label}
+            </button>
+          );
+        })}
       </div>
     </nav>
   );
 }
 
-// ─── Options + Open Puts tabbed panel ────────────────────────────────────────
+// ─── Portfolio sub-tabs ───────────────────────────────────────────────────────
+function PortfolioSubTabs({
+  active, onChange, counts,
+}: {
+  active: PortfolioSub;
+  onChange: (s: PortfolioSub) => void;
+  counts: { positions: number; orders: number };
+}) {
+  const items: { id: PortfolioSub; label: string; count?: number }[] = [
+    { id: 'positions', label: 'Positions', count: counts.positions },
+    { id: 'income',    label: 'Income' },
+    { id: 'trades',    label: 'Trades',    count: counts.orders },
+    { id: 'market',    label: 'Market' },
+    { id: 'strategy',  label: 'Strategy tools' },
+  ];
+  return (
+    <div className="flex items-center gap-1 flex-wrap mb-4">
+      {items.map(({ id, label, count }) => {
+        const isActive = active === id;
+        return (
+          <button
+            key={id}
+            onClick={() => onChange(id)}
+            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 ${
+              isActive
+                ? 'bg-[#1a1e2e] text-white'
+                : 'text-[#7c82a0] hover:text-white hover:bg-white/[0.03]'
+            }`}
+          >
+            {label}
+            {count !== undefined && (
+              <span className={`text-[10px] ${isActive ? 'text-[#9aa2c0]' : 'text-[#4a5070]'}`}>{count}</span>
+            )}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
+// ─── Market Read mini card (lightweight inline; pulls /api/market-conditions) ─
+function MarketReadCard() {
+  const [data, setData] = useState<{
+    vix: number; vixChange: number; sp500Change: number; nasdaq100Change: number;
+    marketTrend: 'bullish' | 'neutral' | 'bearish';
+    volatilityLevel: 'low' | 'normal' | 'high' | 'extreme';
+    recommendation?: string;
+  } | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    const load = async () => {
+      try {
+        const r = await fetch('/api/market-conditions');
+        if (!r.ok) return;
+        const j = await r.json();
+        if (mounted) {
+          setData({
+            vix: j.marketData?.vix ?? 0,
+            vixChange: j.marketData?.vixChange ?? 0,
+            sp500Change: j.marketData?.sp500Change ?? 0,
+            nasdaq100Change: j.marketData?.nasdaq100Change ?? 0,
+            marketTrend: j.marketData?.marketTrend ?? 'neutral',
+            volatilityLevel: j.marketData?.volatilityLevel ?? 'normal',
+            recommendation: j.recommendation?.recommendation,
+          });
+        }
+      } catch { /* swallow — card simply won't render until data arrives */ }
+    };
+    load();
+    const t = setInterval(load, 60_000);
+    return () => { mounted = false; clearInterval(t); };
+  }, []);
+
+  const vixTone =
+    !data ? 'text-[#7c82a0]' :
+    data.volatilityLevel === 'extreme' ? 'text-red-400' :
+    data.volatilityLevel === 'high'    ? 'text-orange-400' :
+    data.volatilityLevel === 'low'     ? 'text-emerald-400' :
+                                          'text-[#9aa2c0]';
+
+  const vixLabel =
+    !data ? '' :
+    data.volatilityLevel === 'extreme' ? 'Extreme stress' :
+    data.volatilityLevel === 'high'    ? 'High caution' :
+    data.volatilityLevel === 'low'     ? 'Bull territory' :
+                                          'Normal';
+
+  return (
+    <div className="bg-[#12151f] border border-[#1f2334] rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <Activity className="w-4 h-4 text-cyan-400" />
+          <span className="text-sm font-semibold text-white">Market read</span>
+        </div>
+        <span className="text-[10px] text-[#4a5070]">refreshed 60s</span>
+      </div>
+      {data ? (
+        <>
+          <div className="grid grid-cols-3 gap-3 mb-3">
+            <div>
+              <div className="text-[9px] text-[#7c82a0] uppercase tracking-wider">VIX</div>
+              <div className="text-base font-bold tabular-nums">{data.vix.toFixed(1)}</div>
+              <div className={`text-[10px] ${vixTone}`}>{vixLabel}</div>
+            </div>
+            <div>
+              <div className="text-[9px] text-[#7c82a0] uppercase tracking-wider">SPX</div>
+              <div className={`text-base font-bold tabular-nums ${gainLossColor(data.sp500Change)}`}>
+                {data.sp500Change >= 0 ? '+' : ''}{data.sp500Change.toFixed(2)}%
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] text-[#7c82a0] uppercase tracking-wider">NDX</div>
+              <div className={`text-base font-bold tabular-nums ${gainLossColor(data.nasdaq100Change)}`}>
+                {data.nasdaq100Change >= 0 ? '+' : ''}{data.nasdaq100Change.toFixed(2)}%
+              </div>
+            </div>
+          </div>
+          {data.recommendation && (
+            <div className="text-[11px] text-[#9aa2c0] leading-relaxed pt-3 border-t border-[#1a1e2e]">
+              {data.recommendation}
+            </div>
+          )}
+        </>
+      ) : (
+        <div className="h-16 flex items-center justify-center text-[11px] text-[#4a5070]">Loading market…</div>
+      )}
+    </div>
+  );
+}
+
+// ─── Top positions mini card ──────────────────────────────────────────────────
+function TopPositionsCard({
+  positions, onSeeAll,
+}: {
+  positions: EnrichedPosition[];
+  onSeeAll: () => void;
+}) {
+  const top = useMemo(() => {
+    return [...positions]
+      .sort((a, b) => Math.abs(b.marketValue) - Math.abs(a.marketValue))
+      .slice(0, 5);
+  }, [positions]);
+
+  return (
+    <div className="bg-[#12151f] border border-[#1f2334] rounded-xl p-4">
+      <div className="flex items-center justify-between mb-3">
+        <div className="flex items-center gap-2">
+          <List className="w-4 h-4 text-[#9aa2c0]" />
+          <span className="text-sm font-semibold text-white">Top positions</span>
+        </div>
+        <button
+          onClick={onSeeAll}
+          className="text-[10px] text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          View all →
+        </button>
+      </div>
+      <div className="space-y-0">
+        {top.map((p, i) => {
+          const dayGL = p.todayGainLoss ?? 0;
+          const dayPct = p.marketValue > 0 ? (dayGL / p.marketValue) * 100 : 0;
+          return (
+            <div
+              key={p.instrument.symbol}
+              className={`flex items-center justify-between py-2 text-xs ${
+                i < top.length - 1 ? 'border-b border-[#1a1e2e]' : ''
+              }`}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-semibold tabular-nums truncate">{p.instrument.symbol}</span>
+                <span className="text-[10px] text-[#4a5070] tabular-nums">{p.portfolioPercent.toFixed(1)}%</span>
+              </div>
+              <span className={`font-medium tabular-nums ${gainLossColor(dayGL)}`}>
+                {dayGL >= 0 ? '+' : ''}{dayPct.toFixed(2)}%
+              </span>
+            </div>
+          );
+        })}
+        {top.length === 0 && (
+          <div className="text-[11px] text-[#4a5070] py-3 text-center">No positions yet</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── Options + Open Puts (kept tabbed, just used inside Portfolio → Strategy) ─
 function OptionsPutsPanel({
-  positions,
-  totalValue,
-  accountHash,
+  positions, totalValue, accountHash,
 }: {
   positions: EnrichedPosition[];
   totalValue: number;
   accountHash: string;
 }) {
   const [tab, setTab] = useState<'strategy' | 'puts'>('strategy');
-
   return (
     <CollapsiblePanel
       id="options"
       title="Options & Puts"
       icon={<Shield className="w-4 h-4 text-blue-400" />}
       accentClass="border-blue-500/40"
-      tintClass="from-blue-500/[0.04]"
       iconContainerClass="bg-blue-500/10 border border-blue-500/20"
-      glowColor="cornerstone"
       defaultOpen={true}
     >
       <div className="pt-4 space-y-4">
-        {/* Tab bar */}
-        <div className="flex gap-1 border-b border-[#2d3248] pb-0">
+        <div className="flex gap-1 border-b border-[#1f2334] pb-0">
           <button
             onClick={() => setTab('strategy')}
             className={`px-4 py-2 text-xs font-medium rounded-t-lg transition-colors -mb-px border-b-2 ${
@@ -280,23 +414,18 @@ function OptionsPutsPanel({
             Open Puts
           </button>
         </div>
-
         {tab === 'strategy' && (
-          <OptionsStrategyPanel
-            positions={positions}
-            totalValue={totalValue}
-            accountHash={accountHash}
-          />
+          <OptionsStrategyPanel positions={positions} totalValue={totalValue} accountHash={accountHash} />
         )}
-        {tab === 'puts' && (
-          <OpenPutTracker positions={positions} />
-        )}
+        {tab === 'puts' && <OpenPutTracker positions={positions} />}
       </div>
     </CollapsiblePanel>
   );
 }
 
-// ─── Page ─────────────────────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════════════════
+// PAGE
+// ═════════════════════════════════════════════════════════════════════════════
 
 export default function DashboardPage() {
   const [accounts, setAccounts]         = useState<AccountData[]>([]);
@@ -306,20 +435,22 @@ export default function DashboardPage() {
   const [error, setError]               = useState<string | null>(null);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
-  // Estimated monthly income from dividend data (for FIRE pill)
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
   const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
+  const [view, setView]                 = useState<View>('today');
+  const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('positions');
+
   const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
   const strategyTargets = useStrategyTargets();
   const fireTarget = strategyTargets.fireNumber;
 
-  // Live streaming — only activate when we have account data
+  // Live streaming
   const streamSymbols = (accounts[selectedIdx]?.positions ?? [])
     .map((p) => p.instrument.symbol)
-    .filter((s) => !s.includes(' ')); // skip options
+    .filter((s) => !s.includes(' '));
   const { liveQuotes, status: streamStatus } = usePortfolioStream(streamSymbols, streamSymbols.length > 0);
 
-  // Merge live prices into positions so AI gets current market values
+  // Merge live prices into positions
   const livePositions = useMemo(() => {
     const positions = accounts[selectedIdx]?.positions ?? [];
     if (!liveQuotes.size) return positions;
@@ -330,7 +461,6 @@ export default function DashboardPage() {
       const newMarketValue = livePrice * qty;
       return { ...p, marketValue: newMarketValue };
     });
-    // Recompute total and portfolioPercent with live values
     const liveTotalValue = updated.reduce((sum, p) => sum + Math.abs(p.marketValue), 0) || (accounts[selectedIdx]?.totalValue ?? 0);
     return updated.map((p) => ({
       ...p,
@@ -341,32 +471,24 @@ export default function DashboardPage() {
   const fetchDividends = useCallback(async () => {
     try {
       const res = await fetch('/api/dividends');
-      if (!res.ok) {
-        console.warn('[fetchDividends] API returned', res.status);
-        return;
-      }
+      if (!res.ok) return;
       const data = await res.json() as {
         dividends?: { amount: number; date: string; symbol: string }[];
         total?: number;
       };
       const total = data.total ?? 0;
       setDividendsTotal(total);
-
-      // Calculate monthly income from recent 30-day dividends if detailed data available
       if (Array.isArray(data.dividends) && data.dividends.length > 0) {
         const now = Date.now();
         const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
         const recentSum = data.dividends
           .filter((d) => new Date(d.date).getTime() >= thirtyDaysAgo)
           .reduce((s, d) => s + d.amount, 0);
-        // Annualize the 30-day window if we have recent data, otherwise use total/12
         setMonthlyIncome(recentSum > 0 ? recentSum : total / 12);
       } else {
         setMonthlyIncome(total / 12);
       }
-    } catch (err) {
-      console.warn('[fetchDividends] Error:', err);
-    }
+    } catch { /* swallow */ }
   }, []);
 
   const fetchAccounts = useCallback(async (showRefreshing = false) => {
@@ -399,13 +521,7 @@ export default function DashboardPage() {
 
   const account = accounts[selectedIdx];
 
-  // ── Drift>2% auto-rebalance ──────────────────────────────────────────────
-  // On dashboard load, if any pillar has drifted >2% from its target AND no
-  // pending rebalance items already sit in the inbox, automatically run a
-  // rebalance plan. The route auto-stages to the inbox; we just surface a
-  // banner so the user knows trades were prepared. Fires at most once per
-  // session via the ref guard. Skips on automation pause (the route returns
-  // { paused: true } and we treat that as a no-op for the banner).
+  // ── Drift>2% auto-rebalance (unchanged behaviour, slimmer banner UI) ──────
   const driftRebalanceFiredRef = useRef(false);
   const [driftRebalanceBanner, setDriftRebalanceBanner] = useState<
     | { kind: 'staging'; maxDriftPct: number }
@@ -431,14 +547,12 @@ export default function DashboardPage() {
       .filter((p) => p.pillar !== 'other')
       .map((p) => Math.abs(p.portfolioPercent - (targetMap[p.pillar] ?? 0)));
     const maxDrift = drifts.length ? Math.max(...drifts) : 0;
-    if (maxDrift <= 2) return; // threshold from spec — chosen to match the wizard's "warn" level
+    if (maxDrift <= 2) return;
 
-    driftRebalanceFiredRef.current = true; // claim the slot before async work
+    driftRebalanceFiredRef.current = true;
 
     (async () => {
       try {
-        // Skip if the inbox already has pending rebalance orders so we don't
-        // duplicate work the user hasn't decided on yet.
         const inboxRes = await fetch('/api/inbox?status=pending&source=rebalance');
         if (inboxRes.ok) {
           const data = await inboxRes.json() as { items?: unknown[] };
@@ -447,9 +561,7 @@ export default function DashboardPage() {
             return;
           }
         }
-
         setDriftRebalanceBanner({ kind: 'staging', maxDriftPct: maxDrift });
-
         const res = await fetch('/api/rebalance-plan', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -462,7 +574,6 @@ export default function DashboardPage() {
           }),
         });
         if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let accumulated = '';
@@ -472,7 +583,6 @@ export default function DashboardPage() {
           accumulated += decoder.decode(value, { stream: true });
           if (accumulated.includes('__DONE__')) break;
         }
-
         const match = accumulated.match(/__RESULT__([\s\S]*?)\n__DONE__/);
         if (!match) throw new Error('No result in stream');
         const parsed = JSON.parse(match[1].trim()) as {
@@ -483,17 +593,34 @@ export default function DashboardPage() {
         };
         if (parsed.error)  throw new Error(parsed.error);
         if (parsed.paused) { setDriftRebalanceBanner({ kind: 'paused' }); return; }
-
         const count = parsed.orders?.length ?? 0;
         if (count > 0) {
           setDriftRebalanceBanner({ kind: 'staged', count, summary: parsed.summary ?? '' });
         } else {
-          setDriftRebalanceBanner(null); // nothing actionable; don't pester
+          setDriftRebalanceBanner(null);
         }
       } catch (err) {
         setDriftRebalanceBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Auto-rebalance failed' });
       }
     })();
+  }, [account, strategyTargets]);
+
+  // ── Max drift (per pillar) — surfaced as a Today metric so weekly-rebalance
+  //    drift is always visible without digging into the allocation panel. ────
+  const maxDrift = useMemo(() => {
+    if (!account?.pillarSummary?.length) return 0;
+    const targetMap: Record<string, number> = {
+      triples:     strategyTargets.triplesPct,
+      cornerstone: strategyTargets.cornerstonePct,
+      income:      strategyTargets.incomePct,
+      hedge:       strategyTargets.hedgePct,
+    };
+    return Math.max(
+      ...account.pillarSummary
+        .filter((p) => p.pillar !== 'other')
+        .map((p) => Math.abs(p.portfolioPercent - (targetMap[p.pillar] ?? 0))),
+      0,
+    );
   }, [account, strategyTargets]);
 
   // ── Loading / error states ──────────────────────────────────────────────────
@@ -514,13 +641,13 @@ export default function DashboardPage() {
       <div className="min-h-screen flex items-center justify-center px-4">
         <div className="text-center space-y-4 max-w-md">
           <AlertTriangle className="w-10 h-10 text-red-400 mx-auto" />
-          <h2 className="text-xl font-semibold text-white">Failed to Load Portfolio</h2>
+          <h2 className="text-xl font-semibold text-white">Failed to load portfolio</h2>
           <p className="text-[#7c82a0] text-sm">{error}</p>
           <button
             onClick={() => fetchAccounts()}
             className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm transition-colors"
           >
-            Try Again
+            Try again
           </button>
         </div>
       </div>
@@ -536,141 +663,130 @@ export default function DashboardPage() {
   }
 
   // ── Derived values ──────────────────────────────────────────────────────────
-
-  const dayGL               = account.dayGainLoss;
-  const unrealized          = account.unrealizedGainLoss ?? 0;
-  const totalReturn         = unrealized + dividendsTotal;
+  const dayGL = account.dayGainLoss;
   const availableForWithdrawal = account.availableForWithdrawal ?? 0;
-  const dangerAlerts        = account.marginAlerts.filter((a) => a.level === 'danger');
-  const warnAlerts          = account.marginAlerts.filter((a) => a.level === 'warn');
+  const marginUsedPct = (account.equity + Math.abs(account.marginBalance)) > 0
+    ? (Math.abs(account.marginBalance) / (account.equity + Math.abs(account.marginBalance))) * 100
+    : 0;
+  const dangerAlerts = account.marginAlerts.filter((a) => a.level === 'danger');
+  const warnAlerts   = account.marginAlerts.filter((a) => a.level === 'warn');
 
+  // ── Daily pulse handler — switches to History and triggers AI deep-dive ───
+  const fireDailyPulse = () => {
+    setView('history');
+    setAiPulseTrigger((n) => n + 1);
+    setTimeout(() => {
+      document.getElementById('panel-ai')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }, 80);
+  };
+
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="min-h-screen bg-[#0a0c14]">
 
-      {/* ── Top header ────────────────────────────────────────────────────── */}
-      <header className="border-b border-[#252840] card-glass sticky top-0 z-40">
-        <div className="max-w-7xl mx-auto px-4 py-3 flex items-center justify-between gap-4">
+      {/* ── Slim header (5 functional groups instead of 10) ───────────────── */}
+      <header className="border-b border-[#1a1e2e] bg-[rgba(18,21,31,0.85)] backdrop-blur sticky top-0 z-40">
+        <div className="max-w-7xl mx-auto px-4 py-2.5 flex items-center justify-between gap-4">
 
-          {/* Brand */}
-          <div className="flex items-center gap-2.5">
-            <div className="w-7 h-7 rounded-lg bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
-              <TrendingUp className="w-3.5 h-3.5 text-blue-400" />
+          <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <div className="w-6 h-6 rounded-md bg-blue-600/20 border border-blue-500/30 flex items-center justify-center">
+                <TrendingUp className="w-3 h-3 text-blue-400" />
+              </div>
+              <div className="leading-none">
+                <div className="font-bold text-white text-sm tracking-tight">Triple C</div>
+              </div>
             </div>
-            <div className="leading-none">
-              <div className="font-bold text-white text-sm tracking-tight">Triple C</div>
-              <div className="text-[10px] text-[#4a5070] hidden sm:block">Triples · Cornerstone · Core/Income</div>
-            </div>
+            <FireProgress monthly={monthlyIncome} target={fireTarget} />
           </div>
 
-          {/* FIRE progress */}
-          <FireProgress monthly={monthlyIncome} target={fireTarget} />
-
-          {/* Right controls */}
-          <div className="flex items-center gap-2 sm:gap-3">
-            <AccountSwitcher
-              accounts={accounts}
-              selectedIndex={selectedIdx}
-              onSelect={setSelectedIdx}
-            />
-
-            <button
-              onClick={() => {
-                setAiPulseTrigger((n) => n + 1);
-                document.getElementById('panel-ai')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-              }}
-              className="flex items-center gap-1.5 text-xs font-semibold text-cyan-400 hover:text-cyan-300 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 px-3 py-1.5 rounded-lg transition-colors"
-              title="Run AI daily pulse analysis"
-            >
-              <Zap className="w-3.5 h-3.5" />
-              <span className="hidden sm:inline">Daily Pulse</span>
-            </button>
-
-            <SettingsPanel />
-            <AutomationToggle />
-            <ThemeToggle />
-            <PortfolioExport
-              positions={account.positions}
-              totalValue={account.totalValue}
-              equity={account.equity}
-              marginBalance={account.marginBalance}
-              accountNumber={account.accountNumber}
-              pillarSummary={account.pillarSummary}
-              dividendsAnnual={dividendsTotal}
-            />
+          <div className="flex items-center gap-2 sm:gap-2.5 text-xs">
+            <AccountSwitcher accounts={accounts} selectedIndex={selectedIdx} onSelect={setSelectedIdx} />
 
             <button
               onClick={() => fetchAccounts(true)}
               disabled={refreshing}
-              className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
-              title={lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString()}` : 'Refresh portfolio data'}
+              className="flex items-center gap-1.5 text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
+              title={lastUpdated ? `Last updated: ${lastUpdated.toLocaleTimeString()}` : 'Refresh'}
               aria-label="Refresh portfolio data"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${refreshing ? 'animate-spin' : ''}`} />
-              {lastUpdated && (
-                <DataAge updated={lastUpdated} />
-              )}
-              {!lastUpdated && <span className="hidden sm:inline">Refresh</span>}
+              {lastUpdated && <DataAge updated={lastUpdated} />}
             </button>
 
-            <form action="/api/auth/logout" method="POST">
-              <button
-                type="submit"
-                aria-label="Log out of Schwab"
-                className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-red-400 transition-colors"
-              >
-                <LogOut className="w-3.5 h-3.5" />
-                <span className="hidden sm:inline">Logout</span>
-              </button>
-            </form>
+            <button
+              onClick={fireDailyPulse}
+              className="flex items-center gap-1.5 font-semibold text-cyan-400 hover:text-cyan-300 bg-cyan-600/10 hover:bg-cyan-600/20 border border-cyan-500/30 px-2.5 py-1 rounded-md transition-colors"
+              title="Run AI daily pulse analysis"
+            >
+              <Zap className="w-3 h-3" />
+              <span className="hidden sm:inline">Daily pulse</span>
+            </button>
+
+            <div className="flex items-center gap-1.5 pl-2 border-l border-[#1f2334]">
+              <SettingsPanel />
+              <AutomationToggle />
+              <ThemeToggle />
+              <PortfolioExport
+                positions={account.positions}
+                totalValue={account.totalValue}
+                equity={account.equity}
+                marginBalance={account.marginBalance}
+                accountNumber={account.accountNumber}
+                pillarSummary={account.pillarSummary}
+                dividendsAnnual={dividendsTotal}
+              />
+              <form action="/api/auth/logout" method="POST">
+                <button
+                  type="submit"
+                  aria-label="Log out"
+                  className="flex items-center text-[#7c82a0] hover:text-red-400 transition-colors p-1"
+                >
+                  <LogOut className="w-3.5 h-3.5" />
+                </button>
+              </form>
+            </div>
           </div>
         </div>
       </header>
 
-      {/* ── Section nav ───────────────────────────────────────────────────── */}
-      <SectionNav />
+      {/* ── Top tabs ──────────────────────────────────────────────────────── */}
+      <TopTabs view={view} onChange={setView} />
 
-      <main className="max-w-7xl mx-auto px-4 py-6 space-y-4">
+      <main className="max-w-7xl mx-auto px-4 py-5 space-y-4">
 
-        {/* ── Auto-rebalance banner (drift>2%) ────────────────────────────── */}
+        {/* ── Drift auto-rebalance banner ──────────────────────────────────── */}
         {driftRebalanceBanner && driftRebalanceBanner.kind !== 'skipped_existing' && (
           <div
-            className={`rounded-xl border p-3 flex items-start gap-2 ${
-              driftRebalanceBanner.kind === 'staged'  ? 'bg-blue-500/10 border-blue-500/40 text-blue-200'  :
-              driftRebalanceBanner.kind === 'staging' ? 'bg-blue-500/5 border-blue-500/25 text-blue-200'   :
-              driftRebalanceBanner.kind === 'paused'  ? 'bg-yellow-500/10 border-yellow-500/30 text-yellow-200' :
-              'bg-red-500/10 border-red-500/30 text-red-200'
+            className={`rounded-lg border p-3 flex items-start gap-2 text-xs ${
+              driftRebalanceBanner.kind === 'staged'  ? 'bg-blue-500/8 border-blue-500/35 text-blue-200'  :
+              driftRebalanceBanner.kind === 'staging' ? 'bg-blue-500/5 border-blue-500/20 text-blue-200'  :
+              driftRebalanceBanner.kind === 'paused'  ? 'bg-yellow-500/8 border-yellow-500/25 text-yellow-200' :
+              'bg-red-500/8 border-red-500/25 text-red-200'
             }`}
           >
-            {driftRebalanceBanner.kind === 'staging' && <RefreshCw className="w-4 h-4 mt-0.5 flex-shrink-0 animate-spin" />}
-            {driftRebalanceBanner.kind === 'staged'  && <Inbox      className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-            {driftRebalanceBanner.kind === 'paused'  && <AlertCircle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-            {driftRebalanceBanner.kind === 'error'   && <AlertTriangle className="w-4 h-4 mt-0.5 flex-shrink-0" />}
-            <div className="text-xs leading-relaxed flex-1 min-w-0">
+            {driftRebalanceBanner.kind === 'staging' && <RefreshCw className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 animate-spin" />}
+            {driftRebalanceBanner.kind === 'staged'  && <Inbox      className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+            {driftRebalanceBanner.kind === 'paused'  && <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+            {driftRebalanceBanner.kind === 'error'   && <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+            <div className="flex-1 min-w-0 leading-relaxed">
               {driftRebalanceBanner.kind === 'staging' && (
-                <>
-                  <span className="font-semibold">Drift detected ({driftRebalanceBanner.maxDriftPct.toFixed(1)}%).</span>{' '}
-                  Generating rebalance trades…
-                </>
+                <><span className="font-semibold">Drift detected ({driftRebalanceBanner.maxDriftPct.toFixed(1)}%).</span> Generating rebalance trades…</>
               )}
               {driftRebalanceBanner.kind === 'staged' && (
                 <>
                   <span className="font-semibold">Rebalance staged.</span>{' '}
-                  {driftRebalanceBanner.count} order{driftRebalanceBanner.count === 1 ? '' : 's'} ready in your Trade Inbox for one-click approval.
+                  {driftRebalanceBanner.count} order{driftRebalanceBanner.count === 1 ? '' : 's'} ready in Today.
                   {driftRebalanceBanner.summary && (
                     <span className="block text-blue-200/70 mt-0.5">{driftRebalanceBanner.summary}</span>
                   )}
                 </>
               )}
               {driftRebalanceBanner.kind === 'paused' && (
-                <>
-                  <span className="font-semibold">Automation paused.</span>{' '}
-                  Drift was detected but no trades were generated. Re-enable automation to run rebalance.
-                </>
+                <><span className="font-semibold">Automation paused.</span> Drift detected but no trades generated.</>
               )}
               {driftRebalanceBanner.kind === 'error' && (
-                <>
-                  <span className="font-semibold">Auto-rebalance failed:</span> {driftRebalanceBanner.message}
-                </>
+                <><span className="font-semibold">Auto-rebalance failed:</span> {driftRebalanceBanner.message}</>
               )}
             </div>
             <button
@@ -678,450 +794,394 @@ export default function DashboardPage() {
               className="text-current/60 hover:text-current transition-colors flex-shrink-0"
               aria-label="Dismiss"
             >
-              <X className="w-4 h-4" />
+              <X className="w-3.5 h-3.5" />
             </button>
           </div>
         )}
 
-        {/* ── Danger banner ───────────────────────────────────────────────── */}
+        {/* ── Margin danger / warn ribbons ─────────────────────────────────── */}
         {dangerAlerts.length > 0 && (
-          <div className="bg-red-500/10 border border-red-500/40 rounded-xl p-4 space-y-2 shadow-[0_0_24px_rgba(239,68,68,0.12)]">
-            <div className="flex items-center gap-2 mb-1">
-              <span className="w-2 h-2 rounded-full bg-red-400 dot-live shadow-[0_0_8px_#ef4444]" />
-              <AlertTriangle className="w-4 h-4 text-red-400" />
-              <span className="text-sm font-semibold text-red-300">
-                {dangerAlerts.length} Rule Violation{dangerAlerts.length > 1 ? 's' : ''}
+          <div className="bg-red-500/8 border border-red-500/30 rounded-lg p-3 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <AlertTriangle className="w-3.5 h-3.5 text-red-400" />
+              <span className="text-xs font-semibold text-red-300">
+                {dangerAlerts.length} rule violation{dangerAlerts.length > 1 ? 's' : ''}
               </span>
             </div>
             {dangerAlerts.map((a, i) => (
-              <div key={i} className="flex items-start gap-2 text-sm text-red-300 ml-8">
+              <div key={i} className="flex items-start gap-2 text-xs text-red-300/90 ml-5.5">
                 <span>•</span>
                 <span><strong>{a.rule}:</strong> {a.detail}</span>
               </div>
             ))}
           </div>
         )}
-
         {warnAlerts.length > 0 && dangerAlerts.length === 0 && (
-          <div className="bg-orange-500/10 border border-orange-500/30 rounded-xl px-4 py-3 flex items-center gap-2.5 shadow-[0_0_20px_rgba(249,115,22,0.10)]">
-            <span className="w-2 h-2 rounded-full bg-orange-400 dot-live shadow-[0_0_6px_#f97316]" />
-            {ALERT_ICON.warn}
-            <span className="text-sm text-orange-300">
-              {warnAlerts.length} warning{warnAlerts.length > 1 ? 's' : ''} — review Margin &amp; Risk below
-            </span>
+          <div className="bg-orange-500/8 border border-orange-500/25 rounded-lg px-3 py-2 flex items-center gap-2 text-xs text-orange-300">
+            <AlertCircle className="w-3.5 h-3.5" />
+            <span>{warnAlerts.length} warning{warnAlerts.length > 1 ? 's' : ''} — see Margin & Risk on Portfolio › Strategy.</span>
           </div>
         )}
 
-        {/* ── Portfolio overview ──────────────────────────────────────────── */}
-        <div id="panel-overview" className="scroll-mt-20 space-y-4">
-          {/* Metric cards */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-            <MetricCard
-              label="Portfolio Value"
-              value={fmt$(account.totalValue)}
-              rawValue={account.totalValue}
-              gradientClass="from-amber-300 via-amber-400 to-orange-500"
-              hoverShadow="0 0 28px rgba(245,158,11,0.20), 0 10px 32px rgba(0,0,0,0.5)"
-            />
-            <MetricCard
-              label="Equity"
-              value={fmt$(account.equity)}
-              rawValue={account.equity}
-              gradientClass="from-blue-400 via-sky-400 to-cyan-400"
-              hoverShadow="0 0 28px rgba(59,130,246,0.20), 0 10px 32px rgba(0,0,0,0.5)"
-            />
-            <MetricCard
-              label="Day P&L"
-              value={fmt$(dayGL)}
-              rawValue={dayGL}
-              colorClass={gainLossColor(dayGL)}
-              trend={dayGL > 0 ? 'up' : dayGL < 0 ? 'down' : null}
-            />
-            <MetricCard
-              label="Unrealized Return"
-              value={fmt$(totalReturn)}
-              rawValue={totalReturn}
-              colorClass={gainLossColor(totalReturn)}
-              sub={`Includes $${dividendsTotal.toLocaleString('en-US', { maximumFractionDigits: 0 })} dividends`}
-            />
-            <MetricCard
-              label="Available Cash"
-              value={fmt$(availableForWithdrawal)}
-              rawValue={availableForWithdrawal}
-              colorClass="text-blue-400"
-              sub="Cash + money market"
-            />
-            <MetricCard
-              label="Buying Power"
-              value={fmt$(account.buyingPower)}
-              rawValue={account.buyingPower}
-              colorClass="text-purple-400"
-            />
-          </div>
-
-          {/* Pillar allocation bar */}
-          <motion.div
-            className="card-glass border border-[#252840] rounded-xl p-5 space-y-4 shadow-card bg-gradient-to-br from-blue-500/[0.04] to-transparent"
-            whileHover={{ y: -2, boxShadow: '0 0 32px rgba(59,130,246,0.22), 0 12px 36px rgba(0,0,0,0.5)' }}
-            transition={{ type: 'spring', stiffness: 300, damping: 24 }}
-          >
-            <div className="flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-white tracking-tight">Pillar Allocation</h2>
-              <div className="flex items-center gap-2">
-                {streamStatus === 'connected' && (
-                  <span className="text-[10px] text-emerald-400 flex items-center gap-1.5 font-semibold">
-                    <span className="w-2 h-2 rounded-full bg-emerald-400 dot-live shadow-[0_0_6px_#10b981]" />
-                    live
-                  </span>
-                )}
-                <span className="text-xs text-[#4a5070]">{account.positions.length} positions</span>
-              </div>
+        {/* ═══════════════════════════════════════════════════════════════════
+            TODAY view — the morning check-in. Action queue first.
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'today' && (
+          <>
+            {/* 4-metric strip — Equity + Buying Power dropped; Max Drift added */}
+            <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+              <MetricCard
+                label="Portfolio value"
+                value={fmt$(account.totalValue)}
+                rawValue={account.totalValue}
+                sub={`${account.positions.length} positions`}
+              />
+              <MetricCard
+                label="Day P&L"
+                value={fmt$(dayGL)}
+                rawValue={dayGL}
+                colorClass={gainLossColor(dayGL)}
+                trend={dayGL > 0 ? 'up' : dayGL < 0 ? 'down' : null}
+                sub={account.totalValue > 0 ? `${((dayGL / account.totalValue) * 100).toFixed(2)}% today` : undefined}
+              />
+              <MetricCard
+                label="AFW"
+                value={fmt$(availableForWithdrawal)}
+                rawValue={availableForWithdrawal}
+                colorClass="text-blue-400"
+                sub={`Margin ${marginUsedPct.toFixed(0)}% / 50 cap`}
+              />
+              <MetricCard
+                label="Max drift"
+                value={`${maxDrift.toFixed(1)}%`}
+                rawValue={maxDrift}
+                colorClass={maxDrift > 2 ? 'text-orange-400' : maxDrift > 1 ? 'text-yellow-400' : 'text-emerald-400'}
+                sub={maxDrift > 2 ? 'Rebalance staged' : maxDrift > 1 ? 'Watch' : 'On target'}
+              />
             </div>
-            <PillarAllocationBar summaries={account.pillarSummary} targets={strategyTargets} />
-          </motion.div>
 
-          {/* Portfolio performance chart */}
-          <motion.div
-            className="card-glass border border-[#252840] rounded-xl p-5 shadow-card"
-            whileHover={{ y: -2, boxShadow: '0 0 32px rgba(6,182,212,0.20), 0 12px 36px rgba(0,0,0,0.5)' }}
-            transition={{ type: 'spring', stiffness: 300, damping: 24 }}
-          >
-            <div className="flex items-center gap-2.5 mb-3">
-              <span className="p-1.5 rounded-md bg-blue-500/10 border border-blue-500/20">
-                <BarChart2 className="w-4 h-4 text-blue-400" />
-              </span>
-              <h2 className="text-sm font-semibold text-white tracking-tight">Portfolio History</h2>
-            </div>
-            <PortfolioChart />
-          </motion.div>
-        </div>
-
-        {/* ── Performance vs 40% target ────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="performance"
-          title="Performance — vs 40% Target"
-          icon={<Target className="w-4 h-4 text-emerald-400" />}
-          accentClass="border-emerald-500/40"
-          tintClass="from-emerald-500/[0.04]"
-          iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
-          glowColor="income"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <PerformancePanel />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Daily Autopilot Plan — tier-grouped engine recommendations ────── */}
-        <CollapsiblePanel
-          id="daily-plan"
-          title="Daily Autopilot Plan"
-          icon={<Inbox className="w-4 h-4 text-emerald-400" />}
-          accentClass="border-emerald-500/40"
-          tintClass="from-emerald-500/[0.04]"
-          iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
-          glowColor="income"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <DailyPlanPanel />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Trade Inbox — unified one-click approval queue ────────────────── */}
-        <CollapsiblePanel
-          id="inbox"
-          title="Trade Inbox"
-          icon={<Inbox className="w-4 h-4 text-cyan-400" />}
-          accentClass="border-cyan-500/40"
-          tintClass="from-cyan-500/[0.04]"
-          iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
-          glowColor="cyan"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <TradeInbox
+            {/* Unified action queue */}
+            <TodayPanel
               accountHash={account.accountHash}
               onChanged={() => fetchAccounts(true)}
             />
-          </div>
-        </CollapsiblePanel>
 
-        {/* ── Rollback — undo recent autopilot trades within 24h ─────────────── */}
-        <CollapsiblePanel
-          id="rollback"
-          title="Rollback"
-          icon={<Inbox className="w-4 h-4 text-red-400" />}
-          accentClass="border-red-500/40"
-          tintClass="from-red-500/[0.04]"
-          iconContainerClass="bg-red-500/10 border border-red-500/20"
-          glowColor="red"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <RollbackPanel />
-          </div>
-        </CollapsiblePanel>
+            {/* Pillar allocation */}
+            <div className="bg-[#12151f] border border-[#1f2334] rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <PieChart className="w-4 h-4 text-[#9aa2c0]" />
+                  <span className="text-sm font-semibold text-white">Pillar allocation</span>
+                </div>
+                <div className="flex items-center gap-2 text-[10px] text-[#7c82a0]">
+                  {streamStatus === 'connected' && (
+                    <span className="flex items-center gap-1.5 text-emerald-400 font-medium">
+                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 dot-live shadow-[0_0_5px_#10b981]" />
+                      live
+                    </span>
+                  )}
+                  <span>{account.positions.length} positions</span>
+                </div>
+              </div>
+              <PillarAllocationBar summaries={account.pillarSummary} targets={strategyTargets} />
+            </div>
 
-        {/* ── Plan Archive — browse historical daily plans ───────────────────── */}
-        <CollapsiblePanel
-          id="plan-archive"
-          title="Plan Archive"
-          icon={<Inbox className="w-4 h-4 text-purple-400" />}
-          accentClass="border-purple-500/40"
-          tintClass="from-purple-500/[0.04]"
-          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
-          glowColor="purple"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <PlanArchivePanel />
-          </div>
-        </CollapsiblePanel>
+            {/* Market read + Top positions side by side */}
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+              <MarketReadCard />
+              <TopPositionsCard
+                positions={livePositions}
+                onSeeAll={() => { setView('portfolio'); setPortfolioSub('positions'); }}
+              />
+            </div>
+          </>
+        )}
 
-        {/* ── Engine Replay — backtest rule fires over stored snapshots ─────── */}
-        <CollapsiblePanel
-          id="replay"
-          title="Engine Replay"
-          icon={<Brain className="w-4 h-4 text-purple-400" />}
-          accentClass="border-purple-500/40"
-          tintClass="from-purple-500/[0.04]"
-          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
-          glowColor="purple"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <ReplayPanel />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── AI Performance Review — Phase 3 feedback loop ─────────────────── */}
-        <CollapsiblePanel
-          id="review"
-          title="AI Performance Review"
-          icon={<Brain className="w-4 h-4 text-purple-400" />}
-          accentClass="border-purple-500/40"
-          tintClass="from-purple-500/[0.04]"
-          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
-          glowColor="purple"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <PerformanceReviewPanel currentTargets={strategyTargets} />
-          </div>
-        </CollapsiblePanel>
-
-        {/* ── Market Conditions & Recommendations ──────────────────────────── */}
-        <CollapsiblePanel
-          id="market"
-          title="Market Conditions & AI Recommendations"
-          icon={<TrendingUp className="w-4 h-4 text-cyan-400" />}
-          accentClass="border-cyan-500/40"
-          tintClass="from-cyan-500/[0.04]"
-          iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
-          glowColor="cyan"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <MarketConditionsDashboard
-              currentTargets={strategyTargets}
-              onTargetsChange={updateStrategyTargets}
+        {/* ═══════════════════════════════════════════════════════════════════
+            PORTFOLIO view — deep dives, weekly rebalance.
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'portfolio' && (
+          <>
+            <PortfolioSubTabs
+              active={portfolioSub}
+              onChange={setPortfolioSub}
+              counts={{ positions: account.positions.length, orders: pendingOrders.size }}
             />
-          </div>
-        </CollapsiblePanel>
 
-        {/* ── Cornerstone ─────────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="cornerstone"
-          title="Cornerstone — CLM / CRF"
-          icon={<PieChart className="w-4 h-4 text-amber-400" />}
-          accentClass="border-amber-500/60"
-          tintClass="from-amber-500/[0.05]"
-          iconContainerClass="bg-amber-500/10 border border-amber-500/25"
-          glowColor="triples"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <CornerStoneCard
-              positions={account.positions}
-              accountHash={account.accountHash}
-            />
-          </div>
-        </CollapsiblePanel>
+            {portfolioSub === 'positions' && (
+              <CollapsiblePanel
+                id="positions"
+                title={`All positions (${account.positions.length})`}
+                icon={<BarChart2 className="w-4 h-4 text-[#9aa2c0]" />}
+                iconContainerClass="bg-white/[0.06] border border-white/10"
+                defaultOpen={true}
+              >
+                <div className="pt-4">
+                  <PositionsTable positions={account.positions} pendingOrders={pendingOrders} />
+                </div>
+              </CollapsiblePanel>
+            )}
 
-        {/* ── Margin & Risk ────────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="margin"
-          title="Margin & Risk Intelligence"
-          icon={<Gauge className="w-4 h-4 text-orange-400" />}
-          badge={
-            dangerAlerts.length > 0 ? (
-              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/40 shadow-[0_0_10px_rgba(239,68,68,0.25)]">
-                <span className="w-1.5 h-1.5 rounded-full bg-red-400 dot-live" />
-                {dangerAlerts.length} ALERT{dangerAlerts.length > 1 ? 'S' : ''}
-              </span>
-            ) : undefined
-          }
-          accentClass={dangerAlerts.length > 0 ? 'border-red-500/60' : 'border-orange-500/40'}
-          tintClass={dangerAlerts.length > 0 ? 'from-red-500/[0.05]' : 'from-orange-500/[0.04]'}
-          iconContainerClass={dangerAlerts.length > 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-orange-500/10 border border-orange-500/20'}
-          glowColor={dangerAlerts.length > 0 ? 'red' : 'orange'}
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <MarginRiskPanel
-              equity={account.equity}
-              marginBalance={account.marginBalance}
-              totalValue={account.totalValue}
-              positions={account.positions}
-              dividendsAnnual={monthlyIncome * 12}
-              marginRate={strategyTargets.marginRatePct / 100}
-              familyCapPct={strategyTargets.familyCapPct}
-            />
-          </div>
-        </CollapsiblePanel>
+            {portfolioSub === 'income' && (
+              <>
+                <IncomeHub
+                  positions={account.positions}
+                  totalValue={account.totalValue}
+                  equity={account.equity}
+                  marginBalance={account.marginBalance}
+                  pillarSummary={account.pillarSummary}
+                  onProjectedMonthly={setMonthlyIncome}
+                />
+                <CollapsiblePanel
+                  id="portfolio-chart"
+                  title="Portfolio history"
+                  icon={<BarChart2 className="w-4 h-4 text-blue-400" />}
+                  accentClass="border-blue-500/40"
+                  iconContainerClass="bg-blue-500/10 border border-blue-500/20"
+                  defaultOpen={true}
+                >
+                  <div className="pt-4"><PortfolioChart /></div>
+                </CollapsiblePanel>
+              </>
+            )}
 
-        {/* ── Triples Tactical Engine ──────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="triples"
-          title="Triple ETF Tactical Engine"
-          icon={<Zap className="w-4 h-4 text-violet-400" />}
-          accentClass="border-violet-500/40"
-          tintClass="from-violet-500/[0.04]"
-          iconContainerClass="bg-violet-500/10 border border-violet-500/20"
-          glowColor="hedge"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <TriplesTacticalPanel
-              positions={account.positions}
-              totalValue={account.totalValue}
-            />
-          </div>
-        </CollapsiblePanel>
+            {portfolioSub === 'trades' && (
+              <>
+                <TradeHub accountHash={account.accountHash} />
+                <CollapsiblePanel
+                  id="rebalance"
+                  title="Rebalance workflow"
+                  icon={<Calculator className="w-4 h-4 text-purple-400" />}
+                  accentClass="border-purple-500/40"
+                  iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+                  defaultOpen={true}
+                >
+                  <div className="pt-4">
+                    <RebalanceWorkflow
+                      positions={account.positions}
+                      pillarSummary={account.pillarSummary}
+                      totalValue={account.totalValue}
+                      equity={account.equity}
+                      marginBalance={account.marginBalance}
+                      accountHash={account.accountHash}
+                      strategyTargets={strategyTargets}
+                    />
+                  </div>
+                </CollapsiblePanel>
+              </>
+            )}
 
-        {/* ── Options & Open Puts (tabbed) ─────────────────────────────────── */}
-        <OptionsPutsPanel
-          positions={account.positions}
-          totalValue={account.totalValue}
-          accountHash={account.accountHash}
-        />
+            {portfolioSub === 'market' && (
+              <CollapsiblePanel
+                id="market"
+                title="Market conditions & recommendations"
+                icon={<TrendingUp className="w-4 h-4 text-cyan-400" />}
+                accentClass="border-cyan-500/40"
+                iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
+                defaultOpen={true}
+              >
+                <div className="pt-4">
+                  <MarketConditionsDashboard
+                    currentTargets={strategyTargets}
+                    onTargetsChange={updateStrategyTargets}
+                  />
+                </div>
+              </CollapsiblePanel>
+            )}
 
-        {/* ── AI Analysis ─────────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="ai"
-          title="AI Portfolio Analysis"
-          icon={<Brain className="w-4 h-4 text-cyan-400" />}
-          accentClass="border-cyan-500/40"
-          tintClass="from-cyan-500/[0.04]"
-          iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
-          glowColor="cyan"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <AIAnalysisPanel
-              positions={livePositions}
-              totalValue={account.totalValue}
-              equity={account.equity}
-              marginBalance={account.marginBalance}
-              pillarSummary={account.pillarSummary}
-              dividendsAnnual={dividendsTotal}
-              accountHash={account.accountHash}
-              triggerPulse={aiPulseTrigger}
-              onIncomeSnapshot={setMonthlyIncome}
-            />
-          </div>
-        </CollapsiblePanel>
+            {portfolioSub === 'strategy' && (
+              <>
+                <CollapsiblePanel
+                  id="cornerstone"
+                  title="Cornerstone — CLM / CRF"
+                  icon={<PieChart className="w-4 h-4 text-amber-400" />}
+                  accentClass="border-amber-500/60"
+                  iconContainerClass="bg-amber-500/10 border border-amber-500/25"
+                  defaultOpen={true}
+                >
+                  <div className="pt-4">
+                    <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
+                  </div>
+                </CollapsiblePanel>
 
-        {/* ── Income Hub (Historical + Projected + FIRE + Margin + Simulator) ── */}
-        <div id="panel-income" className="scroll-mt-20 space-y-4">
-          <div id="panel-calendar" />
-          <div id="panel-simulator" />
-          <IncomeHub
-            positions={account.positions}
-            totalValue={account.totalValue}
-            equity={account.equity}
-            marginBalance={account.marginBalance}
-            pillarSummary={account.pillarSummary}
-            onProjectedMonthly={setMonthlyIncome}
-          />
-        </div>
+                <CollapsiblePanel
+                  id="triples"
+                  title="Triple ETF tactical engine"
+                  icon={<Zap className="w-4 h-4 text-violet-400" />}
+                  accentClass="border-violet-500/40"
+                  iconContainerClass="bg-violet-500/10 border border-violet-500/20"
+                  defaultOpen={true}
+                >
+                  <div className="pt-4">
+                    <TriplesTacticalPanel positions={account.positions} totalValue={account.totalValue} />
+                  </div>
+                </CollapsiblePanel>
 
-        {/* ── Rebalance Workflow ───────────────────────────────────────────── */}
-        <div id="panel-rebalance" className="scroll-mt-20">
-          <RebalanceWorkflow
-            positions={account.positions}
-            pillarSummary={account.pillarSummary}
-            totalValue={account.totalValue}
-            equity={account.equity}
-            marginBalance={account.marginBalance}
-            accountHash={account.accountHash}
-            strategyTargets={strategyTargets}
-          />
-        </div>
+                <OptionsPutsPanel
+                  positions={account.positions}
+                  totalValue={account.totalValue}
+                  accountHash={account.accountHash}
+                />
 
-        {/* ── Watchlist ─────────────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="watchlist"
-          title="Watchlist"
-          icon={<Eye className="w-4 h-4 text-purple-400" />}
-          accentClass="border-purple-500/30"
-          tintClass="from-purple-500/[0.03]"
-          iconContainerClass="bg-purple-500/10 border border-purple-500/20"
-          glowColor="purple"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <WatchlistPanel />
-          </div>
-        </CollapsiblePanel>
+                <CollapsiblePanel
+                  id="margin"
+                  title="Margin & risk intelligence"
+                  icon={<Gauge className="w-4 h-4 text-orange-400" />}
+                  badge={
+                    dangerAlerts.length > 0 ? (
+                      <span className="flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[10px] font-bold bg-red-500/20 text-red-400 border border-red-500/40">
+                        <span className="w-1.5 h-1.5 rounded-full bg-red-400 dot-live" />
+                        {dangerAlerts.length} alert{dangerAlerts.length > 1 ? 's' : ''}
+                      </span>
+                    ) : undefined
+                  }
+                  accentClass={dangerAlerts.length > 0 ? 'border-red-500/60' : 'border-orange-500/40'}
+                  iconContainerClass={dangerAlerts.length > 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-orange-500/10 border border-orange-500/20'}
+                  defaultOpen={true}
+                >
+                  <div className="pt-4">
+                    <MarginRiskPanel
+                      equity={account.equity}
+                      marginBalance={account.marginBalance}
+                      totalValue={account.totalValue}
+                      positions={account.positions}
+                      dividendsAnnual={monthlyIncome * 12}
+                      marginRate={strategyTargets.marginRatePct / 100}
+                      familyCapPct={strategyTargets.familyCapPct}
+                    />
+                  </div>
+                </CollapsiblePanel>
 
-        {/* ── Orders & Trade History ───────────────────────────────────────── */}
-        <div id="panel-orders" className="scroll-mt-20">
-          <div id="panel-history" />
-          <TradeHub accountHash={account.accountHash} />
-        </div>
+                <CollapsiblePanel
+                  id="watchlist"
+                  title="Watchlist"
+                  icon={<Eye className="w-4 h-4 text-purple-400" />}
+                  accentClass="border-purple-500/30"
+                  iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+                  defaultOpen={true}
+                >
+                  <div className="pt-4"><WatchlistPanel /></div>
+                </CollapsiblePanel>
+              </>
+            )}
+          </>
+        )}
 
-        {/* ── Positions table ──────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="positions"
-          title={`All Positions (${account.positions.length})`}
-          icon={<BarChart2 className="w-4 h-4 text-[#7c82a0]" />}
-          iconContainerClass="bg-white/[0.06] border border-white/10"
-          defaultOpen={true}
-        >
-          <div className="pt-4">
-            <PositionsTable positions={account.positions} pendingOrders={pendingOrders} />
-          </div>
-        </CollapsiblePanel>
+        {/* ═══════════════════════════════════════════════════════════════════
+            HISTORY view — forensics, deep AI, archives.
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'history' && (
+          <>
+            <CollapsiblePanel
+              id="ai"
+              title="AI portfolio analysis"
+              icon={<Brain className="w-4 h-4 text-cyan-400" />}
+              accentClass="border-cyan-500/40"
+              iconContainerClass="bg-cyan-500/10 border border-cyan-500/20"
+              defaultOpen={true}
+            >
+              <div className="pt-4">
+                <AIAnalysisPanel
+                  positions={livePositions}
+                  totalValue={account.totalValue}
+                  equity={account.equity}
+                  marginBalance={account.marginBalance}
+                  pillarSummary={account.pillarSummary}
+                  dividendsAnnual={dividendsTotal}
+                  accountHash={account.accountHash}
+                  triggerPulse={aiPulseTrigger}
+                  onIncomeSnapshot={setMonthlyIncome}
+                />
+              </div>
+            </CollapsiblePanel>
 
-        {/* ── Strategy Guide ───────────────────────────────────────────────── */}
-        <CollapsiblePanel
-          id="strategy"
-          title="Triple C's Strategy Guide"
-          icon={<BookOpen className="w-4 h-4 text-blue-400" />}
-          accentClass="border-blue-500/30"
-          tintClass="from-blue-500/[0.03]"
-          iconContainerClass="bg-blue-500/10 border border-blue-500/20"
-          glowColor="cornerstone"
-          defaultOpen={false}
-        >
-          <div className="pt-4">
-            <StrategyGuide />
-          </div>
-        </CollapsiblePanel>
+            <CollapsiblePanel
+              id="performance"
+              title="Performance — vs 40% target"
+              icon={<Target className="w-4 h-4 text-emerald-400" />}
+              accentClass="border-emerald-500/40"
+              iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4"><PerformancePanel /></div>
+            </CollapsiblePanel>
 
-        {/* Footer spacer */}
+            <CollapsiblePanel
+              id="daily-plan"
+              title="Daily autopilot plan"
+              icon={<ClipboardList className="w-4 h-4 text-emerald-400" />}
+              accentClass="border-emerald-500/40"
+              iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4"><DailyPlanPanel /></div>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
+              id="review"
+              title="AI performance review"
+              icon={<Brain className="w-4 h-4 text-purple-400" />}
+              accentClass="border-purple-500/40"
+              iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4">
+                <PerformanceReviewPanel currentTargets={strategyTargets} />
+              </div>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
+              id="plan-archive"
+              title="Plan archive"
+              icon={<History className="w-4 h-4 text-purple-400" />}
+              accentClass="border-purple-500/40"
+              iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4"><PlanArchivePanel /></div>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
+              id="replay"
+              title="Engine replay"
+              icon={<Activity className="w-4 h-4 text-purple-400" />}
+              accentClass="border-purple-500/40"
+              iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4"><ReplayPanel /></div>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
+              id="rollback"
+              title="Rollback"
+              icon={<RefreshCw className="w-4 h-4 text-red-400" />}
+              accentClass="border-red-500/40"
+              iconContainerClass="bg-red-500/10 border border-red-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4"><RollbackPanel /></div>
+            </CollapsiblePanel>
+
+            <CollapsiblePanel
+              id="strategy"
+              title="Triple C's strategy guide"
+              icon={<BookOpen className="w-4 h-4 text-blue-400" />}
+              accentClass="border-blue-500/30"
+              iconContainerClass="bg-blue-500/10 border border-blue-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4"><StrategyGuide /></div>
+            </CollapsiblePanel>
+          </>
+        )}
+
         <div className="h-12" />
       </main>
 
       {/* ── Real-time alert monitor (renders nothing, fires toasts) ─────── */}
       <AlertMonitor
-        marginPct={
-          (account.equity + Math.abs(account.marginBalance)) > 0
-            ? (Math.abs(account.marginBalance) / (account.equity + Math.abs(account.marginBalance))) * 100
-            : 0
-        }
+        marginPct={marginUsedPct}
         positions={account.positions.map((p) => ({
           symbol: p.instrument.symbol,
           portfolioPercent: p.portfolioPercent,
@@ -1130,7 +1190,6 @@ export default function DashboardPage() {
         marginWarnPct={strategyTargets.marginWarnPct}
         marginLimitPct={strategyTargets.marginLimitPct}
       />
-
     </div>
   );
 }
