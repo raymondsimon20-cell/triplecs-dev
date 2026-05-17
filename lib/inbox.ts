@@ -248,7 +248,17 @@ export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
  * Read the inbox. Lazily expires stale `pending` items on read and persists
  * the change so a follow-up read sees the same state.
  */
-export async function listInbox(filter?: { status?: InboxStatus | InboxStatus[]; source?: InboxSource }): Promise<InboxItem[]> {
+export async function listInbox(filter?: {
+  status?:      InboxStatus | InboxStatus[];
+  source?:      InboxSource;
+  /**
+   * Restrict to items destined for a specific Schwab account. An item matches
+   * if its own `accountHash` equals the filter OR if it has no accountHash at
+   * all (legacy / untagged items fall through to the currently-selected
+   * account on approve, so they belong in every per-account view).
+   */
+  accountHash?: string;
+}): Promise<InboxItem[]> {
   const raw = await readAll();
   const { items, changed } = expireStale(raw);
   if (changed) await writeAll(items);
@@ -260,6 +270,10 @@ export async function listInbox(filter?: { status?: InboxStatus | InboxStatus[];
   }
   if (filter?.source) {
     out = out.filter((it) => it.source === filter.source);
+  }
+  if (filter?.accountHash) {
+    const wanted = filter.accountHash;
+    out = out.filter((it) => !it.accountHash || it.accountHash === wanted);
   }
   return out;
 }

@@ -168,7 +168,12 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
   const load = useCallback(async () => {
     try {
       // Pull pending + failed so the user can see autopilot rejects and retry.
-      const r = await fetch('/api/inbox?status=pending,failed');
+      // Scope to the selected account on the server: only items targeted at
+      // this account (plus untagged-fallback items) come back, so the queue
+      // never shows trades destined for another account by mistake.
+      const params = new URLSearchParams({ status: 'pending,failed' });
+      if (accountHash) params.set('accountHash', accountHash);
+      const r = await fetch(`/api/inbox?${params.toString()}`);
       const d: InboxPayload | { error: string } = await r.json();
       if ('error' in d) setError(d.error);
       else { setData(d); setError(null); }
@@ -177,7 +182,7 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [accountHash]);
 
   useEffect(() => {
     load();

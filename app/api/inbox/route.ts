@@ -54,10 +54,15 @@ export async function GET(req: Request) {
   try { await requireAuth(); } catch { return unauthorized(); }
 
   const { searchParams } = new URL(req.url);
-  const statusParam = searchParams.get('status');
-  const sourceParam = searchParams.get('source');
+  const statusParam      = searchParams.get('status');
+  const sourceParam      = searchParams.get('source');
+  const accountHashParam = searchParams.get('accountHash');
 
-  const filter: { status?: InboxStatus | InboxStatus[]; source?: InboxSource } = {};
+  const filter: {
+    status?:      InboxStatus | InboxStatus[];
+    source?:      InboxSource;
+    accountHash?: string;
+  } = {};
   if (statusParam) {
     const statuses = statusParam.split(',').filter((s): s is InboxStatus =>
       VALID_STATUSES.includes(s as InboxStatus),
@@ -66,6 +71,11 @@ export async function GET(req: Request) {
   }
   if (sourceParam && VALID_SOURCES.includes(sourceParam as InboxSource)) {
     filter.source = sourceParam as InboxSource;
+  }
+  // `all` / `global` collapse to "no filter — return every account's items"
+  // so the aggregate / household view can still see the whole queue.
+  if (accountHashParam && accountHashParam !== 'all' && accountHashParam !== 'global') {
+    filter.accountHash = accountHashParam;
   }
 
   const items = await listInbox(filter);

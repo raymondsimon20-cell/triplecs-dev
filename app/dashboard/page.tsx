@@ -734,16 +734,17 @@ export default function DashboardPage() {
       (async () => {
         try {
           // Skip if this account already has pending rebalance items in the
-          // inbox — they'd just duplicate what's there.
-          const inboxRes = await fetch('/api/inbox?status=pending&source=rebalance');
+          // inbox — they'd just duplicate what's there. Server scopes the
+          // query to this account (matches on accountHash; untagged items
+          // also count as belonging to the active account).
+          const inboxRes = await fetch(
+            `/api/inbox?status=pending&source=rebalance&accountHash=${encodeURIComponent(acct.accountHash)}`,
+          );
           if (inboxRes.ok) {
             const data = await inboxRes.json() as { items?: Array<{ accountHash?: string }> };
-            if (Array.isArray(data.items)) {
-              const existing = data.items.filter((it) => it.accountHash === acct.accountHash);
-              if (existing.length > 0) {
-                setBanner({ kind: 'skipped_existing' });
-                return;
-              }
+            if (Array.isArray(data.items) && data.items.length > 0) {
+              setBanner({ kind: 'skipped_existing' });
+              return;
             }
           }
           setBanner({ kind: 'staging', maxDriftPct: maxDrift });
