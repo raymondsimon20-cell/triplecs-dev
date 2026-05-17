@@ -38,7 +38,7 @@ import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
-import { SettingsPanel, useStrategyTargets, updateStrategyTargets } from '@/components/SettingsPanel';
+import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyTargetsFor } from '@/components/SettingsPanel';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
@@ -677,97 +677,127 @@ export default function DashboardPage() {
   // when isAll. Most panels are read-only and don't care which.
   const account = resolvedAccount;
 
-  // ── Drift>2% auto-rebalance (unchanged behaviour, slimmer banner UI) ──────
-  const driftRebalanceFiredRef = useRef(false);
-  const [driftRebalanceBanner, setDriftRebalanceBanner] = useState<
+  // ── Drift>2% auto-rebalance — per-account (2026-05) ───────────────────────
+  // Pre-2026-05 the dashboard only auto-rebalanced the CURRENTLY SELECTED
+  // account, which meant other accounts could be wildly out of whack and the
+  // user wouldn't know unless they switched to them. Now we iterate every
+  // linked account on load: each one gets its own drift check against its
+  // own targets (per-account override → global), and stages independently
+  // against its own accountHash. The Schwab automation gate is scoped to
+  // each account on the server, so one account's defense-mode flip doesn't
+  // block another account's rebalance.
+  //
+  // Re-firing: the `driftFiredByAccount` Set tracks which accounts have
+  // already been processed. The 60s refresh poll updates `accounts` but
+  // doesn't re-trigger drift checks for accounts we've already handled.
+  type DriftBanner =
     | { kind: 'staging'; maxDriftPct: number }
     | { kind: 'staged';  count: number; summary: string }
     | { kind: 'skipped_existing' }
     | { kind: 'paused' }
-    | { kind: 'error'; message: string }
-    | null
-  >(null);
+    | { kind: 'error'; message: string };
+  const driftFiredByAccount = useRef<Set<string>>(new Set());
+  const [driftBanners, setDriftBanners] = useState<Record<string, DriftBanner>>({});
 
+  // One drift check per account — kicked off when the account list first
+  // populates (subsequent refreshes are short-circuited by the Set).
   useEffect(() => {
-    if (driftRebalanceFiredRef.current) return;
-    if (!account || !account.pillarSummary?.length || !account.totalValue) return;
-    if (!strategyTargets) return;
-    // Aggregate view has a synthetic accountHash and no Schwab-side target —
-    // drift auto-rebalance must run against a real account or it'll stage
-    // trades against the wrong (or no) book.
-    if (isAll) return;
+    if (accounts.length === 0) return;
 
-    const targetMap: Record<string, number> = {
-      triples:     strategyTargets.triplesPct,
-      cornerstone: strategyTargets.cornerstonePct,
-      income:      strategyTargets.incomePct,
-      hedge:       strategyTargets.hedgePct,
-    };
-    const drifts = account.pillarSummary
-      .filter((p) => p.pillar !== 'other')
-      .map((p) => Math.abs(p.portfolioPercent - (targetMap[p.pillar] ?? 0)));
-    const maxDrift = drifts.length ? Math.max(...drifts) : 0;
-    if (maxDrift <= 2) return;
+    accounts.forEach((acct) => {
+      if (driftFiredByAccount.current.has(acct.accountHash)) return;
+      if (!acct.pillarSummary?.length || !acct.totalValue) return;
 
-    driftRebalanceFiredRef.current = true;
-
-    (async () => {
-      try {
-        const inboxRes = await fetch('/api/inbox?status=pending&source=rebalance');
-        if (inboxRes.ok) {
-          const data = await inboxRes.json() as { items?: unknown[] };
-          if (Array.isArray(data.items) && data.items.length > 0) {
-            setDriftRebalanceBanner({ kind: 'skipped_existing' });
-            return;
-          }
-        }
-        setDriftRebalanceBanner({ kind: 'staging', maxDriftPct: maxDrift });
-        const res = await fetch('/api/rebalance-plan', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          // accountHash scopes the automation gate to THIS account on the
-          // server so drift auto-rebalance against this account isn't paused
-          // by some other account's defense-mode / kill-switch state.
-          body: JSON.stringify({
-            totalValue:    account.totalValue,
-            equity:        account.equity,
-            positions:     account.positions,
-            pillarSummary: account.pillarSummary,
-            targets:       strategyTargets,
-            accountHash:   account.accountHash,
-          }),
-        });
-        if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let accumulated = '';
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          accumulated += decoder.decode(value, { stream: true });
-          if (accumulated.includes('__DONE__')) break;
-        }
-        const match = accumulated.match(/__RESULT__([\s\S]*?)\n__DONE__/);
-        if (!match) throw new Error('No result in stream');
-        const parsed = JSON.parse(match[1].trim()) as {
-          orders?:  { symbol: string }[];
-          summary?: string;
-          paused?:  boolean;
-          error?:   string;
-        };
-        if (parsed.error)  throw new Error(parsed.error);
-        if (parsed.paused) { setDriftRebalanceBanner({ kind: 'paused' }); return; }
-        const count = parsed.orders?.length ?? 0;
-        if (count > 0) {
-          setDriftRebalanceBanner({ kind: 'staged', count, summary: parsed.summary ?? '' });
-        } else {
-          setDriftRebalanceBanner(null);
-        }
-      } catch (err) {
-        setDriftRebalanceBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Auto-rebalance failed' });
+      // Per-account targets — override → global → defaults. Reads localStorage
+      // synchronously (mirrors `useStrategyTargets(acct.accountHash)` without
+      // breaking the rules-of-hooks rule that bans hook calls inside loops).
+      const targets = loadStrategyTargetsFor(acct.accountHash);
+      const targetMap: Record<string, number> = {
+        triples:     targets.triplesPct,
+        cornerstone: targets.cornerstonePct,
+        income:      targets.incomePct,
+        hedge:       targets.hedgePct,
+      };
+      const drifts = acct.pillarSummary
+        .filter((p) => p.pillar !== 'other')
+        .map((p) => Math.abs(p.portfolioPercent - (targetMap[p.pillar] ?? 0)));
+      const maxDrift = drifts.length ? Math.max(...drifts) : 0;
+      if (maxDrift <= 2) {
+        driftFiredByAccount.current.add(acct.accountHash);
+        return;
       }
-    })();
-  }, [account, strategyTargets, isAll]);
+
+      driftFiredByAccount.current.add(acct.accountHash);
+      const setBanner = (b: DriftBanner) =>
+        setDriftBanners((prev) => ({ ...prev, [acct.accountHash]: b }));
+
+      (async () => {
+        try {
+          // Skip if this account already has pending rebalance items in the
+          // inbox — they'd just duplicate what's there.
+          const inboxRes = await fetch('/api/inbox?status=pending&source=rebalance');
+          if (inboxRes.ok) {
+            const data = await inboxRes.json() as { items?: Array<{ accountHash?: string }> };
+            if (Array.isArray(data.items)) {
+              const existing = data.items.filter((it) => it.accountHash === acct.accountHash);
+              if (existing.length > 0) {
+                setBanner({ kind: 'skipped_existing' });
+                return;
+              }
+            }
+          }
+          setBanner({ kind: 'staging', maxDriftPct: maxDrift });
+          const res = await fetch('/api/rebalance-plan', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            // accountHash scopes both the rebalance computation and the
+            // automation gate on the server to THIS account.
+            body: JSON.stringify({
+              totalValue:    acct.totalValue,
+              equity:        acct.equity,
+              positions:     acct.positions,
+              pillarSummary: acct.pillarSummary,
+              targets,
+              accountHash:   acct.accountHash,
+            }),
+          });
+          if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+          const reader = res.body.getReader();
+          const decoder = new TextDecoder();
+          let accumulated = '';
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            accumulated += decoder.decode(value, { stream: true });
+            if (accumulated.includes('__DONE__')) break;
+          }
+          const match = accumulated.match(/__RESULT__([\s\S]*?)\n__DONE__/);
+          if (!match) throw new Error('No result in stream');
+          const parsed = JSON.parse(match[1].trim()) as {
+            orders?:  { symbol: string }[];
+            summary?: string;
+            paused?:  boolean;
+            error?:   string;
+          };
+          if (parsed.error)  throw new Error(parsed.error);
+          if (parsed.paused) { setBanner({ kind: 'paused' }); return; }
+          const count = parsed.orders?.length ?? 0;
+          if (count > 0) {
+            setBanner({ kind: 'staged', count, summary: parsed.summary ?? '' });
+          } else {
+            // No orders generated — clear any stale banner for this account.
+            setDriftBanners((prev) => {
+              const next = { ...prev };
+              delete next[acct.accountHash];
+              return next;
+            });
+          }
+        } catch (err) {
+          setBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Auto-rebalance failed' });
+        }
+      })();
+    });
+  }, [accounts]);
 
   // ── Max drift (per pillar) — surfaced as a Today metric so weekly-rebalance
   //    drift is always visible without digging into the allocation panel. ────
@@ -919,49 +949,66 @@ export default function DashboardPage() {
 
       <main className="max-w-7xl mx-auto px-4 py-5 space-y-4">
 
-        {/* ── Drift auto-rebalance banner ──────────────────────────────────── */}
-        {driftRebalanceBanner && driftRebalanceBanner.kind !== 'skipped_existing' && (
-          <div
-            className={`rounded-lg border p-3 flex items-start gap-2 text-xs ${
-              driftRebalanceBanner.kind === 'staged'  ? 'bg-blue-500/8 border-blue-500/35 text-blue-200'  :
-              driftRebalanceBanner.kind === 'staging' ? 'bg-blue-500/5 border-blue-500/20 text-blue-200'  :
-              driftRebalanceBanner.kind === 'paused'  ? 'bg-yellow-500/8 border-yellow-500/25 text-yellow-200' :
-              'bg-red-500/8 border-red-500/25 text-red-200'
-            }`}
-          >
-            {driftRebalanceBanner.kind === 'staging' && <RefreshCw className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 animate-spin" />}
-            {driftRebalanceBanner.kind === 'staged'  && <Inbox      className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
-            {driftRebalanceBanner.kind === 'paused'  && <AlertCircle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
-            {driftRebalanceBanner.kind === 'error'   && <AlertTriangle className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
-            <div className="flex-1 min-w-0 leading-relaxed">
-              {driftRebalanceBanner.kind === 'staging' && (
-                <><span className="font-semibold">Drift detected ({driftRebalanceBanner.maxDriftPct.toFixed(1)}%).</span> Generating rebalance trades…</>
-              )}
-              {driftRebalanceBanner.kind === 'staged' && (
-                <>
-                  <span className="font-semibold">Rebalance staged.</span>{' '}
-                  {driftRebalanceBanner.count} order{driftRebalanceBanner.count === 1 ? '' : 's'} ready in Today.
-                  {driftRebalanceBanner.summary && (
-                    <span className="block text-blue-200/70 mt-0.5">{driftRebalanceBanner.summary}</span>
+        {/* ── Per-account drift auto-rebalance banners ──────────────────────
+            One row per account that had drift > 2%. `skipped_existing` rows
+            are hidden — they're informational and would just clutter the
+            view. The dismiss button removes one row at a time. */}
+        {Object.entries(driftBanners)
+          .filter(([, b]) => b.kind !== 'skipped_existing')
+          .map(([hash, banner]) => {
+            const acct = accounts.find((a) => a.accountHash === hash);
+            const label = acct
+              ? (nicknames[hash] || `···${acct.accountNumber.slice(-4)}`)
+              : `···${hash.slice(0, 6)}`;
+            return (
+              <div
+                key={hash}
+                className={`rounded-lg border p-3 flex items-start gap-2 text-xs ${
+                  banner.kind === 'staged'  ? 'bg-blue-500/8 border-blue-500/35 text-blue-200'  :
+                  banner.kind === 'staging' ? 'bg-blue-500/5 border-blue-500/20 text-blue-200'  :
+                  banner.kind === 'paused'  ? 'bg-yellow-500/8 border-yellow-500/25 text-yellow-200' :
+                  'bg-red-500/8 border-red-500/25 text-red-200'
+                }`}
+              >
+                {banner.kind === 'staging' && <RefreshCw      className="w-3.5 h-3.5 mt-0.5 flex-shrink-0 animate-spin" />}
+                {banner.kind === 'staged'  && <Inbox          className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+                {banner.kind === 'paused'  && <AlertCircle    className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+                {banner.kind === 'error'   && <AlertTriangle  className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />}
+                <div className="flex-1 min-w-0 leading-relaxed">
+                  <span className="text-[10px] text-current/60 uppercase tracking-wider mr-2">{label}</span>
+                  {banner.kind === 'staging' && (
+                    <><span className="font-semibold">Drift detected ({banner.maxDriftPct.toFixed(1)}%).</span> Generating rebalance trades…</>
                   )}
-                </>
-              )}
-              {driftRebalanceBanner.kind === 'paused' && (
-                <><span className="font-semibold">Automation paused.</span> Drift detected but no trades generated.</>
-              )}
-              {driftRebalanceBanner.kind === 'error' && (
-                <><span className="font-semibold">Auto-rebalance failed:</span> {driftRebalanceBanner.message}</>
-              )}
-            </div>
-            <button
-              onClick={() => setDriftRebalanceBanner(null)}
-              className="text-current/60 hover:text-current transition-colors flex-shrink-0"
-              aria-label="Dismiss"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
+                  {banner.kind === 'staged' && (
+                    <>
+                      <span className="font-semibold">Rebalance staged.</span>{' '}
+                      {banner.count} order{banner.count === 1 ? '' : 's'} ready in Today.
+                      {banner.summary && (
+                        <span className="block text-blue-200/70 mt-0.5">{banner.summary}</span>
+                      )}
+                    </>
+                  )}
+                  {banner.kind === 'paused' && (
+                    <><span className="font-semibold">Automation paused.</span> Drift detected but no trades generated.</>
+                  )}
+                  {banner.kind === 'error' && (
+                    <><span className="font-semibold">Auto-rebalance failed:</span> {banner.message}</>
+                  )}
+                </div>
+                <button
+                  onClick={() => setDriftBanners((prev) => {
+                    const next = { ...prev };
+                    delete next[hash];
+                    return next;
+                  })}
+                  className="text-current/60 hover:text-current transition-colors flex-shrink-0"
+                  aria-label="Dismiss"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+            );
+          })}
 
         {/* ── Margin danger / warn ribbons ─────────────────────────────────── */}
         {dangerAlerts.length > 0 && (

@@ -218,6 +218,16 @@ export function updateStrategyTargets(newTargets: StrategyTargets, accountKey?: 
   broadcast(newTargets, accountKey);
 }
 
+/**
+ * Non-hook, synchronous resolver. Use when you need per-account targets in a
+ * context that can't call hooks (loops, effects iterating multiple accounts,
+ * one-off computations). Resolution order matches `useStrategyTargets`:
+ * per-account override (if accountKey is a real hash) → global → defaults.
+ */
+export function loadStrategyTargetsFor(accountKey?: string): StrategyTargets {
+  return loadTargets(accountKey);
+}
+
 // ─── Slider row helper ────────────────────────────────────────────────────────
 
 function SliderRow({
