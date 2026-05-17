@@ -23,10 +23,10 @@ import {
   RefreshCw, LogOut, AlertTriangle, AlertCircle, CheckCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
-  Inbox, X, Wallet, History, Calculator, Activity,
+  Inbox, X, Wallet, History, Calculator, Activity, Layers,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
-import { AccountSwitcher } from '@/components/AccountSwitcher';
+import { AccountSwitcher, useAccountNicknames } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
@@ -433,6 +433,123 @@ function OptionsPutsPanel({
   );
 }
 
+// ─── Aggregate-account synthesis ──────────────────────────────────────────────
+// When the user picks "All accounts" in the switcher, we synthesise an
+// AccountData that rolls up positions, balances, pillar allocations and
+// margin alerts across every linked account so the dashboard's read-only
+// panels (positions, allocation, income, performance) can render unchanged.
+//
+// What's preserved:
+//   • Sum-style balances: equity, totalValue, marginBalance, buyingPower,
+//     dayGainLoss, unrealizedGainLoss, availableForWithdrawal.
+//   • Positions concatenated. portfolioPercent recomputed against the
+//     aggregate totalValue so the pie still sums to 100%. Same symbol held
+//     in two accounts appears as two rows (we don't combine them so the
+//     per-account average cost / lot history stays meaningful).
+//   • pillarSummary merged: totalValue + dayGainLoss summed per pillar,
+//     portfolioPercent recomputed against the aggregate totalValue, count
+//     summed.
+//   • marginAlerts concatenated. Detail strings keep their per-account
+//     context.
+//
+// What's deliberately NOT preserved (and what triggers <AggregateNotice/>):
+//   • accountHash / accountNumber are 'all' / 'ALL' sentinels — any panel
+//     that fires an order against an account will refuse to operate, and
+//     should render <AggregateNotice/> instead.
+
+const AGGREGATE_HASH = 'all';
+
+function buildAggregateAccount(accounts: AccountData[]): AccountData {
+  const totalValue           = accounts.reduce((s, a) => s + (a.totalValue           || 0), 0);
+  const equity               = accounts.reduce((s, a) => s + (a.equity               || 0), 0);
+  const marginBalance        = accounts.reduce((s, a) => s + (a.marginBalance        || 0), 0);
+  const buyingPower          = accounts.reduce((s, a) => s + (a.buyingPower          || 0), 0);
+  const dayGainLoss          = accounts.reduce((s, a) => s + (a.dayGainLoss          || 0), 0);
+  const unrealizedGainLoss   = accounts.reduce((s, a) => s + (a.unrealizedGainLoss   || 0), 0);
+  const availableForWithdrawal = accounts.reduce((s, a) => s + (a.availableForWithdrawal || 0), 0);
+
+  // Concatenate positions; recompute portfolioPercent against aggregate value
+  // so the per-position % still represents share of the household, not of any
+  // single account.
+  const rawPositions = accounts.flatMap((a) => a.positions ?? []);
+  const positions = rawPositions.map((p) => ({
+    ...p,
+    portfolioPercent: totalValue > 0
+      ? (Math.abs(p.marketValue) / totalValue) * 100
+      : p.portfolioPercent,
+  }));
+
+  // Group pillarSummary across accounts.
+  type PillarRow = AccountData['pillarSummary'][number];
+  const pillarMap = new Map<PillarType, PillarRow>();
+  for (const a of accounts) {
+    for (const row of a.pillarSummary ?? []) {
+      const prev = pillarMap.get(row.pillar);
+      if (!prev) {
+        pillarMap.set(row.pillar, { ...row });
+      } else {
+        pillarMap.set(row.pillar, {
+          ...prev,
+          totalValue:     prev.totalValue     + row.totalValue,
+          dayGainLoss:    prev.dayGainLoss    + row.dayGainLoss,
+          positionCount:  prev.positionCount  + row.positionCount,
+        });
+      }
+    }
+  }
+  const pillarSummary = Array.from(pillarMap.values()).map((row) => ({
+    ...row,
+    portfolioPercent: totalValue > 0 ? (row.totalValue / totalValue) * 100 : 0,
+  }));
+
+  const marginAlerts = accounts.flatMap((a) => a.marginAlerts ?? []);
+
+  return {
+    accountNumber:           'ALL',
+    accountHash:             AGGREGATE_HASH,
+    type:                    'AGGREGATE',
+    totalValue,
+    equity,
+    marginBalance,
+    buyingPower,
+    dayGainLoss,
+    unrealizedGainLoss,
+    availableForWithdrawal,
+    positions,
+    pillarSummary,
+    marginAlerts,
+  };
+}
+
+/**
+ * Inline notice shown in place of action-taking panels when the user is in
+ * the "All accounts" aggregate view. Lets the user jump back to a real
+ * account so the order-firing UI has a hash to target.
+ */
+function AggregateNotice({
+  title, message, onPickAccount,
+}: {
+  title: string;
+  message: string;
+  onPickAccount: () => void;
+}) {
+  return (
+    <div className="bg-[#12151f] border border-[#1f2334] rounded-xl p-5 flex items-start gap-3">
+      <Layers className="w-4 h-4 text-blue-400 mt-0.5 flex-shrink-0" />
+      <div className="flex-1 min-w-0 space-y-2">
+        <div className="text-sm font-semibold text-white">{title}</div>
+        <div className="text-xs text-[#9aa2c0] leading-relaxed">{message}</div>
+        <button
+          onClick={onPickAccount}
+          className="text-xs text-blue-400 hover:text-blue-300 transition-colors"
+        >
+          Pick a single account →
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PAGE
 // ═════════════════════════════════════════════════════════════════════════════
@@ -450,19 +567,46 @@ export default function DashboardPage() {
   const [view, setView]                 = useState<View>('today');
   const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('positions');
 
-  const pendingOrders = usePendingOrderSymbols(accounts[selectedIdx]?.accountHash ?? '');
-  const strategyTargets = useStrategyTargets();
-  const fireTarget = strategyTargets.fireNumber;
+  // ── selectedIdx semantics ──────────────────────────────────────────────────
+  //   • 0..N-1  → single account
+  //   • -1      → "All accounts" aggregate roll-up
+  // We synthesise the aggregate in `aggregateAccount` and resolve the active
+  // account via `account` below. Many panels are passed `account` and don't
+  // need to know which mode they're in.
+  const isAll = selectedIdx === -1 && accounts.length > 1;
+  const aggregateAccount = useMemo(
+    () => (accounts.length > 1 ? buildAggregateAccount(accounts) : null),
+    [accounts],
+  );
+  // When selectedIdx === -1 but there's only one (or zero) account, the
+  // aggregate option is hidden — fall back to the first account so we never
+  // pass undefined into account-shaped panels.
+  const resolvedAccount: AccountData | undefined = isAll
+    ? (aggregateAccount ?? undefined)
+    : accounts[Math.max(0, selectedIdx)];
 
-  // Live streaming
-  const streamSymbols = (accounts[selectedIdx]?.positions ?? [])
+  const nicknames    = useAccountNicknames();
+  const accountKey   = isAll ? AGGREGATE_HASH : (resolvedAccount?.accountHash ?? AGGREGATE_HASH);
+  const accountLabel = isAll
+    ? 'All accounts'
+    : resolvedAccount
+      ? (nicknames[resolvedAccount.accountHash] || `···${resolvedAccount.accountNumber.slice(-4)}`)
+      : '';
+
+  // Pending orders only make sense for a real account; aggregate gets none.
+  const pendingOrders   = usePendingOrderSymbols(isAll ? '' : (resolvedAccount?.accountHash ?? ''));
+  const strategyTargets = useStrategyTargets(accountKey);
+  const fireTarget      = strategyTargets.fireNumber;
+
+  // Live streaming — stream every symbol shown (aggregate streams the union).
+  const streamSymbols = (resolvedAccount?.positions ?? [])
     .map((p) => p.instrument.symbol)
     .filter((s) => !s.includes(' '));
   const { liveQuotes, status: streamStatus } = usePortfolioStream(streamSymbols, streamSymbols.length > 0);
 
-  // Merge live prices into positions
+  // Merge live prices into the resolved account's positions.
   const livePositions = useMemo(() => {
-    const positions = accounts[selectedIdx]?.positions ?? [];
+    const positions = resolvedAccount?.positions ?? [];
     if (!liveQuotes.size) return positions;
     const updated = positions.map((p) => {
       const livePrice = liveQuotes.get(p.instrument.symbol);
@@ -471,12 +615,12 @@ export default function DashboardPage() {
       const newMarketValue = livePrice * qty;
       return { ...p, marketValue: newMarketValue };
     });
-    const liveTotalValue = updated.reduce((sum, p) => sum + Math.abs(p.marketValue), 0) || (accounts[selectedIdx]?.totalValue ?? 0);
+    const liveTotalValue = updated.reduce((sum, p) => sum + Math.abs(p.marketValue), 0) || (resolvedAccount?.totalValue ?? 0);
     return updated.map((p) => ({
       ...p,
       portfolioPercent: liveTotalValue > 0 ? (Math.abs(p.marketValue) / liveTotalValue) * 100 : p.portfolioPercent,
     }));
-  }, [accounts, selectedIdx, liveQuotes]);
+  }, [resolvedAccount, liveQuotes]);
 
   const fetchDividends = useCallback(async () => {
     try {
@@ -529,7 +673,9 @@ export default function DashboardPage() {
     return () => clearInterval(interval);
   }, [fetchAccounts, fetchDividends]);
 
-  const account = accounts[selectedIdx];
+  // `account` is the resolved view: a single Schwab account, or the aggregate
+  // when isAll. Most panels are read-only and don't care which.
+  const account = resolvedAccount;
 
   // ── Drift>2% auto-rebalance (unchanged behaviour, slimmer banner UI) ──────
   const driftRebalanceFiredRef = useRef(false);
@@ -546,6 +692,10 @@ export default function DashboardPage() {
     if (driftRebalanceFiredRef.current) return;
     if (!account || !account.pillarSummary?.length || !account.totalValue) return;
     if (!strategyTargets) return;
+    // Aggregate view has a synthetic accountHash and no Schwab-side target —
+    // drift auto-rebalance must run against a real account or it'll stage
+    // trades against the wrong (or no) book.
+    if (isAll) return;
 
     const targetMap: Record<string, number> = {
       triples:     strategyTargets.triplesPct,
@@ -613,7 +763,7 @@ export default function DashboardPage() {
         setDriftRebalanceBanner({ kind: 'error', message: err instanceof Error ? err.message : 'Auto-rebalance failed' });
       }
     })();
-  }, [account, strategyTargets]);
+  }, [account, strategyTargets, isAll]);
 
   // ── Max drift (per pillar) — surfaced as a Today metric so weekly-rebalance
   //    drift is always visible without digging into the allocation panel. ────
@@ -734,7 +884,7 @@ export default function DashboardPage() {
             </button>
 
             <div className="flex items-center gap-1.5 pl-2 border-l border-[#1f2334]">
-              <SettingsPanel />
+              <SettingsPanel accountKey={accountKey} accountLabel={accountLabel} />
               <AutomationToggle />
               <ThemeToggle />
               <PortfolioExport
@@ -872,11 +1022,19 @@ export default function DashboardPage() {
               />
             </div>
 
-            {/* Unified action queue */}
-            <TodayPanel
-              accountHash={account.accountHash}
-              onChanged={() => fetchAccounts(true)}
-            />
+            {/* Unified action queue — needs a real account hash to stage / fire orders. */}
+            {isAll ? (
+              <AggregateNotice
+                title="Today's queue isn't shown for the household roll-up"
+                message="The action queue stages and fires orders against a single Schwab account. Switch to one to manage today's items."
+                onPickAccount={() => setSelectedIdx(0)}
+              />
+            ) : (
+              <TodayPanel
+                accountHash={account.accountHash}
+                onChanged={() => fetchAccounts(true)}
+              />
+            )}
 
             {/* Pillar allocation */}
             <div className="bg-[#12151f] border border-[#1f2334] rounded-xl p-4 space-y-3">
@@ -958,29 +1116,37 @@ export default function DashboardPage() {
             )}
 
             {portfolioSub === 'trades' && (
-              <>
-                <TradeHub accountHash={account.accountHash} />
-                <CollapsiblePanel
-                  id="rebalance"
-                  title="Rebalance workflow"
-                  icon={<Calculator className="w-4 h-4 text-purple-400" />}
-                  accentClass="border-purple-500/40"
-                  iconContainerClass="bg-purple-500/10 border border-purple-500/20"
-                  defaultOpen={true}
-                >
-                  <div className="pt-4">
-                    <RebalanceWorkflow
-                      positions={account.positions}
-                      pillarSummary={account.pillarSummary}
-                      totalValue={account.totalValue}
-                      equity={account.equity}
-                      marginBalance={account.marginBalance}
-                      accountHash={account.accountHash}
-                      strategyTargets={strategyTargets}
-                    />
-                  </div>
-                </CollapsiblePanel>
-              </>
+              isAll ? (
+                <AggregateNotice
+                  title="Trades & rebalance only run against a single account"
+                  message="Orders fire through a specific Schwab account hash. Pick one account so TradeHub and the rebalance workflow can stage trades."
+                  onPickAccount={() => setSelectedIdx(0)}
+                />
+              ) : (
+                <>
+                  <TradeHub accountHash={account.accountHash} />
+                  <CollapsiblePanel
+                    id="rebalance"
+                    title="Rebalance workflow"
+                    icon={<Calculator className="w-4 h-4 text-purple-400" />}
+                    accentClass="border-purple-500/40"
+                    iconContainerClass="bg-purple-500/10 border border-purple-500/20"
+                    defaultOpen={true}
+                  >
+                    <div className="pt-4">
+                      <RebalanceWorkflow
+                        positions={account.positions}
+                        pillarSummary={account.pillarSummary}
+                        totalValue={account.totalValue}
+                        equity={account.equity}
+                        marginBalance={account.marginBalance}
+                        accountHash={account.accountHash}
+                        strategyTargets={strategyTargets}
+                      />
+                    </div>
+                  </CollapsiblePanel>
+                </>
+              )
             )}
 
             {portfolioSub === 'market' && (
@@ -1012,7 +1178,15 @@ export default function DashboardPage() {
                   defaultOpen={true}
                 >
                   <div className="pt-4">
-                    <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
+                    {isAll ? (
+                      <AggregateNotice
+                        title="Cornerstone buys fire against a single account"
+                        message="The aggregate view shows your combined CLM / CRF position, but new buys need a real account hash. Pick an account to use the buy controls."
+                        onPickAccount={() => setSelectedIdx(0)}
+                      />
+                    ) : (
+                      <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
+                    )}
                   </div>
                 </CollapsiblePanel>
 
@@ -1029,11 +1203,19 @@ export default function DashboardPage() {
                   </div>
                 </CollapsiblePanel>
 
-                <OptionsPutsPanel
-                  positions={account.positions}
-                  totalValue={account.totalValue}
-                  accountHash={account.accountHash}
-                />
+                {isAll ? (
+                  <AggregateNotice
+                    title="Options & Puts work against a single account"
+                    message="Selling puts and the put-tracker pull and submit orders for one Schwab account at a time. Pick one to use these tools."
+                    onPickAccount={() => setSelectedIdx(0)}
+                  />
+                ) : (
+                  <OptionsPutsPanel
+                    positions={account.positions}
+                    totalValue={account.totalValue}
+                    accountHash={account.accountHash}
+                  />
+                )}
 
                 <CollapsiblePanel
                   id="margin"
@@ -1093,17 +1275,25 @@ export default function DashboardPage() {
               defaultOpen={true}
             >
               <div className="pt-4">
-                <AIAnalysisPanel
-                  positions={livePositions}
-                  totalValue={account.totalValue}
-                  equity={account.equity}
-                  marginBalance={account.marginBalance}
-                  pillarSummary={account.pillarSummary}
-                  dividendsAnnual={dividendsTotal}
-                  accountHash={account.accountHash}
-                  triggerPulse={aiPulseTrigger}
-                  onIncomeSnapshot={setMonthlyIncome}
-                />
+                {isAll ? (
+                  <AggregateNotice
+                    title="AI pulse runs per-account"
+                    message="The pulse analyses a single account's positions, margin and pillar mix end-to-end. Pick an account so it has the right context to think about."
+                    onPickAccount={() => setSelectedIdx(0)}
+                  />
+                ) : (
+                  <AIAnalysisPanel
+                    positions={livePositions}
+                    totalValue={account.totalValue}
+                    equity={account.equity}
+                    marginBalance={account.marginBalance}
+                    pillarSummary={account.pillarSummary}
+                    dividendsAnnual={dividendsTotal}
+                    accountHash={account.accountHash}
+                    triggerPulse={aiPulseTrigger}
+                    onIncomeSnapshot={setMonthlyIncome}
+                  />
+                )}
               </div>
             </CollapsiblePanel>
 
