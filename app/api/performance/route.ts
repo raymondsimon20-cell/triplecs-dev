@@ -49,7 +49,10 @@ export async function GET(req: Request) {
   try {
     const [snapshots, cashFlows] = await Promise.all([
       getSnapshotHistory(limit, accountHash),
-      getCashFlows(),
+      // Scope cash flows to the same account so TWR / CAGR don't count a
+      // deposit into the Roth as growth in the taxable. Untagged legacy
+      // events fall through (`getCashFlows(hash)` returns them).
+      getCashFlows(accountHash),
     ]);
 
     // Snapshots come back newest-first; performance functions expect chronological

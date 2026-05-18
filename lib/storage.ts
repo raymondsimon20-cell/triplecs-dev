@@ -142,7 +142,12 @@ export async function savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promis
  * panels and by per-account circuit breakers (drawdown reference). The
  * household-level snapshot (above) continues to be written for legacy
  * consumers that don't yet split by account.
+ *
+ * Retention: keep the most recent {@link PER_ACCOUNT_SNAPSHOT_RETENTION_DAYS}
+ * day-keyed snapshots per account; older ones are deleted on each write.
  */
+const PER_ACCOUNT_SNAPSHOT_RETENTION_DAYS = 365;
+
 export async function savePerAccountSnapshot(
   accountHash: string,
   snapshot: PortfolioSnapshot,
@@ -161,6 +166,22 @@ export async function savePerAccountSnapshot(
     store.setJSON(latestKey, snapshot),
     store.setJSON(dayKey, snapshot),
   ]);
+
+  // Best-effort retention: drop day-keys outside the rolling window so blob
+  // storage doesn't grow without bound. Failures don't poison the write.
+  try {
+    const prefix = `account:${accountHash}:day-`;
+    const { blobs } = await store.list({ prefix });
+    if (blobs.length > PER_ACCOUNT_SNAPSHOT_RETENTION_DAYS) {
+      const dropped = blobs
+        .map((b) => b.key)
+        .sort()                                 // YYYY-MM-DD lexicographic
+        .slice(0, blobs.length - PER_ACCOUNT_SNAPSHOT_RETENTION_DAYS);
+      await Promise.all(dropped.map((k) => store.delete(k).catch(() => undefined)));
+    }
+  } catch (err) {
+    console.warn(`[storage] per-account snapshot retention sweep failed for ${accountHash.slice(0, 6)}…:`, err);
+  }
 }
 
 export async function getLatestPortfolioSnapshot(accountHash?: string): Promise<PortfolioSnapshot | null> {
@@ -219,13 +240,29 @@ export interface CashFlowEvent {
   source: 'schwab' | 'manual';
   /** Original Schwab activityId, when available — used for de-dupe. */
   activityId?: string;
+  /**
+   * 2026-05 per-account autopilot. Schwab account hash this event was
+   * recorded against. Used by per-account TWR / CAGR calculations so a
+   * deposit into the Roth doesn't get counted against the taxable's return.
+   * Optional for backward compat with events written before this field
+   * shipped.
+   */
+  accountHash?: string;
 }
 
 const CASH_FLOWS_KEY = 'log';
 
-export async function getCashFlows(): Promise<CashFlowEvent[]> {
+/**
+ * Read every recorded cash flow. With an `accountHash`, returns only events
+ * tagged with that hash PLUS events with no accountHash (legacy events
+ * pre-tagging — included to avoid orphaning history when callers scope by
+ * account). Without an accountHash, returns every event (household total).
+ */
+export async function getCashFlows(accountHash?: string): Promise<CashFlowEvent[]> {
   const data = await getStore('cash-flows').get(CASH_FLOWS_KEY, { type: 'json' });
-  return Array.isArray(data) ? data : [];
+  const all  = Array.isArray(data) ? (data as CashFlowEvent[]) : [];
+  if (!accountHash) return all;
+  return all.filter((e) => !e.accountHash || e.accountHash === accountHash);
 }
 
 /**
@@ -264,6 +301,12 @@ export interface TrackedRecommendation {
   sellPct: number | null;
   status: 'pending' | 'executed' | 'skipped';
   executedAt?: number;
+  /**
+   * 2026-05 per-account autopilot. Schwab account hash the recommendation
+   * was generated against. Optional for backward compat with entries
+   * written before this field shipped.
+   */
+  accountHash?: string;
 }
 
 export async function saveRecommendations(recs: TrackedRecommendation[]): Promise<void> {
@@ -297,15 +340,29 @@ export interface StoredAlert {
   rule: string;
   detail: string;
   read: boolean;
+  /**
+   * 2026-05 per-account autopilot. Schwab account hash this alert refers to.
+   * Optional for backward compat with alerts written before this field
+   * shipped + for household-level alerts (e.g. cron health) that aren't
+   * scoped to a single account.
+   */
+  accountHash?: string;
 }
 
 export async function saveAlerts(alerts: StoredAlert[]): Promise<void> {
   await getStore('alerts').setJSON('current', alerts);
 }
 
-export async function getAlerts(): Promise<StoredAlert[]> {
+/**
+ * Read every stored alert. With an `accountHash`, returns alerts tagged for
+ * that account PLUS untagged household-level alerts (e.g. cron health), so a
+ * per-account view still sees household-wide warnings.
+ */
+export async function getAlerts(accountHash?: string): Promise<StoredAlert[]> {
   const data = await getStore('alerts').get('current', { type: 'json' });
-  return Array.isArray(data) ? data : [];
+  const all  = Array.isArray(data) ? (data as StoredAlert[]) : [];
+  if (!accountHash) return all;
+  return all.filter((a) => !a.accountHash || a.accountHash === accountHash);
 }
 
 export async function markAlertsRead(): Promise<void> {

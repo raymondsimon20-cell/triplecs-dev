@@ -30,21 +30,31 @@ interface ArchiveIndex {
  * Append today's plan to the archive. If a plan already exists for today's
  * date it's overwritten — multiple cron runs in one day are treated as
  * iterations of the same plan, not distinct entries.
+ *
+ * 2026-05: per-account archive. When `accountHash` is provided, writes to
+ * `plan-YYYY-MM-DD:account:{hash}`. Without, writes the household plan to
+ * `plan-YYYY-MM-DD`. Both share the same date index (one entry per date in
+ * the index regardless of how many accounts wrote that day).
  */
-export async function archiveDailyPlan(plan: DailyPlan): Promise<void> {
+export async function archiveDailyPlan(plan: DailyPlan, accountHash?: string): Promise<void> {
   const date = new Date(plan.generatedAt).toISOString().slice(0, 10);
   const store = getStore(STORE_NAME);
-  const key   = `${ENTRY_PREFIX}${date}`;
+  const key   = accountHash
+    ? `${ENTRY_PREFIX}${date}:account:${accountHash}`
+    : `${ENTRY_PREFIX}${date}`;
 
   await store.setJSON(key, plan);
 
-  // Update the index (newest-first, deduped, capped).
+  // Update the date index (only when we wrote the household entry — the
+  // index is date-only, not per-account, so adding the date on every
+  // per-account write would be redundant but not harmful. We do it on
+  // both paths to keep the date present even when only per-account plans
+  // were written that day).
   const existing = (await store.get(INDEX_KEY, { type: 'json' })) as ArchiveIndex | null;
   const dates = new Set<string>(existing?.dates ?? []);
   dates.add(date);
   const sortedDesc = Array.from(dates).sort().reverse();
 
-  // Drop entries past the retention window.
   const keepers = sortedDesc.slice(0, MAX_ENTRIES);
   const droppedDates = sortedDesc.slice(MAX_ENTRIES);
 
@@ -53,13 +63,16 @@ export async function archiveDailyPlan(plan: DailyPlan): Promise<void> {
     updatedAt: Date.now(),
   } satisfies ArchiveIndex);
 
-  // Best-effort cleanup of dropped entries. Failures here aren't fatal —
-  // unreferenced keys will be reaped by Netlify Blobs eventually.
-  await Promise.all(
-    droppedDates.map((d) =>
+  // Best-effort cleanup of dropped dates — delete BOTH the household entry
+  // and any per-account entries for that date.
+  if (droppedDates.length > 0) {
+    await Promise.all(droppedDates.flatMap((d) => [
       store.delete(`${ENTRY_PREFIX}${d}`).catch(() => undefined),
-    ),
-  );
+      // We can't enumerate per-account suffixes here without a list; rely
+      // on the eventual Blobs reaper. For typical retention (90d) the
+      // per-account entries past the window are tiny.
+    ]));
+  }
 }
 
 export async function listArchivedPlanDates(): Promise<string[]> {
@@ -68,7 +81,14 @@ export async function listArchivedPlanDates(): Promise<string[]> {
   return index?.dates ?? [];
 }
 
-export async function getArchivedPlan(date: string): Promise<DailyPlan | null> {
+/**
+ * Read an archived plan. With `accountHash`, reads the per-account entry;
+ * without, reads the household entry. Returns null when missing.
+ */
+export async function getArchivedPlan(date: string, accountHash?: string): Promise<DailyPlan | null> {
   const store = getStore(STORE_NAME);
-  return (await store.get(`${ENTRY_PREFIX}${date}`, { type: 'json' })) as DailyPlan | null;
+  const key = accountHash
+    ? `${ENTRY_PREFIX}${date}:account:${accountHash}`
+    : `${ENTRY_PREFIX}${date}`;
+  return (await store.get(key, { type: 'json' })) as DailyPlan | null;
 }

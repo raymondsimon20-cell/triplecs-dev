@@ -30,11 +30,16 @@ interface Props {
    * the account it'll target on approve.
    */
   accounts?: AccountSummary[];
+  /**
+   * Render the household-aggregate read-only inbox (no Approve / Dismiss).
+   * Used by the dashboard when "All accounts" is selected.
+   */
+  householdReadOnly?: boolean;
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
 }
 
-export function TodayPanel({ accountHash, accounts, onChanged }: Props) {
+export function TodayPanel({ accountHash, accounts, householdReadOnly = false, onChanged }: Props) {
   return (
     <div className="bg-[#12151f] border border-[#1f2334] border-l-2 border-l-blue-500/60 rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3.5 border-b border-[#1a1e2e]">
@@ -56,7 +61,12 @@ export function TodayPanel({ accountHash, accounts, onChanged }: Props) {
       </div>
 
       <div className="p-5">
-        <TradeInbox accountHash={accountHash} accounts={accounts} onChanged={onChanged} />
+        <TradeInbox
+          accountHash={accountHash}
+          accounts={accounts}
+          householdReadOnly={householdReadOnly}
+          onChanged={onChanged}
+        />
       </div>
     </div>
   );

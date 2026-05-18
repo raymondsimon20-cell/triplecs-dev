@@ -148,6 +148,9 @@ export async function fetchCashFlows(start: string, end: string): Promise<CashFl
           description: t.description ?? t.transactionDescription,
           source: 'schwab',
           activityId,
+          // The outer for-loop iterates per-account; capture the hash so
+          // per-account TWR can filter on it without re-fetching.
+          accountHash: hashValue,
         });
       }
     }

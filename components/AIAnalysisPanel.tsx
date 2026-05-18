@@ -455,7 +455,10 @@ export function AIAnalysisPanel({
       urgency: r.urgency,
       dollarAmount: r.dollar_amount ?? null,
       sellPct: r.sell_pct ?? null,
-      status: 'pending',
+      status: 'pending' as const,
+      // Tag with the account this AI analysis ran against so the rec
+      // history can be filtered per-account later.
+      accountHash: accountHash || undefined,
     }));
     fetch('/api/recommendations', {
       method: 'POST',
@@ -463,7 +466,7 @@ export function AIAnalysisPanel({
       body: JSON.stringify({ recommendations: toSave }),
     }).catch(() => {});
     setRecHistory((prev) => [...toSave, ...prev].slice(0, 100));
-  }, [mode]);
+  }, [mode, accountHash]);
 
   const markRecStatus = useCallback((id: string, status: 'executed' | 'skipped') => {
     fetch('/api/recommendations', {

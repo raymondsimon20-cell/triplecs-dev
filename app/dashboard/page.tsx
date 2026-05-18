@@ -599,6 +599,42 @@ export default function DashboardPage() {
 
   const nicknames    = useAccountNicknames();
   const accountKey   = isAll ? AGGREGATE_HASH : (resolvedAccount?.accountHash ?? AGGREGATE_HASH);
+
+  /**
+   * Pick the most-actionable account index when leaving aggregate mode:
+   * ranks by max-pillar-drift (computed against per-account targets), with
+   * portfolio value as tiebreaker. Falls back to index 0 when accounts is
+   * empty. Used by AggregateNotice buttons so the user lands on the
+   * account most likely to need attention.
+   */
+  const pickPriorityAccountIdx = useCallback((): number => {
+    if (accounts.length === 0) return 0;
+    let bestIdx = 0;
+    let bestScore = -1;
+    for (let i = 0; i < accounts.length; i += 1) {
+      const a = accounts[i];
+      const targets = loadStrategyTargetsFor(a.accountHash);
+      const targetMap: Record<string, number> = {
+        triples: targets.triplesPct, cornerstone: targets.cornerstonePct,
+        income:  targets.incomePct,  hedge:       targets.hedgePct,
+      };
+      const drift = Math.max(
+        ...(a.pillarSummary ?? [])
+          .filter((p) => p.pillar !== 'other')
+          .map((p) => Math.abs(p.portfolioPercent - (targetMap[p.pillar] ?? 0))),
+        0,
+      );
+      // Score: drift dominates; totalValue is a tiebreaker so two equal-drift
+      // accounts prefer the larger one. Scale value down so drift can win on
+      // any reasonable portfolio size.
+      const score = drift * 1_000_000 + (a.totalValue || 0);
+      if (score > bestScore) {
+        bestScore = score;
+        bestIdx   = i;
+      }
+    }
+    return bestIdx;
+  }, [accounts]);
   const accountLabel = isAll
     ? 'All accounts'
     : resolvedAccount
@@ -1129,20 +1165,16 @@ export default function DashboardPage() {
               />
             </div>
 
-            {/* Unified action queue — needs a real account hash to stage / fire orders. */}
-            {isAll ? (
-              <AggregateNotice
-                title="Today's queue isn't shown for the household roll-up"
-                message="The action queue stages and fires orders against a single Schwab account. Switch to one to manage today's items."
-                onPickAccount={() => setSelectedIdx(0)}
-              />
-            ) : (
-              <TodayPanel
-                accountHash={account.accountHash}
-                accounts={accounts}
-                onChanged={() => fetchAccounts(true)}
-              />
-            )}
+            {/* Unified action queue. In aggregate mode the inbox renders
+                household-read-only — every account's items shown with their
+                chips, but Approve / Dismiss are hidden so the user has to
+                pick a single account before firing orders. */}
+            <TodayPanel
+              accountHash={isAll ? '' : account.accountHash}
+              accounts={accounts}
+              householdReadOnly={isAll}
+              onChanged={() => fetchAccounts(true)}
+            />
 
             {/* Pillar allocation */}
             <div className="bg-[#12151f] border border-[#1f2334] rounded-xl p-4 space-y-3">
@@ -1229,7 +1261,7 @@ export default function DashboardPage() {
                 <AggregateNotice
                   title="Trades & rebalance only run against a single account"
                   message="Orders fire through a specific Schwab account hash. Pick one account so TradeHub and the rebalance workflow can stage trades."
-                  onPickAccount={() => setSelectedIdx(0)}
+                  onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
                 />
               ) : (
                 <>
@@ -1291,7 +1323,7 @@ export default function DashboardPage() {
                       <AggregateNotice
                         title="Cornerstone buys fire against a single account"
                         message="The aggregate view shows your combined CLM / CRF position, but new buys need a real account hash. Pick an account to use the buy controls."
-                        onPickAccount={() => setSelectedIdx(0)}
+                        onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
                       />
                     ) : (
                       <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
@@ -1316,7 +1348,7 @@ export default function DashboardPage() {
                   <AggregateNotice
                     title="Options & Puts work against a single account"
                     message="Selling puts and the put-tracker pull and submit orders for one Schwab account at a time. Pick one to use these tools."
-                    onPickAccount={() => setSelectedIdx(0)}
+                    onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
                   />
                 ) : (
                   <OptionsPutsPanel
@@ -1388,7 +1420,7 @@ export default function DashboardPage() {
                   <AggregateNotice
                     title="AI pulse runs per-account"
                     message="The pulse analyses a single account's positions, margin and pillar mix end-to-end. Pick an account so it has the right context to think about."
-                    onPickAccount={() => setSelectedIdx(0)}
+                    onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
                   />
                 ) : (
                   <AIAnalysisPanel

@@ -79,6 +79,14 @@ interface Props {
    * hash prefix.
    */
   accounts?:  AccountSummary[];
+  /**
+   * When true (aggregate / household view), the inbox shows every account's
+   * items as a read-only list — no Approve / Approve All / Dismiss. The
+   * user is nudged to a single-account view to take action. The legacy
+   * accountHash-scoped filter is dropped in this mode so the user sees
+   * the household queue at a glance.
+   */
+  householdReadOnly?: boolean;
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
 }
@@ -123,7 +131,7 @@ function notional(item: InboxItem): number {
   return (item.price ?? 0) * item.quantity;
 }
 
-export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
+export function TradeInbox({ accountHash, accounts = [], householdReadOnly = false, onChanged }: Props) {
   const [data, setData]         = useState<InboxPayload | null>(null);
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
@@ -168,11 +176,10 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
   const load = useCallback(async () => {
     try {
       // Pull pending + failed so the user can see autopilot rejects and retry.
-      // Scope to the selected account on the server: only items targeted at
-      // this account (plus untagged-fallback items) come back, so the queue
-      // never shows trades destined for another account by mistake.
+      // Scope to the selected account on the server EXCEPT in household
+      // read-only mode (aggregate view), where we want every account's items.
       const params = new URLSearchParams({ status: 'pending,failed' });
-      if (accountHash) params.set('accountHash', accountHash);
+      if (accountHash && !householdReadOnly) params.set('accountHash', accountHash);
       const r = await fetch(`/api/inbox?${params.toString()}`);
       const d: InboxPayload | { error: string } = await r.json();
       if ('error' in d) setError(d.error);
@@ -182,7 +189,7 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
     } finally {
       setLoading(false);
     }
-  }, [accountHash]);
+  }, [accountHash, householdReadOnly]);
 
   useEffect(() => {
     load();
@@ -418,7 +425,7 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
           >
             <RefreshCw className="w-3 h-3" /> Refresh
           </button>
-          {items.length > 0 && (
+          {items.length > 0 && !householdReadOnly && (
             <>
               {items.some((it) => !it.accountHash) && (
                 <>
@@ -456,6 +463,14 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
                 Approve {allowed.length} Allowed
               </button>
             </>
+          )}
+          {items.length > 0 && householdReadOnly && (
+            <span
+              className="text-[10px] px-2 py-1 rounded bg-blue-500/10 border border-blue-500/30 text-blue-300"
+              title="Switch to a single account in the header to approve or dismiss"
+            >
+              read-only household view
+            </span>
           )}
         </div>
       </div>
@@ -575,8 +590,9 @@ export function TradeInbox({ accountHash, accounts = [], onChanged }: Props) {
                     )}
                   </div>
 
-                  {/* Actions */}
-                  <div className="flex flex-col gap-1.5 flex-shrink-0">
+                  {/* Actions — hidden in household read-only mode so the
+                      aggregate view stays informational. */}
+                  <div className={`flex flex-col gap-1.5 flex-shrink-0 ${householdReadOnly ? 'hidden' : ''}`}>
                     {failedItem ? (
                       // For failed items, "Retry" flips the inbox status back
                       // to 'pending' (the next manual approve/auto cycle picks

@@ -193,6 +193,8 @@ async function fetchAggregatedPortfolio(): Promise<{
     longQuantity:  number;
     averagePrice:  number;
     marketValue:   number;
+    /** 2026-05: source account for per-account option-scan loop. */
+    accountHash:   string;
   }>;
   /**
    * Per-account breakdown for the per-account engine loop (2026-05). Aggregate
@@ -226,6 +228,7 @@ async function fetchAggregatedPortfolio(): Promise<{
     longQuantity:  number;
     averagePrice:  number;
     marketValue:   number;
+    accountHash:   string;
   }> = [];
   const accountBuckets: AccountPortfolio[] = [];
   let cash       = 0;
@@ -257,6 +260,9 @@ async function fetchAggregatedPortfolio(): Promise<{
           longQuantity:  p.longQuantity ?? 0,
           averagePrice:  p.averagePrice ?? p.averageLongPrice ?? 0,
           marketValue:   p.marketValue ?? 0,
+          // 2026-05: capture the option's account so the per-account
+          // option-scan loop knows where each contract lives.
+          accountHash:   hashValue,
         });
         continue;
       }
@@ -720,48 +726,61 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
   }).catch((e) => console.warn('[signals/run] household snapshot save failed:', e));
 
   // ─── Daily put autopilot scan ────────────────────────────────────────────
-  // Examines open option positions: close shorts at >=75% profit, roll shorts
-  // with DTE<21 + 25-74% profit, propose new protective puts when Triples
-  // exposure is high without hedge coverage, propose income puts on Tier-1
-  // names when AFW headroom is comfortable. All stage as tier 'approval' —
-  // options never auto-execute regardless of mode.
+  // 2026-05 per-account: run the scan ONCE per account so proposals can be
+  // staged with that account's hash. Each account passes its own option
+  // positions + equity positions + totalValue + AFW; the scan's gating
+  // logic (Triples exposure, AFW headroom) is now per-account.
+  // All proposals stage as tier 'approval' regardless — options never
+  // auto-execute.
   try {
     const tokens = await getTokens();
     if (tokens && portfolio.optionPositions.length > 0) {
-      const scan = await runOptionScan(
-        tokens,
-        portfolio.optionPositions,
-        portfolio.positions,
-        portfolio.prices,
-        result.valuation.totalValue,
-        portfolio.afwDollars > 0 ? portfolio.afwDollars : undefined,
-      );
-      const allOptionProposals = [
-        ...scan.closeProposals,
-        ...scan.rollProposals,
-        ...scan.protectProposals,
-        ...scan.incomeProposals,
-      ];
-      if (allOptionProposals.length > 0) {
+      let totalStaged = 0;
+      await Promise.all(perAccount.map(async (pa) => {
+        const acctOptions = portfolio.optionPositions.filter((p) => p.accountHash === pa.accountHash);
+        if (acctOptions.length === 0) return;
         try {
-          await Promise.race([
-            appendInbox(allOptionProposals),
-            new Promise<never>((_, reject) =>
-              setTimeout(() => reject(new Error('option staging timeout')), 5000),
-            ),
-          ]);
-          console.log(
-            `[option-scan] staged ${scan.closeProposals.length} close, ${scan.rollProposals.length} roll, ` +
-            `${scan.protectProposals.length} protect, ${scan.incomeProposals.length} income proposals`,
+          const scan = await runOptionScan(
+            tokens,
+            acctOptions,
+            pa.portfolio.positions,
+            portfolio.prices,
+            pa.result.valuation.totalValue,
+            pa.portfolio.afwDollars > 0 ? pa.portfolio.afwDollars : undefined,
           );
+          const allOptionProposals = [
+            ...scan.closeProposals,
+            ...scan.rollProposals,
+            ...scan.protectProposals,
+            ...scan.incomeProposals,
+          ].map((p) => ({ ...p, accountHash: pa.accountHash }));
+          if (allOptionProposals.length > 0) {
+            try {
+              await Promise.race([
+                appendInbox(allOptionProposals),
+                new Promise<never>((_, reject) =>
+                  setTimeout(() => reject(new Error('option staging timeout')), 5000),
+                ),
+              ]);
+              totalStaged += allOptionProposals.length;
+              console.log(
+                `[option-scan ${pa.accountHash.slice(0, 6)}…] staged ${scan.closeProposals.length} close, ` +
+                `${scan.rollProposals.length} roll, ${scan.protectProposals.length} protect, ` +
+                `${scan.incomeProposals.length} income proposals`,
+              );
+            } catch (err) {
+              console.warn(`[option-scan ${pa.accountHash.slice(0, 6)}…] inbox staging failed:`, err);
+            }
+          }
+          if (scan.skipped.length > 0) {
+            console.log(`[option-scan ${pa.accountHash.slice(0, 6)}…] skipped ${scan.skipped.length}:`,
+              scan.skipped.map((s) => `${s.underlying}: ${s.reason}`).join('; '));
+          }
         } catch (err) {
-          console.warn('[option-scan] inbox staging failed:', err);
+          console.warn(`[option-scan ${pa.accountHash.slice(0, 6)}…] scan failed:`, err);
         }
-      }
-      if (scan.skipped.length > 0) {
-        console.log(`[option-scan] skipped ${scan.skipped.length}:`,
-          scan.skipped.map((s) => `${s.underlying}: ${s.reason}`).join('; '));
-      }
+      }));
+      if (totalStaged > 0) console.log(`[option-scan] total staged across accounts: ${totalStaged}`);
     }
   } catch (err) {
     console.warn('[option-scan] scan failed:', err);
@@ -792,9 +811,22 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
       loadAutoConfig(),
     ]);
     const plan = buildDailyPlan(result, inbox, autoConfig);
-    // Archive every run so the user can review history later.
+    // Archive every run so the user can review history later. Writes BOTH
+    // the household combined plan AND a per-account plan for each account
+    // that ran this cycle, so per-account "what did the engine suggest
+    // last Tuesday" recall works.
     try { await archiveDailyPlan(plan); }
     catch (err) { console.warn('[signals/run] plan archive failed:', err); }
+    await Promise.all(perAccount.map(async (pa) => {
+      try {
+        const acctAutoConfig = await loadAutoConfig(pa.accountHash);
+        const acctInbox      = inbox.filter((it) => !it.accountHash || it.accountHash === pa.accountHash);
+        const acctPlan       = buildDailyPlan(pa.result, acctInbox, acctAutoConfig);
+        await archiveDailyPlan(acctPlan, pa.accountHash);
+      } catch (err) {
+        console.warn(`[signals/run] per-account plan archive failed for ${pa.accountHash}:`, err);
+      }
+    }));
 
     // Pull current cron health for the digest. Read happens AFTER we recorded
     // this run's heartbeat, so health reflects the just-finished cycle.

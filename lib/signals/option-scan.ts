@@ -97,6 +97,12 @@ export interface OptionScanPosition {
   longQuantity:  number;     // contracts long (1 = bought one put)
   averagePrice:  number;     // premium per share (×100 = per contract)
   marketValue:   number;     // current cost-to-close (positive abs value)
+  /**
+   * 2026-05 per-account autopilot: optional account hash for the per-account
+   * scan loop in lib/signals/run.ts. Optional so existing callers stay
+   * compatible.
+   */
+  accountHash?:  string;
 }
 
 // ─── Phase A: scan existing puts for close/roll ──────────────────────────────

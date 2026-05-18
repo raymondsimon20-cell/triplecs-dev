@@ -64,11 +64,18 @@ export async function GET(req: Request) {
   const url        = new URL(req.url);
   const limit      = Math.max(1, Math.min(365, Number(url.searchParams.get('limit') || 60)));
   const ruleFilter = url.searchParams.get('rule')?.trim() || null;
+  // 2026-05: ?accountHash=… replays against that account's snapshot history
+  // and that account's strategy targets (override → global). Empty / 'all' /
+  // 'global' keeps the legacy household-aggregate behaviour.
+  const accountHashParam = url.searchParams.get('accountHash');
+  const accountHash      = accountHashParam && accountHashParam !== 'all' && accountHashParam !== 'global'
+    ? accountHashParam
+    : undefined;
 
   try {
     const [snapshots, strategy] = await Promise.all([
-      getSnapshotHistory(limit),
-      getServerStrategyTargets(),
+      getSnapshotHistory(limit, accountHash),
+      getServerStrategyTargets(accountHash),
     ]);
 
     // Replay seeds a fresh default state and rolls it forward run-by-run, so

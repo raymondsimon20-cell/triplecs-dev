@@ -45,7 +45,7 @@ import { defaultSignalState, type SignalEngineState } from '@/lib/signals/state'
 
 export const dynamic = 'force-dynamic';
 
-interface BacktestBody { limit?: number }
+interface BacktestBody { limit?: number; accountHash?: string }
 
 interface SimulatedPosition {
   shares:    number;
@@ -76,11 +76,16 @@ export async function POST(req: Request) {
   let body: BacktestBody = {};
   try { body = await req.json(); } catch { /* empty body fine */ }
   const limit = Math.max(1, Math.min(365, Math.floor(Number(body.limit) || 90)));
+  // 2026-05 — scope to a single account when provided. Untagged values
+  // ('all' / 'global' / empty) keep the legacy household-aggregate behaviour.
+  const accountHash = body.accountHash && body.accountHash !== 'all' && body.accountHash !== 'global'
+    ? body.accountHash
+    : undefined;
 
   try {
     const [snapshots, strategy] = await Promise.all([
-      getSnapshotHistory(limit),
-      getServerStrategyTargets(),
+      getSnapshotHistory(limit, accountHash),
+      getServerStrategyTargets(accountHash),
     ]);
 
     const realChronological = snapshots

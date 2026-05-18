@@ -49,6 +49,8 @@ interface ShadowBody {
   limit?:           number;
   configOverrides?: Record<string, number>;
   pillarTargets?:   Partial<PillarTargets>;
+  /** 2026-05: scope to a single account's snapshots + targets. */
+  accountHash?:     string;
 }
 
 interface DayDiff {
@@ -81,11 +83,16 @@ export async function POST(req: Request) {
   try { body = await req.json(); } catch { /* empty body fine — full defaults */ }
 
   const limit = Math.max(1, Math.min(365, Math.floor(Number(body.limit) || 60)));
+  // 2026-05: scope to one account when provided. Untagged values fall
+  // back to household.
+  const accountHash = body.accountHash && body.accountHash !== 'all' && body.accountHash !== 'global'
+    ? body.accountHash
+    : undefined;
 
   try {
     const [snapshots, strategy] = await Promise.all([
-      getSnapshotHistory(limit),
-      getServerStrategyTargets(),
+      getSnapshotHistory(limit, accountHash),
+      getServerStrategyTargets(accountHash),
     ]);
 
     const realChronological = snapshots

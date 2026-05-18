@@ -112,7 +112,9 @@ async function saveTradeHistoryEntries(entries: TradeHistoryEntry[]): Promise<vo
     const store = getStore('trade-history');
     const existing = await store.get('log', { type: 'json' }) as TradeHistoryEntry[] | null;
     const log = Array.isArray(existing) ? existing : [];
-    const updated = [...entries, ...log].slice(0, 500);
+    // Cap matches /api/orders (2000 entries, bumped from 500 in 2026-05
+    // so multi-account users don't lose tail history disproportionately).
+    const updated = [...entries, ...log].slice(0, 2000);
     await store.setJSON('log', updated);
   } catch (err) {
     console.error('[auto-execute] trade-history write failed:', err);

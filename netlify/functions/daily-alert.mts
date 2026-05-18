@@ -10,6 +10,7 @@ import {
   saveAlerts,
   getCornerstoneSnapshot,
   savePortfolioSnapshot,
+  savePerAccountSnapshot,
   appendCashFlows,
   getCashFlows,
   getTokens,
@@ -54,7 +55,22 @@ async function captureDailySnapshot(): Promise<void> {
     }
 
     await savePortfolioSnapshot(buildSnapshot(states, { spyClose }));
-    console.log(`[daily-alert] Snapshot saved (totalValue=${states.reduce((s, x) => s + x.totalValue, 0)}, spy=${spyClose ?? 'n/a'})`);
+
+    // Per-account snapshots too — paired with the account hash so the
+    // per-account performance / breaker paths have a recent prior value.
+    // Each account gets its own buildSnapshot([{...}]) so portfolio % and
+    // totals are scoped to that account, not the household.
+    await Promise.all(
+      states.map(async (s, i) => {
+        const hash = accounts[i].hashValue;
+        try {
+          await savePerAccountSnapshot(hash, buildSnapshot([s], { spyClose }));
+        } catch (err) {
+          console.warn(`[daily-alert] per-account snapshot save failed for ${hash.slice(0, 6)}…:`, err);
+        }
+      }),
+    );
+    console.log(`[daily-alert] Snapshot saved (totalValue=${states.reduce((s, x) => s + x.totalValue, 0)}, spy=${spyClose ?? 'n/a'}, perAccount=${states.length})`);
   } catch (err) {
     console.error('[daily-alert] snapshot capture failed:', err);
   }
@@ -84,29 +100,32 @@ async function captureDailySnapshot(): Promise<void> {
   }
 }
 
-export default async function handler() {
-  // Capture snapshot + cash flows BEFORE running alerts so alerts use fresh data.
-  await captureDailySnapshot();
-
-  const [snapshot, cornerstoneSnap] = await Promise.all([
-    getLatestPortfolioSnapshot().catch(() => null),
-    getCornerstoneSnapshot().catch(() => null),
-  ]);
-  if (!snapshot) return new Response('No snapshot available', { status: 200 });
-
-  const alerts: StoredAlert[] = [];
-  const now = Date.now();
+/**
+ * Generate the rule-violation alerts for a single portfolio snapshot.
+ * When called per-account, alerts get tagged with that account's hash so
+ * `/api/alerts?accountHash=…` and `getAlerts(hash)` can scope correctly.
+ */
+function generateAlertsForSnapshot(
+  snapshot: Awaited<ReturnType<typeof getLatestPortfolioSnapshot>> & {} extends infer T
+    ? Exclude<T, null>
+    : never,
+  cornerstoneSnap: Awaited<ReturnType<typeof getCornerstoneSnapshot>>,
+  now: number,
+  accountHash?: string,
+): StoredAlert[] {
+  const out: StoredAlert[] = [];
+  const idSuffix = accountHash ? `:${accountHash.slice(0, 6)}` : '';
 
   // Margin threshold checks
   const m = snapshot.marginUtilizationPct;
   if (m > 50) {
-    alerts.push({ id: `margin-${now}`, createdAt: now, level: 'danger', read: false,
+    out.push({ id: `margin-${now}${idSuffix}`, createdAt: now, level: 'danger', read: false, accountHash,
       rule: 'Margin > 50% Emergency', detail: `Margin at ${m.toFixed(1)}% — EMERGENCY. Deleverage immediately.` });
   } else if (m > 30) {
-    alerts.push({ id: `margin-${now}`, createdAt: now, level: 'danger', read: false,
+    out.push({ id: `margin-${now}${idSuffix}`, createdAt: now, level: 'danger', read: false, accountHash,
       rule: 'Margin > 30% Critical', detail: `Margin at ${m.toFixed(1)}% — sell highest-maintenance positions first.` });
   } else if (m > 20) {
-    alerts.push({ id: `margin-${now}`, createdAt: now, level: 'warn', read: false,
+    out.push({ id: `margin-${now}${idSuffix}`, createdAt: now, level: 'warn', read: false, accountHash,
       rule: 'Margin > 20% Warning', detail: `Margin at ${m.toFixed(1)}% — monitor closely.` });
   }
 
@@ -117,14 +136,14 @@ export default async function handler() {
     if (target == null) continue;
     const drift = p.portfolioPercent - target;
     if (Math.abs(drift) >= 10) {
-      alerts.push({
-        id: `pillar-${p.pillar}-${now}`, createdAt: now, level: 'danger', read: false,
+      out.push({
+        id: `pillar-${p.pillar}-${now}${idSuffix}`, createdAt: now, level: 'danger', read: false, accountHash,
         rule: `${p.pillar} pillar drift`,
         detail: `${p.pillar} at ${p.portfolioPercent.toFixed(1)}% vs ${target}% target (${drift > 0 ? '+' : ''}${drift.toFixed(1)}%).`,
       });
     } else if (Math.abs(drift) >= 5) {
-      alerts.push({
-        id: `pillar-${p.pillar}-${now}`, createdAt: now, level: 'warn', read: false,
+      out.push({
+        id: `pillar-${p.pillar}-${now}${idSuffix}`, createdAt: now, level: 'warn', read: false, accountHash,
         rule: `${p.pillar} pillar drift`,
         detail: `${p.pillar} at ${p.portfolioPercent.toFixed(1)}% vs ${target}% target (${drift > 0 ? '+' : ''}${drift.toFixed(1)}%).`,
       });
@@ -135,24 +154,25 @@ export default async function handler() {
   for (const sym of ['CLM', 'CRF']) {
     const pos = snapshot.positions.find((p) => p.symbol === sym);
     if (!pos) {
-      alerts.push({ id: `${sym}-missing-${now}`, createdAt: now, level: 'warn', read: false,
+      out.push({ id: `${sym}-missing-${now}${idSuffix}`, createdAt: now, level: 'warn', read: false, accountHash,
         rule: `${sym} missing`, detail: `${sym} not in portfolio — DRIP eligibility lost.` });
     } else if (pos.shares < 3) {
-      alerts.push({ id: `${sym}-floor-${now}`, createdAt: now, level: 'danger', read: false,
+      out.push({ id: `${sym}-floor-${now}${idSuffix}`, createdAt: now, level: 'danger', read: false, accountHash,
         rule: `${sym} below 3-share floor`, detail: `${sym} has ${pos.shares} shares — buy to restore DRIP eligibility.` });
     }
   }
 
-  // CLM/CRF premium alerts from stored cornerstone NAV snapshot
-  if (cornerstoneSnap) {
+  // CLM/CRF premium alerts — fund-level, household-only (one premium per
+  // ticker regardless of how many accounts hold them).
+  if (cornerstoneSnap && !accountHash) {
     for (const fund of cornerstoneSnap.funds) {
       const p = fund.premiumDiscount;
       if (p >= 30) {
-        alerts.push({ id: `${fund.ticker}-premium-${now}`, createdAt: now, level: 'danger', read: false,
+        out.push({ id: `${fund.ticker}-premium-${now}`, createdAt: now, level: 'danger', read: false,
           rule: `${fund.ticker} premium ≥30%`,
           detail: `${fund.ticker} trading at ${p.toFixed(1)}% premium to NAV — RO likely. Consider selling down to 3 shares.` });
       } else if (p >= 20) {
-        alerts.push({ id: `${fund.ticker}-premium-${now}`, createdAt: now, level: 'warn', read: false,
+        out.push({ id: `${fund.ticker}-premium-${now}`, createdAt: now, level: 'warn', read: false,
           rule: `${fund.ticker} premium ≥20%`,
           detail: `${fund.ticker} at ${p.toFixed(1)}% premium — boxing trigger reached. Review position.` });
       }
@@ -163,12 +183,55 @@ export default async function handler() {
   for (const pos of snapshot.positions) {
     const pct = (pos.marketValue / snapshot.totalValue) * 100;
     if (pct > 20) {
-      alerts.push({ id: `conc-${pos.symbol}-${now}`, createdAt: now, level: 'danger', read: false,
+      out.push({ id: `conc-${pos.symbol}-${now}${idSuffix}`, createdAt: now, level: 'danger', read: false, accountHash,
         rule: `${pos.symbol} >20% concentration`, detail: `${pos.symbol} is ${pct.toFixed(1)}% of portfolio — exceeds 20% cap. Trim required.` });
     }
   }
 
-  // CLM/CRF rights-offering filing watch (EDGAR N-2 / 497 / 424B*)
+  return out;
+}
+
+export default async function handler() {
+  // Capture snapshot + cash flows BEFORE running alerts so alerts use fresh data.
+  await captureDailySnapshot();
+
+  // Household snapshot stays as the baseline. Per-account snapshots are
+  // also captured by captureDailySnapshot above so we can run a scoped pass
+  // for each account too.
+  const [householdSnap, cornerstoneSnap] = await Promise.all([
+    getLatestPortfolioSnapshot().catch(() => null),
+    getCornerstoneSnapshot().catch(() => null),
+  ]);
+  if (!householdSnap) return new Response('No snapshot available', { status: 200 });
+
+  const now = Date.now();
+  const alerts: StoredAlert[] = [];
+
+  // Household-level rule checks (untagged → visible in every scope).
+  alerts.push(...generateAlertsForSnapshot(householdSnap, cornerstoneSnap, now));
+
+  // Per-account rule checks. Each account's snapshot (latest) gets its own
+  // alerts tagged with its hash so the dashboard's per-account view can
+  // show "Roth margin > 30%" distinctly from the household total.
+  try {
+    const tokens = await getTokens();
+    if (tokens) {
+      const accounts = await getAccountNumbers(tokens);
+      await Promise.all(accounts.map(async ({ hashValue }) => {
+        try {
+          const snap = await getLatestPortfolioSnapshot(hashValue);
+          if (!snap) return;
+          alerts.push(...generateAlertsForSnapshot(snap, cornerstoneSnap, now, hashValue));
+        } catch (err) {
+          console.warn(`[daily-alert] per-account alert pass failed for ${hashValue.slice(0, 6)}…:`, err);
+        }
+      }));
+    }
+  } catch (err) {
+    console.warn('[daily-alert] per-account alert pass failed:', err);
+  }
+
+  // CLM/CRF rights-offering filing watch (EDGAR N-2 / 497 / 424B*) — household-only.
   try {
     const roAlerts = await checkROFilings(now);
     alerts.push(...roAlerts);

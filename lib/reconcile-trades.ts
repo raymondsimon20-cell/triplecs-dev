@@ -395,6 +395,10 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
         message:     'Reconciled from Schwab',
         rationale,
         aiMode,
+        // Tag with the account this Schwab fill came from. The outer loop
+        // is per-account; without this the reconciled entries land
+        // untagged and skew per-account performance.
+        accountHash: hashValue,
       });
 
       if (inboxMatch) {
