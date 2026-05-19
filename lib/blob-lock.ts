@@ -1,24 +1,30 @@
 /**
  * Coarse advisory lock over Netlify Blobs.
  *
- * Netlify Blobs has no compare-and-swap, so airtight read-modify-write is
- * impossible. This helper implements a best-effort lock with these properties:
+ * ⚠️  CURRENTLY UNUSED — DO NOT RE-INTRODUCE WITHOUT A CAS-CAPABLE STORE.
  *
- *   - A caller writes `lock:{key}` with a random nonce and a timestamp.
- *   - It re-reads immediately to check the nonce still matches — if another
- *     writer raced, one loses and waits.
- *   - Locks have a TTL (5s) so a crashed holder doesn't deadlock the system.
- *   - Callers retry every 100ms up to a max wait (10s).
+ * Shipped in the 2026-05 production hardening pass, ripped out the same
+ * week after this self-deadlock pattern surfaced:
  *
- * This does NOT prevent every race — two writers landing inside the same
- * ms window can both think they acquired. But for the realistic concurrency
- * of this app (one daily cron + occasional user clicks, all single-user),
- * it eliminates 95%+ of the observable races. The remaining sliver is
- * acceptable for a single-user trading log; it would not be for a true
- * multi-tenant system, which would need a real CAS layer.
+ *   1. Caller writes `lock:{key}` with its nonce (setJSON).
+ *   2. Caller re-reads to verify (get).
+ *   3. Netlify Blobs is eventually consistent — the get can return the
+ *      PREVIOUS value, making the caller think it lost the race even
+ *      though its setJSON succeeded.
+ *   4. The caller falls into the poll loop. Its own freshly-written
+ *      record is now in the blob, looks "fresh" (within TTL), and blocks
+ *      every subsequent poll iteration until MAX_WAIT_MS expires.
+ *   5. appendInbox at the top of /api/signals POST times out, every run
+ *      reports `staged: 0`, real trades fail to land in the inbox.
  *
- * Use for: inbox writes, cash-flow appends, trade-history appends — any
- * read-modify-write on a blob that multiple callers might mutate.
+ * The compare-and-swap primitive this design needs simply isn't on the
+ * Netlify Blobs API. Until we have one (Redis, DynamoDB, etc.) the lib
+ * stays here as documentation of what was tried; callers do plain
+ * read-modify-write and accept the microsecond race window — acceptable
+ * for a single-user app with one cron/day plus rare manual clicks.
+ *
+ * The /api/admin/locks endpoint is also retained for emergency manual
+ * cleanup if a stuck lock record somehow appears.
  */
 
 import { getStore } from '@netlify/blobs';

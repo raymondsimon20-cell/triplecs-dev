@@ -307,28 +307,26 @@ function fingerprintEvent(e: CashFlowEvent): string {
 
 export async function appendCashFlows(events: CashFlowEvent[]): Promise<number> {
   if (events.length === 0) return 0;
-  // Read-modify-write under a blob lock so two callers (cron + manual sync,
-  // or two cron retries) don't race the cash-flows key and drop each other's
-  // events. The dedupe sets below assume a stable view of `existing`.
-  const { withBlobLock } = await import('./blob-lock');
-  return withBlobLock('cash-flows', async () => {
-    const existing = await getCashFlows();
-    const seenIds = new Set(existing.map((e) => e.id));
-    const seenActivity = new Set(
-      existing.map((e) => e.activityId).filter((x): x is string => Boolean(x)),
-    );
-    const seenFingerprints = new Set(existing.map(fingerprintEvent));
-    const fresh = events.filter((e) => {
-      if (seenIds.has(e.id)) return false;
-      if (e.activityId && seenActivity.has(e.activityId)) return false;
-      if (seenFingerprints.has(fingerprintEvent(e))) return false;
-      return true;
-    });
-    if (fresh.length === 0) return 0;
-    const merged = [...existing, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
-    await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
-    return fresh.length;
-  }, { holder: 'appendCashFlows' });
+  // Plain read-modify-write — see mutateInbox note for why we backed out the
+  // blob-lock pattern (self-deadlocks against Netlify Blobs eventual
+  // consistency). The triple dedup below (id + activityId + fingerprint) is
+  // what actually prevents double-counting under the realistic concurrency.
+  const existing = await getCashFlows();
+  const seenIds = new Set(existing.map((e) => e.id));
+  const seenActivity = new Set(
+    existing.map((e) => e.activityId).filter((x): x is string => Boolean(x)),
+  );
+  const seenFingerprints = new Set(existing.map(fingerprintEvent));
+  const fresh = events.filter((e) => {
+    if (seenIds.has(e.id)) return false;
+    if (e.activityId && seenActivity.has(e.activityId)) return false;
+    if (seenFingerprints.has(fingerprintEvent(e))) return false;
+    return true;
+  });
+  if (fresh.length === 0) return 0;
+  const merged = [...existing, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+  await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
+  return fresh.length;
 }
 
 // ─── Recommendation tracking ──────────────────────────────────────────────────

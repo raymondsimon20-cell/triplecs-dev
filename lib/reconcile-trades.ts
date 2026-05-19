@@ -322,14 +322,11 @@ async function saveTradeHistory(entries: TradeHistoryEntry[]): Promise<void> {
 }
 
 export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?: number }): Promise<ReconcileResult> {
-  const { withBlobLock } = await import('./blob-lock');
-  // Lock the whole reconcile pipeline against /api/orders POST and any other
-  // trade-history writer. Reconcile is a multi-step RMW (load → match →
-  // backfill → dedupe → save) that would otherwise race the orders endpoint
-  // and clobber freshly-placed entries.
-  return withBlobLock('trade-history', () => reconcileSchwabTradesInner(opts), {
-    holder: 'reconcileSchwabTrades',
-  });
+  // Plain pipeline — see lib/inbox.ts mutateInbox note for why the
+  // blob-lock pattern was backed out. Reconcile runs from the daily cron
+  // (one call/day) and the dedup pass in dedupeTradeHistory below handles
+  // the rare case where a manual /api/orders POST raced this pipeline.
+  return reconcileSchwabTradesInner(opts);
 }
 
 async function reconcileSchwabTradesInner(opts?: { lookbackDays?: number; now?: number }): Promise<ReconcileResult> {

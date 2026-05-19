@@ -70,18 +70,18 @@ export interface TradeHistoryEntry {
 }
 
 async function saveTradeHistory(entries: TradeHistoryEntry[]) {
+  // Plain read-modify-write — see lib/inbox.ts mutateInbox note for why
+  // the blob-lock pattern was backed out. Realistic concurrency here is
+  // user clicks one at a time, so the race window is microseconds.
   try {
-    const { withBlobLock } = await import('@/lib/blob-lock');
-    await withBlobLock('trade-history', async () => {
-      const store = getStore('trade-history');
-      const existing = await store.get('log', { type: 'json' }) as TradeHistoryEntry[] | null;
-      const log = Array.isArray(existing) ? existing : [];
-      // Prepend newest first; cap at 2000 entries. Bumped from 500 in 2026-05
-      // so multi-account users don't lose tail history disproportionately —
-      // per-account filtering happens at read time via `accountHash`.
-      const updated = [...entries, ...log].slice(0, 2000);
-      await store.setJSON('log', updated);
-    }, { holder: 'orders/saveTradeHistory' });
+    const store = getStore('trade-history');
+    const existing = await store.get('log', { type: 'json' }) as TradeHistoryEntry[] | null;
+    const log = Array.isArray(existing) ? existing : [];
+    // Prepend newest first; cap at 2000 entries. Bumped from 500 in 2026-05
+    // so multi-account users don't lose tail history disproportionately —
+    // per-account filtering happens at read time via `accountHash`.
+    const updated = [...entries, ...log].slice(0, 2000);
+    await store.setJSON('log', updated);
   } catch (err) {
     // Non-critical — don't fail the order if history write fails
     console.error('Trade history write error:', err);

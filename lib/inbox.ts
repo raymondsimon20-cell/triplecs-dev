@@ -106,30 +106,38 @@ async function writeAll(items: InboxItem[]): Promise<void> {
 }
 
 /**
- * Atomic-ish read → mutate → write. Wraps the cycle in a blob-lock so the
- * daily signal-engine cron, the daily rebalance cron, and concurrent user
- * PATCH/DELETE clicks don't race the same blob and drop each other's
- * writes. Returns whatever the mutator returns.
+ * Read → mutate → write. Returns whatever the mutator returns.
  *
  * The mutator receives the current items and returns:
  *   - `{ items, result }` to commit a new state (writeAll is called).
- *   - `{ result }` (no items field) to skip the write entirely — useful
- *     for read-only paths that opportunistically expire stale rows but
- *     would prefer not to take a write lock for no reason.
+ *   - `{ result }` (no items field) to skip the write entirely.
+ *
+ * Note: an earlier version of this function wrapped the RMW cycle in a
+ * blob-lock (`lib/blob-lock.ts`) to serialize cron-vs-user writes. That
+ * pattern self-deadlocked against Netlify Blobs' eventual consistency —
+ * the verify-read after setJSON could return a stale value, making the
+ * caller think it lost the race even after a successful write, and the
+ * caller's own freshly-written record then blocked all subsequent polls
+ * within the TTL window. For a single-user app with one cron/day plus
+ * occasional manual clicks, the realistic race window is tiny — going
+ * back to unlocked RMW is the right tradeoff. blob-lock.ts is kept in
+ * the tree as a reference; do not re-introduce until we have a store
+ * with real compare-and-swap.
+ *
+ * The `holder` parameter is retained as a label argument for symmetry
+ * with the previous API; it's used only for the log line below.
  */
 async function mutateInbox<T>(
   fn: (items: InboxItem[]) => { items?: InboxItem[]; result: T } | Promise<{ items?: InboxItem[]; result: T }>,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   holder?: string,
 ): Promise<T> {
-  const { withBlobLock } = await import('./blob-lock');
-  return withBlobLock('inbox', async () => {
-    const current = await readAll();
-    const outcome = await fn(current);
-    if (outcome.items !== undefined) {
-      await writeAll(outcome.items);
-    }
-    return outcome.result;
-  }, { holder });
+  const current = await readAll();
+  const outcome = await fn(current);
+  if (outcome.items !== undefined) {
+    await writeAll(outcome.items);
+  }
+  return outcome.result;
 }
 
 /** Lazily flip `pending` items past their TTL to `expired`. */
