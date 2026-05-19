@@ -135,7 +135,12 @@ export async function fetchCashFlows(start: string, end: string): Promise<CashFl
 
         const activityId = t.activityId !== undefined ? String(t.activityId) : undefined;
         const date = normalizeDate(t);
-        const id = activityId ?? `${date}-${classified.kind}-${classified.amount}-${classified.direction}`;
+        // Synthetic id includes accountHash — without it a $1000 deposit on
+        // the same day in two different accounts produced identical ids and
+        // one got de-duped. Stable across runs (same source fields → same
+        // id), so re-running the sync is still idempotent.
+        const id = activityId
+          ?? `${hashValue.slice(0, 8)}-${date}-${classified.kind}-${classified.amount}-${classified.direction}`;
         if (seen.has(id)) continue;
         seen.add(id);
 

@@ -28,7 +28,6 @@
 import { getStore } from '@netlify/blobs';
 
 import { getTokens }       from '../storage';
-import { getAccountNumbers } from '../schwab/client';
 import { placeOrders, type OrderRequest } from '../schwab/orders';
 import {
   markExecuted,
@@ -300,25 +299,20 @@ export async function autoExecute(
   portfolioValue: number,
   perAccountValues?: Map<string, number>,
 ): Promise<AutoExecuteResult> {
-  // Resolve the primary account once — items without a hash get bucketed here.
-  // If we can't reach Schwab we don't even know which account is primary, so
-  // we still run the manual / dry-run paths but skip live order placement.
+  // Tokens still resolved for downstream order placement; primary-account
+  // fallback removed — untagged items are now rejected up-front instead of
+  // being silently fired into the first account.
   const tokens = await getTokens();
-  let primaryAccountHash: string | undefined;
-  if (tokens) {
-    try {
-      const nums = await getAccountNumbers(tokens);
-      primaryAccountHash = nums[0]?.hashValue;
-    } catch (err) {
-      console.warn('[auto-execute] getAccountNumbers failed:', err);
-    }
-  }
 
-  // Group items by their target account. Untagged items go to `primary` if
-  // we know it; otherwise we tag them as `__untagged` and disclose at the end.
+  // Group items by their target account. Items without an explicit
+  // accountHash are NEVER auto-executed — previously they bucketed into the
+  // first account (`primaryAccountHash`) and an untagged SELL could fire a
+  // real Schwab order against an account that didn't hold the position. They
+  // route to `__untagged` so the per-account bucket logic still rejects them
+  // (no live tokens for that pseudo-hash, no order placement).
   const byAccount = new Map<string, InboxItem[]>();
   for (const it of stagedItems) {
-    const hash = it.accountHash || primaryAccountHash || '__untagged';
+    const hash = it.accountHash || '__untagged';
     if (!byAccount.has(hash)) byAccount.set(hash, []);
     byAccount.get(hash)!.push(it);
   }
@@ -400,9 +394,11 @@ async function executeAccountBucket(args: {
 }> {
   const { accountHash, items, tokens, portfolioValue, fetchCostBasisMap, costBasisFor } = args;
 
-  // __untagged is the synthetic bucket for items with no account hash AND no
-  // primary fallback (e.g. fresh install with no Schwab connection). Nothing
-  // we can act on — surface as rejected.
+  // __untagged is the synthetic bucket for any inbox item missing an
+  // accountHash. Previously these silently routed to the first account; now
+  // they're always rejected so a SELL against the wrong account is
+  // impossible. The cleanup endpoints (DELETE /api/inbox cleanup=untagged
+  // or tag-untagged) let the user resolve legacy entries.
   if (accountHash === '__untagged') {
     return {
       accountHash, mode: 'manual',
@@ -410,7 +406,7 @@ async function executeAccountBucket(args: {
       executed: 0,
       rejected: items.map((it) => ({
         symbol: it.symbol, instruction: it.instruction,
-        reason: 'No accountHash on item and no primary account available',
+        reason: 'No accountHash on item — refusing to route to a fallback account. Use /api/inbox cleanup to tag or dismiss.',
       })),
       breakerTripped: false, breakerReason: '',
     };

@@ -146,8 +146,16 @@ export async function PATCH(req: Request) {
     updated = await markExecuted(id, { orderId: body.orderId ?? null, message: body.message });
   } else if (status === 'dismissed') {
     updated = await dismissItem(id);
+  } else if (status === 'pending') {
+    // Retry path — move a `failed` item back to `pending` so the user (or
+    // the next auto-execute pass) can try it again. Useful when Schwab
+    // rejected a price-out-of-band order or rate-limited; previously these
+    // items were dead-ends with no recovery short of waiting for the next
+    // cron cycle to re-propose them.
+    const { rePendItem } = await import('@/lib/inbox');
+    updated = await rePendItem(id);
   } else {
-    return NextResponse.json({ error: 'Only `executed` and `dismissed` are settable via PATCH' }, { status: 400 });
+    return NextResponse.json({ error: 'Only `executed`, `dismissed`, and `pending` are settable via PATCH' }, { status: 400 });
   }
 
   if (!updated) return NextResponse.json({ error: 'Item not found' }, { status: 404 });

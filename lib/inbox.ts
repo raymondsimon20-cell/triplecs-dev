@@ -105,6 +105,33 @@ async function writeAll(items: InboxItem[]): Promise<void> {
   await getStore(STORE_NAME).setJSON(STORE_KEY, sorted);
 }
 
+/**
+ * Atomic-ish read → mutate → write. Wraps the cycle in a blob-lock so the
+ * daily signal-engine cron, the daily rebalance cron, and concurrent user
+ * PATCH/DELETE clicks don't race the same blob and drop each other's
+ * writes. Returns whatever the mutator returns.
+ *
+ * The mutator receives the current items and returns:
+ *   - `{ items, result }` to commit a new state (writeAll is called).
+ *   - `{ result }` (no items field) to skip the write entirely — useful
+ *     for read-only paths that opportunistically expire stale rows but
+ *     would prefer not to take a write lock for no reason.
+ */
+async function mutateInbox<T>(
+  fn: (items: InboxItem[]) => { items?: InboxItem[]; result: T } | Promise<{ items?: InboxItem[]; result: T }>,
+  holder?: string,
+): Promise<T> {
+  const { withBlobLock } = await import('./blob-lock');
+  return withBlobLock('inbox', async () => {
+    const current = await readAll();
+    const outcome = await fn(current);
+    if (outcome.items !== undefined) {
+      await writeAll(outcome.items);
+    }
+    return outcome.result;
+  }, { holder });
+}
+
 /** Lazily flip `pending` items past their TTL to `expired`. */
 function expireStale(items: InboxItem[], now = Date.now()): { items: InboxItem[]; changed: boolean } {
   let changed = false;
@@ -164,7 +191,7 @@ const CROSS_SOURCE_DEDUP_MS = 12 * 60 * 60 * 1000;
 export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
   if (inputs.length === 0) return [];
 
-  const existing = await readAll();
+  return mutateInbox<InboxItem[]>((existing) => {
   const { items: aged } = expireStale(existing);
 
   // Same-source dedup key — exact match including quantity.
@@ -237,11 +264,10 @@ export async function appendInbox(inputs: AppendInput[]): Promise<InboxItem[]> {
 
   if (fresh.length === 0) {
     // Even with no new items, persist any expirations that happened above.
-    await writeAll(aged);
-    return [];
+    return { items: aged, result: [] };
   }
-  await writeAll([...fresh, ...aged]);
-  return fresh;
+  return { items: [...fresh, ...aged], result: fresh };
+  }, 'appendInbox');
 }
 
 /**
@@ -259,9 +285,12 @@ export async function listInbox(filter?: {
    */
   accountHash?: string;
 }): Promise<InboxItem[]> {
-  const raw = await readAll();
-  const { items, changed } = expireStale(raw);
-  if (changed) await writeAll(items);
+  // Expire-on-read takes the write lock only if something actually aged
+  // out — keeps the read path cheap when nothing's stale.
+  const items = await mutateInbox<InboxItem[]>((raw) => {
+    const { items: next, changed } = expireStale(raw);
+    return changed ? { items: next, result: next } : { result: next };
+  }, 'listInbox:expireOnRead');
 
   let out = items;
   if (filter?.status) {
@@ -273,7 +302,13 @@ export async function listInbox(filter?: {
   }
   if (filter?.accountHash) {
     const wanted = filter.accountHash;
-    out = out.filter((it) => !it.accountHash || it.accountHash === wanted);
+    // Strict equality — untagged items used to fall through to "every
+    // account's view." Auto-execute then bucketed them into the *first*
+    // account and fired real Schwab orders against it, so an untagged SELL
+    // could land in the wrong account. Untagged items are now invisible to
+    // per-account queries; surface them via the dedicated cleanup endpoints
+    // (DELETE /api/inbox cleanup=untagged or tag-untagged).
+    out = out.filter((it) => it.accountHash === wanted);
   }
   return out;
 }
@@ -299,6 +334,27 @@ export async function dismissItem(id: string): Promise<InboxItem | null> {
 }
 
 /**
+ * Re-pend a previously-failed inbox item so the user (or the next auto-
+ * execute pass) can retry it. Only `failed` items qualify — re-pending an
+ * already-executed item would risk double-submission, and re-pending a
+ * dismissed one would override an explicit user decision. The previous
+ * `resolvedAt` is cleared so the dashboard doesn't render stale "failed at
+ * Xh ago" chrome on the retried row.
+ */
+export async function rePendItem(id: string): Promise<InboxItem | null> {
+  return updateItem(id, (it) => {
+    if (it.status !== 'failed') return it;
+    return {
+      ...it,
+      status:     'pending',
+      resolvedAt: undefined,
+      message:    undefined,
+      orderId:    null,
+    };
+  });
+}
+
+/**
  * Mark an inbox item as failed because the broker rejected the order.
  * Distinct from `dismissed` (user said no) and `expired` (TTL elapsed).
  * The next cron will skip `failed` items rather than retry blindly — the
@@ -315,19 +371,19 @@ export async function markFailed(id: string, reason: string, message?: string): 
 
 /** Bulk-dismiss all currently `pending` items. Returns the number dismissed. */
 export async function dismissAllPending(): Promise<number> {
-  const items = await readAll();
-  const { items: aged } = expireStale(items);
-  const now = Date.now();
-  let count = 0;
-  const next = aged.map((it) => {
-    if (it.status === 'pending') {
-      count++;
-      return { ...it, status: 'dismissed' as const, resolvedAt: now };
-    }
-    return it;
-  });
-  if (count > 0) await writeAll(next);
-  return count;
+  return mutateInbox<number>((items) => {
+    const { items: aged } = expireStale(items);
+    const now = Date.now();
+    let count = 0;
+    const next = aged.map((it) => {
+      if (it.status === 'pending') {
+        count++;
+        return { ...it, status: 'dismissed' as const, resolvedAt: now };
+      }
+      return it;
+    });
+    return count > 0 ? { items: next, result: count } : { result: 0 };
+  }, 'dismissAllPending');
 }
 
 /**
@@ -337,19 +393,19 @@ export async function dismissAllPending(): Promise<number> {
  * untagged items as belonging to the active account).
  */
 export async function dismissUntaggedPending(): Promise<number> {
-  const items = await readAll();
-  const { items: aged } = expireStale(items);
-  const now = Date.now();
-  let count = 0;
-  const next = aged.map((it) => {
-    if (it.status === 'pending' && !it.accountHash) {
-      count++;
-      return { ...it, status: 'dismissed' as const, resolvedAt: now };
-    }
-    return it;
-  });
-  if (count > 0) await writeAll(next);
-  return count;
+  return mutateInbox<number>((items) => {
+    const { items: aged } = expireStale(items);
+    const now = Date.now();
+    let count = 0;
+    const next = aged.map((it) => {
+      if (it.status === 'pending' && !it.accountHash) {
+        count++;
+        return { ...it, status: 'dismissed' as const, resolvedAt: now };
+      }
+      return it;
+    });
+    return count > 0 ? { items: next, result: count } : { result: 0 };
+  }, 'dismissUntaggedPending');
 }
 
 /**
@@ -361,30 +417,30 @@ export async function dismissUntaggedPending(): Promise<number> {
  */
 export async function tagUntaggedPending(accountHash: string): Promise<number> {
   if (!accountHash) return 0;
-  const items = await readAll();
-  const { items: aged } = expireStale(items);
-  let count = 0;
-  const next = aged.map((it) => {
-    if (it.status === 'pending' && !it.accountHash) {
-      count++;
-      return { ...it, accountHash };
-    }
-    return it;
-  });
-  if (count > 0) await writeAll(next);
-  return count;
+  return mutateInbox<number>((items) => {
+    const { items: aged } = expireStale(items);
+    let count = 0;
+    const next = aged.map((it) => {
+      if (it.status === 'pending' && !it.accountHash) {
+        count++;
+        return { ...it, accountHash };
+      }
+      return it;
+    });
+    return count > 0 ? { items: next, result: count } : { result: 0 };
+  }, 'tagUntaggedPending');
 }
 
-/** Generic in-place update by id. Internal helper. */
+/** Generic in-place update by id. Internal helper. Atomic via mutateInbox. */
 async function updateItem(id: string, patch: (it: InboxItem) => InboxItem): Promise<InboxItem | null> {
-  const items = await readAll();
-  const idx = items.findIndex((it) => it.id === id);
-  if (idx === -1) return null;
-  const updated = patch(items[idx]);
-  const next = [...items];
-  next[idx] = updated;
-  await writeAll(next);
-  return updated;
+  return mutateInbox<InboxItem | null>((items) => {
+    const idx = items.findIndex((it) => it.id === id);
+    if (idx === -1) return { result: null };
+    const updated = patch(items[idx]);
+    const next = [...items];
+    next[idx] = updated;
+    return { items: next, result: updated };
+  }, `updateItem:${id.slice(0, 12)}`);
 }
 
 /**
@@ -406,17 +462,17 @@ export async function getInboxItem(id: string): Promise<InboxItem | null> {
  * with stale entries.
  */
 export async function pruneResolvedItems(maxAgeDays = 60): Promise<number> {
-  const items = await readAll();
-  const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
-  const resolvedStatuses: ReadonlySet<InboxStatus> = new Set([
-    'executed', 'dismissed', 'expired', 'failed',
-  ]);
-  const next = items.filter((it) => {
-    if (!resolvedStatuses.has(it.status)) return true; // keep pending
-    const age = it.resolvedAt ?? it.createdAt;
-    return age >= cutoff; // keep recent resolved
-  });
-  const removed = items.length - next.length;
-  if (removed > 0) await writeAll(next);
-  return removed;
+  return mutateInbox<number>((items) => {
+    const cutoff = Date.now() - maxAgeDays * 24 * 60 * 60 * 1000;
+    const resolvedStatuses: ReadonlySet<InboxStatus> = new Set([
+      'executed', 'dismissed', 'expired', 'failed',
+    ]);
+    const next = items.filter((it) => {
+      if (!resolvedStatuses.has(it.status)) return true; // keep pending
+      const age = it.resolvedAt ?? it.createdAt;
+      return age >= cutoff; // keep recent resolved
+    });
+    const removed = items.length - next.length;
+    return removed > 0 ? { items: next, result: removed } : { result: 0 };
+  }, 'pruneResolvedItems');
 }

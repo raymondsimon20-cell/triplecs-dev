@@ -411,6 +411,35 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
           {data.killSwitchActive && (
             <span className="text-xs px-2 py-1 rounded border bg-red-500/15 border-red-500/30 text-red-300 flex items-center gap-1.5">
               <ShieldAlert className="w-3 h-3" /> Kill switch
+              {!readOnly && (
+                <button
+                  onClick={async () => {
+                    if (!confirm('Clear the margin kill switch? The engine will resume staging new purchases on the next run.')) return;
+                    try {
+                      const r = await fetch('/api/signals/state', {
+                        method:  'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body:    JSON.stringify({
+                          action: 'clear-kill-switch',
+                          scope:  accountHash ? { accountHash } : undefined,
+                        }),
+                      });
+                      if (!r.ok) {
+                        const d = await r.json().catch(() => ({}));
+                        setError(`Clear failed: ${d.error ?? r.statusText}`);
+                        return;
+                      }
+                      await load();
+                    } catch (err) {
+                      setError(err instanceof Error ? err.message : String(err));
+                    }
+                  }}
+                  className="ml-1 text-[10px] underline hover:no-underline"
+                  title="Clear the kill switch via /api/signals/state"
+                >
+                  reset
+                </button>
+              )}
             </span>
           )}
           <span className="text-[10px] text-[#4a5070]">

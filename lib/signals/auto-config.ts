@@ -100,6 +100,8 @@ function isoDate(d: Date): string {
 
 function rollBreakerIfStale(config: AutoConfig): AutoConfig {
   const today = isoDate(new Date());
+  // Strict-less-than was correct here originally — we only clear breakers
+  // whose pause date is in the past. Today's breaker stays armed.
   if (config.circuitBreaker.pausedUntilDate && config.circuitBreaker.pausedUntilDate < today) {
     return {
       ...config,
@@ -173,10 +175,17 @@ export async function hasAutoConfigOverride(accountHash: string): Promise<boolea
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 /** True when auto-execute is currently allowed: mode is 'dry-run' or 'auto'
- *  AND the circuit breaker is NOT paused for today. */
+ *  AND the circuit breaker is NOT paused for today or any future date.
+ *  Previously this used `===` against today's date — a future pausedUntilDate
+ *  (manual schema migration, server-clock skew, or a multi-day sticky pause
+ *  written ahead) silently compared unequal and let auto-execute fire anyway.
+ *  Now any non-null past-or-future pause counts, and rollBreakerIfStale
+ *  clears stale ones on read. */
 export function autoExecuteActive(config: AutoConfig): boolean {
   if (config.mode === 'manual') return false;
-  if (config.circuitBreaker.pausedUntilDate === isoDate(new Date())) return false;
+  const today  = isoDate(new Date());
+  const paused = config.circuitBreaker.pausedUntilDate;
+  if (paused && paused >= today) return false;
   return true;
 }
 

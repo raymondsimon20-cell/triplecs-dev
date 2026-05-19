@@ -17,9 +17,25 @@
 
 import type { Config } from '@netlify/functions';
 import { runSignalsAndStage } from '../../lib/signals/run';
+import { recordHeartbeat } from '../../lib/signals/cron-health';
 
 export default async (): Promise<Response> => {
   const startedAt = Date.now();
+
+  // Early "cron entered" heartbeat. runSignalsAndStage records its own
+  // success/error beat inside its try/catch, but if an exception escapes
+  // that wrapper (top-level import error after deploy, OOM, fatal type
+  // error) the only proof that the cron even fired is this beat. Marked
+  // status:'error' so the dashboard surfaces it loudly until the real
+  // success beat overwrites it.
+  await recordHeartbeat({
+    ranAt:       startedAt,
+    durationMs:  0,
+    status:      'error',
+    signalCount: 0,
+    actionable:  0,
+    error:       'cron entered but did not complete',
+  }).catch(() => undefined);
 
   try {
     const { result, proposed, staged } = await runSignalsAndStage();

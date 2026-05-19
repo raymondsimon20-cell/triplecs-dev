@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens } from '@/lib/schwab/auth';
-import { saveTokens } from '@/lib/storage';
-import { createSession } from '@/lib/session';
+import { saveTokens, getTokens } from '@/lib/storage';
+import { createSession, getSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +30,25 @@ export async function GET(req: NextRequest) {
   const storedState = req.cookies.get('oauth_state')?.value;
   if (storedState !== state) {
     return NextResponse.redirect(appUrl('/?error=state_mismatch'));
+  }
+
+  // Identity gate. This app is single-user — there's exactly one Schwab
+  // token blob (`schwab-tokens/current-user`). Before this gate, anyone
+  // who completed the OAuth dance (knowing the deployed redirect URL +
+  // forging or stealing the `oauth_state` cookie) could overwrite the
+  // stored tokens with their own and silently take over the session.
+  // Rule: if tokens already exist, the caller MUST already hold a valid
+  // current session cookie. A fresh install with no tokens stored is the
+  // ONLY case where an unauthenticated OAuth completion succeeds.
+  // Additionally honor an optional env allowlist (ALLOWED_OAUTH_EMAILS,
+  // comma-separated) when set, so admin-controlled deployments can name
+  // exactly which Schwab account is permitted to link.
+  const existingTokens = await getTokens().catch(() => null);
+  const existingSession = await getSession();
+
+  if (existingTokens && !existingSession?.authenticated) {
+    console.warn('[oauth] callback rejected — tokens exist but caller has no valid session');
+    return NextResponse.redirect(appUrl('/?error=oauth_not_permitted'));
   }
 
   try {

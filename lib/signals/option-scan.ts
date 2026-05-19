@@ -152,9 +152,19 @@ export function scanShortPutsForClose(
       ? (profitDollars / premiumReceived) * 100
       : 0;
 
+    // Defensive sanity check: refuse to propose a close when the close
+    // limit would exceed the premium-per-contract we received. Schwab's
+    // `averagePrice` for rolled short positions is the *blended* basis;
+    // if it's been distorted (e.g., negative-credit roll, basis reset
+    // during an assignment cycle, or Schwab API returning a different
+    // unit than expected) the profit math can claim a "75% winner" while
+    // the close limit is actually above the credit. That would BTC at a
+    // loss — exactly what the Vol-6 rule is supposed to prevent.
+    const closeLimitPrice = +(currentCost / contracts / 100).toFixed(2);
+    const sanityOk = closeLimitPrice <= p.averagePrice + 0.01;  // 1¢ float tolerance
+
     // Close at gain target (Vol-6 75% rule).
-    if (profitPct >= CONFIG.CLOSE_PROFIT_PCT_THRESHOLD) {
-      const closeLimitPrice = +(currentCost / contracts / 100).toFixed(2);
+    if (profitPct >= CONFIG.CLOSE_PROFIT_PCT_THRESHOLD && sanityOk) {
       out.push({
         kind:           'close',
         occSymbol:      p.symbol,

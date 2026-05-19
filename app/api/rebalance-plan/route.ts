@@ -423,15 +423,31 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
           messages:   [{ role: 'user', content: withContext(feedbackBlock, paceBlock, prompt) }],
         });
 
+        // Abort upstream stream + skip downstream staging on client
+        // disconnect. Same pattern as ai-analysis and option-plan.
+        const onAbort = () => {
+          try { stream.controller.abort(); } catch { /* best-effort */ }
+        };
+        req.signal.addEventListener('abort', onAbort, { once: true });
+
         let fullText = '';
-        for await (const event of stream) {
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            fullText += event.delta.text;
-            controller.enqueue(encoder.encode(event.delta.text));
+        try {
+          for await (const event of stream) {
+            if (req.signal.aborted) break;
+            if (
+              event.type === 'content_block_delta' &&
+              event.delta.type === 'text_delta'
+            ) {
+              fullText += event.delta.text;
+              controller.enqueue(encoder.encode(event.delta.text));
+            }
           }
+        } finally {
+          req.signal.removeEventListener('abort', onAbort);
+        }
+        if (req.signal.aborted) {
+          controller.close();
+          return;
         }
 
         // Parse Claude's JSON response
@@ -624,8 +640,10 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
         controller.close();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        controller.enqueue(encoder.encode(`\n__RESULT__${JSON.stringify({ error: msg })}`));
-        controller.enqueue(encoder.encode('\n__DONE__'));
+        if (!req.signal.aborted) {
+          controller.enqueue(encoder.encode(`\n__RESULT__${JSON.stringify({ error: msg })}`));
+          controller.enqueue(encoder.encode('\n__DONE__'));
+        }
         controller.close();
       }
     },

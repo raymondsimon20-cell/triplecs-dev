@@ -22,7 +22,7 @@ import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
 import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
 import { getAutomationGate } from '@/lib/guardrails';
 import { getLatestPortfolioSnapshot } from '@/lib/storage';
-import { createClient } from '@/lib/schwab/client';
+import { loadRecentSells } from '@/lib/signals/run';
 
 export const dynamic = 'force-dynamic';
 
@@ -99,28 +99,15 @@ export async function POST(req: Request) {
   }
 
   // ── Build snapshot ────────────────────────────────────────────────────────
+  // Recent sells: reuse the canonical loader from lib/signals/run.ts. The
+  // previous inline implementation was wrong in two ways: (a) it read
+  // `transferItems[0]` which is often the *cash* leg, not the asset leg —
+  // wrong symbol in the wash-sale list; (b) it never set `isLoss`, so the
+  // model had no signal for which sells trigger the IRS wash-sale rule
+  // (the rule only blocks loss sales).
   const [previousSnapshot, recentSells] = await Promise.all([
     getLatestPortfolioSnapshot().catch(() => null),
-    // Fetch recent sell transactions for wash-sale guard (best-effort, non-blocking)
-    (async () => {
-      const accountHash = (body.portfolio as Record<string, unknown>)?.accountHash as string | undefined;
-      if (!accountHash) return [];
-      try {
-        const client = await createClient();
-        const endDate   = new Date();
-        const startDate = new Date(endDate.getTime() - 30 * 24 * 60 * 60 * 1000);
-        const txns = await client.getTransactions(accountHash, startDate.toISOString(), endDate.toISOString(), 'TRADE');
-        return txns
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .filter((t: any) => (t?.transferItems?.[0]?.amount ?? t?.netAmount ?? 0) < 0)
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          .map((t: any) => ({
-            symbol:   t?.transferItems?.[0]?.instrument?.symbol ?? t?.description ?? '',
-            soldDate: t?.tradeDate ?? t?.transactionDate ?? '',
-          }))
-          .filter((s: { symbol: string }) => s.symbol);
-      } catch { return []; }
-    })(),
+    loadRecentSells(30).catch(() => []),
   ]);
 
   const enrichedSnapshot = {
@@ -199,13 +186,31 @@ export async function POST(req: Request) {
           messages: [{ role: 'user', content: withContext(feedbackBlock, paceBlock, gatePreamble + userMessage) }],
         });
 
-        for await (const event of stream) {
-          if (
-            event.type === 'content_block_delta' &&
-            event.delta.type === 'text_delta'
-          ) {
-            controller.enqueue(encoder.encode(event.delta.text));
+        // Abort the upstream Anthropic stream if the client disconnects
+        // (tab closed mid-generation). Pre-fix the stream kept consuming
+        // tokens until the model finished, leaking API spend.
+        const onAbort = () => {
+          try { stream.controller.abort(); } catch { /* best-effort */ }
+        };
+        req.signal.addEventListener('abort', onAbort, { once: true });
+
+        try {
+          for await (const event of stream) {
+            if (req.signal.aborted) break;
+            if (
+              event.type === 'content_block_delta' &&
+              event.delta.type === 'text_delta'
+            ) {
+              controller.enqueue(encoder.encode(event.delta.text));
+            }
           }
+        } finally {
+          req.signal.removeEventListener('abort', onAbort);
+        }
+
+        if (req.signal.aborted) {
+          controller.close();
+          return;
         }
 
         // Signal end of JSON with a sentinel the client can detect
@@ -213,8 +218,10 @@ export async function POST(req: Request) {
         controller.close();
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        controller.enqueue(encoder.encode(JSON.stringify({ error: msg })));
-        controller.enqueue(encoder.encode('\n__DONE__'));
+        if (!req.signal.aborted) {
+          controller.enqueue(encoder.encode(JSON.stringify({ error: msg })));
+          controller.enqueue(encoder.encode('\n__DONE__'));
+        }
         controller.close();
       }
     },

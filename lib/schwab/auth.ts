@@ -8,11 +8,14 @@ import { SchwabTokens } from './types';
 const SCHWAB_AUTH_BASE = 'https://api.schwabapi.com/v1/oauth';
 
 export function getSchwabAuthUrl(state: string): string {
+  // No explicit `scope` — Schwab's Retail Trader API is single-scope
+  // (full account access). The previous `scope=readonly` was misleading:
+  // Schwab ignores it today, but if they ever enforced scopes this app
+  // would lose order-placement capability without warning.
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: process.env.SCHWAB_CLIENT_ID!,
     redirect_uri: process.env.SCHWAB_REDIRECT_URI!,
-    scope: 'readonly',
     state,
   });
   return `${SCHWAB_AUTH_BASE}/authorize?${params.toString()}`;

@@ -64,14 +64,20 @@ export async function archiveDailyPlan(plan: DailyPlan, accountHash?: string): P
   } satisfies ArchiveIndex);
 
   // Best-effort cleanup of dropped dates — delete BOTH the household entry
-  // and any per-account entries for that date.
+  // and any per-account entries for those dates. Previously this only
+  // deleted the household entry and relied on "eventual Blobs reaper" for
+  // per-account suffixes — which doesn't exist, so per-account archives
+  // leaked. Now we list once and delete every key under each dropped date.
   if (droppedDates.length > 0) {
-    await Promise.all(droppedDates.flatMap((d) => [
-      store.delete(`${ENTRY_PREFIX}${d}`).catch(() => undefined),
-      // We can't enumerate per-account suffixes here without a list; rely
-      // on the eventual Blobs reaper. For typical retention (90d) the
-      // per-account entries past the window are tiny.
-    ]));
+    try {
+      const allKeys = await Promise.all(
+        droppedDates.map((d) => store.list({ prefix: `${ENTRY_PREFIX}${d}` })),
+      );
+      const toDelete = allKeys.flatMap((r) => r.blobs.map((b) => b.key));
+      await Promise.all(toDelete.map((k) => store.delete(k).catch(() => undefined)));
+    } catch (err) {
+      console.warn('[plan-archive] retention sweep failed:', err);
+    }
   }
 }
 

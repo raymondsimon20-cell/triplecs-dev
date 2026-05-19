@@ -41,6 +41,8 @@ export async function POST(req: Request) {
         'Margin balance is not reconstructed — utilization shows as 0%',
         'Option positions are excluded from backfill',
         'Trades older than Schwab\'s ~12-month window are not visible',
+        // Surfaced 2026-05 — previously this was only a comment in backfill.ts:144.
+        'Trade-history entries without an accountHash (pre-2026-05) are attributed to the first linked account. If you transacted from a different account before then, per-account performance for that window is approximate. Backfill again after manually re-tagging via /api/inbox cleanup=tag-untagged if needed.',
       ],
     });
   } catch (err) {

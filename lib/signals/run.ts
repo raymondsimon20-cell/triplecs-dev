@@ -306,6 +306,21 @@ async function fetchAggregatedPortfolio(): Promise<{
       const price = q.quote?.lastPrice ?? q.quote?.mark;
       if (price && Number.isFinite(price)) prices[sym] = price;
     }
+    // Surface any tickers Schwab failed to quote so the cron's "ok — n
+    // signals" log makes it obvious which symbols were skipped. Previously
+    // missing quotes were swallowed with console.warn and silently dropped
+    // from the staging pipeline. Held positions missing a quote is the most
+    // concerning case — log loudly so the user can investigate next morning.
+    const { missingQuoteSymbols } = await import('../schwab/client');
+    const missing = missingQuoteSymbols(quotes);
+    const heldMissing = missing.filter((s) => positions.some((p) => p.symbol === s));
+    if (heldMissing.length > 0) {
+      console.error(`[signals/run] Held positions missing quotes — will be skipped from staging: ${heldMissing.join(', ')}`);
+    }
+    if (missing.length > heldMissing.length) {
+      const probe = missing.filter((s) => !heldMissing.includes(s));
+      console.warn(`[signals/run] Non-held tickers missing quotes (engine baselines): ${probe.join(', ')}`);
+    }
   }
 
   return { positions, cash, marginDebt, prices, afwDollars, optionPositions, accountBuckets };
@@ -324,7 +339,7 @@ async function fetchAggregatedPortfolio(): Promise<{
  *
  * The IRS wash-sale window is 30 calendar days, not trading days.
  */
-async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
+export async function loadRecentSells(windowDays = 30): Promise<RecentSell[]> {
   try {
     const log = (await getStore('trade-history').get('log', { type: 'json' })) as
       | TradeHistoryEntry[]

@@ -101,11 +101,21 @@ function isBuySide(instruction: string): boolean {
 
 /**
  * Find a still-actionable inbox item that plausibly produced this fill.
- * Match key: symbol + direction (buy/sell) + quantity, with the fill timestamp
- * landing in [createdAt, createdAt + 7d]. We don't match against `dismissed`
- * items (user said no — coincidental fill is just an unknown-mode trade).
+ * Match key: symbol + direction (buy/sell) + quantity + accountHash, with the
+ * fill timestamp landing in [createdAt, createdAt + 7d]. We don't match
+ * against `dismissed` items (user said no — coincidental fill is just an
+ * unknown-mode trade).
+ *
+ * `fillAccountHash` MUST be passed — without it a fill from Account B could
+ * be credited to a pending item in Account A (same ticker, same quantity,
+ * same direction). Untagged inbox items are NOT matched: legacy items
+ * without an accountHash can't be safely attributed to any specific fill.
  */
-function matchInbox(parsed: ParsedFill, inbox: InboxItem[]): InboxItem | null {
+function matchInbox(
+  parsed: ParsedFill,
+  inbox: InboxItem[],
+  fillAccountHash: string,
+): InboxItem | null {
   const fillMs = new Date(parsed.timestamp).getTime();
   if (!Number.isFinite(fillMs)) return null;
   const parsedIsBuy = isBuySide(parsed.instruction);
@@ -118,6 +128,7 @@ function matchInbox(parsed: ParsedFill, inbox: InboxItem[]): InboxItem | null {
     .filter((it) => it.symbol === parsed.symbol)
     .filter((it) => it.quantity === parsed.quantity)
     .filter((it) => isBuySide(it.instruction) === parsedIsBuy)
+    .filter((it) => it.accountHash === fillAccountHash)
     .filter((it) => fillMs >= it.createdAt && fillMs <= it.createdAt + INBOX_MATCH_WINDOW_MS);
 
   if (parsed.isOption) {
@@ -300,7 +311,10 @@ async function loadTradeHistory(): Promise<TradeHistoryEntry[]> {
 }
 
 async function saveTradeHistory(entries: TradeHistoryEntry[]): Promise<void> {
-  // Keep newest-first by timestamp, cap at HISTORY_CAP.
+  // Keep newest-first by timestamp, cap at HISTORY_CAP. Caller is expected
+  // to already hold the trade-history blob lock (see runReconcile), since
+  // reconcile is a multi-step RMW pipeline and locking the whole pipeline
+  // is what actually prevents races with /api/orders POST.
   const sorted = [...entries].sort((a, b) =>
     new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime(),
   );
@@ -308,6 +322,17 @@ async function saveTradeHistory(entries: TradeHistoryEntry[]): Promise<void> {
 }
 
 export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?: number }): Promise<ReconcileResult> {
+  const { withBlobLock } = await import('./blob-lock');
+  // Lock the whole reconcile pipeline against /api/orders POST and any other
+  // trade-history writer. Reconcile is a multi-step RMW (load → match →
+  // backfill → dedupe → save) that would otherwise race the orders endpoint
+  // and clobber freshly-placed entries.
+  return withBlobLock('trade-history', () => reconcileSchwabTradesInner(opts), {
+    holder: 'reconcileSchwabTrades',
+  });
+}
+
+async function reconcileSchwabTradesInner(opts?: { lookbackDays?: number; now?: number }): Promise<ReconcileResult> {
   const lookbackDays = opts?.lookbackDays ?? DEFAULT_LOOKBACK_DAYS;
   const now          = opts?.now          ?? Date.now();
   const start = new Date(now - lookbackDays * 86_400_000).toISOString();
@@ -377,8 +402,10 @@ export async function reconcileSchwabTrades(opts?: { lookbackDays?: number; now?
       }
 
       // No existing match — record the Schwab fill as a new entry, attributing
-      // it to a still-pending inbox item if one matches.
-      const inboxMatch = matchInbox(parsed, inbox);
+      // it to a still-pending inbox item if one matches *within this account*.
+      // Pre-fix matchInbox ignored accountHash, so a fill from Account B could
+      // be credited to a pending item in Account A on the same ticker/quantity.
+      const inboxMatch = matchInbox(parsed, inbox, hashValue);
       const aiMode    = inboxMatch?.aiMode ?? 'unknown';
       const rationale = inboxMatch?.rationale;
 

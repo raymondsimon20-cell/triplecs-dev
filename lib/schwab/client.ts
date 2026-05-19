@@ -172,17 +172,42 @@ export async function getQuotes(
   } catch (err) {
     console.warn('[getQuotes] Batch request failed, falling back to individual symbol fetches:', err);
     const result: SchwabQuotesResponse = {};
+    const failed: string[] = [];
 
     for (const sym of validSymbols) {
       try {
         const single = await schwabFetch<SchwabQuotesResponse>(buildQuoteUrl([sym]), tokens);
         Object.assign(result, single);
-      } catch {
-        console.warn(`[getQuotes] Skipping unresolvable symbol: ${sym}`);
+      } catch (innerErr) {
+        // Previously this swallowed errors with `console.warn`-only — the
+        // signal engine then gated trades on `prices[t] && t > 0` and
+        // silently skipped staging real BUY/SELLs for any unresolved ticker.
+        // Now we collect the failures and surface them on the result via a
+        // non-enumerable `__missing` marker so callers that care (the engine
+        // pipeline) can decide whether to abort or continue with a warning.
+        // The console.error stays so production logs catch it too.
+        console.error(`[getQuotes] Failed to resolve symbol: ${sym}`, innerErr);
+        failed.push(sym);
       }
+    }
+    if (failed.length > 0) {
+      Object.defineProperty(result, '__missing', {
+        value: failed,
+        enumerable: false,
+      });
     }
     return result;
   }
+}
+
+/**
+ * Helper to detect when a getQuotes result has missing symbols. Callers that
+ * gate trades on price (signal engine, rebalance-plan) should refuse to fire
+ * orders for any symbol that landed here rather than silently skipping them.
+ */
+export function missingQuoteSymbols(quotes: SchwabQuotesResponse): string[] {
+  const m = (quotes as unknown as { __missing?: string[] }).__missing;
+  return Array.isArray(m) ? m : [];
 }
 
 // ─── Options chain endpoint ───────────────────────────────────────────────────
@@ -219,12 +244,21 @@ export async function getOptionsChain(
 
 // ─── Transactions endpoint ────────────────────────────────────────────────────
 
+/**
+ * Schwab transaction types — pass exactly what you want. The original default
+ * was `'DIVIDEND_OR_INTEREST'` which was a footgun: every caller that forgot
+ * to pass `types` silently got dividend events only and missed trade fills.
+ * No default now — callers must declare intent. Most common values:
+ *   - `'TRADE'`                — equity/option fills (reconcile, history)
+ *   - `'DIVIDEND_OR_INTEREST'` — distributions + margin interest (cashflow)
+ *   - `'TRADE,DIVIDEND_OR_INTEREST'` — both
+ */
 export async function getTransactions(
   tokens: SchwabTokens,
   accountHash: string,
   startDate: string, // ISO 8601 datetime e.g. 2025-04-15T00:00:00.000Z (bare YYYY-MM-DD is rejected by Schwab)
   endDate: string,
-  types = 'DIVIDEND_OR_INTEREST',
+  types: string,
 ): Promise<import('./types').SchwabTransaction[]> {
   const params = new URLSearchParams({ types, startDate, endDate });
   const url = `${TRADER_BASE}/accounts/${accountHash}/transactions?${params}`;
@@ -283,7 +317,7 @@ export async function createClient() {
     getAllAccounts: () => getAllAccounts(tokens),
     getAccount: (hash: string) => getAccount(tokens, hash),
     getQuotes: (symbols: string[]) => getQuotes(tokens, symbols),
-    getTransactions: (hash: string, start: string, end: string, types?: string) =>
+    getTransactions: (hash: string, start: string, end: string, types: string) =>
       getTransactions(tokens, hash, start, end, types),
     getUserPreference: () => getUserPreference(tokens),
     getAccessToken: () => tokens.access_token,

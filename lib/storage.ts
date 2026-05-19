@@ -119,6 +119,10 @@ export interface PortfolioSnapshot {
   synthetic?: boolean;
 }
 
+/** Same retention used by per-account snapshots — household keeps the
+ *  rolling 365-day window so blob storage doesn't grow forever. */
+const HOUSEHOLD_SNAPSHOT_RETENTION_DAYS = 365;
+
 export async function savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promise<void> {
   const store = getStore('portfolio-snapshots');
   // Save both 'latest' (for AI context) and a date-keyed entry (for chart history)
@@ -134,6 +138,22 @@ export async function savePortfolioSnapshot(snapshot: PortfolioSnapshot): Promis
     store.setJSON('latest', snapshot),
     store.setJSON(dayKey, snapshot),
   ]);
+
+  // Best-effort retention sweep — mirrors savePerAccountSnapshot. Without
+  // this the household day-keys grew forever (per-account had a sweep but
+  // the household path was missed). Failures don't poison the write.
+  try {
+    const { blobs } = await store.list({ prefix: 'day-' });
+    if (blobs.length > HOUSEHOLD_SNAPSHOT_RETENTION_DAYS) {
+      const dropped = blobs
+        .map((b) => b.key)
+        .sort()                                 // YYYY-MM-DD lexicographic
+        .slice(0, blobs.length - HOUSEHOLD_SNAPSHOT_RETENTION_DAYS);
+      await Promise.all(dropped.map((k) => store.delete(k).catch(() => undefined)));
+    }
+  } catch (err) {
+    console.warn('[storage] household snapshot retention sweep failed:', err);
+  }
 }
 
 /**
@@ -266,25 +286,49 @@ export async function getCashFlows(accountHash?: string): Promise<CashFlowEvent[
 }
 
 /**
- * Append new cash-flow events. De-dupes on `id` (and `activityId` if present)
- * so re-running the daily sync is idempotent.
+ * Append new cash-flow events. De-dupes three ways so the daily sync is
+ * idempotent even when Schwab's response shape shifts subtly across runs:
+ *   - exact `id` match (synthetic or Schwab-provided)
+ *   - `activityId` match (catches re-fetches where the synthetic id changed
+ *      but Schwab is now returning an activityId for the same event)
+ *   - fingerprint match: `(accountHash | "" )-date-kind-amount-direction`
+ *      (catches the same deposit returned with a tweaked description or
+ *      slightly different synthetic key shape — TWR/CAGR doubled otherwise)
  */
+function fingerprintEvent(e: CashFlowEvent): string {
+  return [
+    e.accountHash ?? '',
+    e.date,
+    e.kind,
+    e.amount,
+    e.direction,
+  ].join('|');
+}
+
 export async function appendCashFlows(events: CashFlowEvent[]): Promise<number> {
   if (events.length === 0) return 0;
-  const existing = await getCashFlows();
-  const seenIds = new Set(existing.map((e) => e.id));
-  const seenActivity = new Set(
-    existing.map((e) => e.activityId).filter((x): x is string => Boolean(x)),
-  );
-  const fresh = events.filter((e) => {
-    if (seenIds.has(e.id)) return false;
-    if (e.activityId && seenActivity.has(e.activityId)) return false;
-    return true;
-  });
-  if (fresh.length === 0) return 0;
-  const merged = [...existing, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
-  await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
-  return fresh.length;
+  // Read-modify-write under a blob lock so two callers (cron + manual sync,
+  // or two cron retries) don't race the cash-flows key and drop each other's
+  // events. The dedupe sets below assume a stable view of `existing`.
+  const { withBlobLock } = await import('./blob-lock');
+  return withBlobLock('cash-flows', async () => {
+    const existing = await getCashFlows();
+    const seenIds = new Set(existing.map((e) => e.id));
+    const seenActivity = new Set(
+      existing.map((e) => e.activityId).filter((x): x is string => Boolean(x)),
+    );
+    const seenFingerprints = new Set(existing.map(fingerprintEvent));
+    const fresh = events.filter((e) => {
+      if (seenIds.has(e.id)) return false;
+      if (e.activityId && seenActivity.has(e.activityId)) return false;
+      if (seenFingerprints.has(fingerprintEvent(e))) return false;
+      return true;
+    });
+    if (fresh.length === 0) return 0;
+    const merged = [...existing, ...fresh].sort((a, b) => a.date.localeCompare(b.date));
+    await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
+    return fresh.length;
+  }, { holder: 'appendCashFlows' });
 }
 
 // ─── Recommendation tracking ──────────────────────────────────────────────────

@@ -41,12 +41,49 @@ const CONSERVATIVE_AUTO: Partial<AutoConfig> = {
   },
 };
 
-export async function POST() {
+export async function POST(req: Request) {
   try { await requireAuth(); } catch {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
+  // Require an explicit `?confirm=1` (or {"confirm":true} body) before
+  // flipping a manual-mode user into live auto-execute. Previously this
+  // endpoint moved straight from manual → auto on a single click and a
+  // first-time enable ran at defaults (-2% daily loss breaker, $1k per
+  // trade) without surfacing what was about to start happening. The
+  // confirmation gate forces the caller to acknowledge the caps.
+  const url = new URL(req.url);
+  const confirmFromQuery = url.searchParams.get('confirm') === '1';
+  let confirmFromBody = false;
+  try {
+    const body = await req.clone().json();
+    confirmFromBody = body?.confirm === true;
+  } catch { /* empty body is fine */ }
+  const confirmed = confirmFromQuery || confirmFromBody;
+
   const current = await loadAutoConfig();
+
+  if (!confirmed && current.mode !== 'auto') {
+    return NextResponse.json({
+      ok:         false,
+      requiresConfirmation: true,
+      previewConfig: {
+        ...current,
+        ...CONSERVATIVE_AUTO,
+        dailyCaps:      { ...current.dailyCaps,      ...(CONSERVATIVE_AUTO.dailyCaps ?? {}) },
+        circuitBreaker: { ...current.circuitBreaker, ...(CONSERVATIVE_AUTO.circuitBreaker ?? {}) },
+      },
+      message: 'This will enable LIVE auto-execute against your Schwab account. Real orders will fire on the next cron pass for any tier-1 item that clears the caps below. Re-send with ?confirm=1 (or body {"confirm":true}) to proceed.',
+      caps: {
+        maxTradesPerDay:        CONSERVATIVE_AUTO.dailyCaps!.maxTrades,
+        maxDollarsPerTrade:     `$${CONSERVATIVE_AUTO.dailyCaps!.maxDollarsPerTrade}`,
+        maxNetExposureShiftPct: `${CONSERVATIVE_AUTO.dailyCaps!.maxNetExposureShiftPct}%`,
+        intradayLossBreakerPct: `${CONSERVATIVE_AUTO.circuitBreaker!.dailyLossPct}%`,
+      },
+      revert: 'PATCH /api/signals/auto-config with {"mode":"manual"} to undo.',
+    }, { status: 409 });   // 409 Conflict — caller must re-submit with confirmation
+  }
+
   const next: AutoConfig = {
     ...current,
     ...CONSERVATIVE_AUTO,
@@ -69,7 +106,8 @@ export async function POST() {
   });
 }
 
-// Browser-friendly: GET works too.
-export async function GET() {
-  return POST();
+// Browser-friendly: GET works too. Same confirm semantics — explicit
+// `?confirm=1` query param required for the first transition.
+export async function GET(req: Request) {
+  return POST(req);
 }
