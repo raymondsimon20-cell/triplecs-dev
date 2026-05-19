@@ -1183,6 +1183,7 @@ export default function DashboardPage() {
               <div className="pt-4">
                 <DailyPlanPanel
                   accountHash={isAll ? undefined : account.accountHash}
+                  accounts={accounts}
                   onChanged={() => fetchAccounts(true)}
                   readOnly={isAll}
                 />

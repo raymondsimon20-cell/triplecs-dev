@@ -21,6 +21,7 @@ import {
   TrendingDown,
   CircuitBoard,
 } from 'lucide-react';
+import { useAccountNicknames } from '@/components/AccountSwitcher';
 
 type Tier      = 'auto' | 'approval' | 'alert';
 type Direction = 'BUY' | 'SELL' | 'REBALANCE' | 'ALERT' | 'INFO';
@@ -87,23 +88,31 @@ function directionIcon(d: Direction) {
 
 function ActionRow({
   action,
+  accountChip,
   onApprove,
   onDismiss,
   busy,
   readOnly = false,
 }: {
   action:    PlannedAction;
+  /** Per-row account label + whether the action's accountHash was missing
+   *  (fallback to the panel-selected account). Computed by the parent so we
+   *  share the same resolver TradeInbox uses. */
+  accountChip: { text: string; isFallback: boolean };
   onApprove: (id: string) => void;
   onDismiss: (id: string) => void;
   busy:      string | null;
   readOnly?: boolean;
 }) {
   const isBusy = busy === action.signalId;
+  // Now that bulk + per-row approve auto-stages on demand (see ensureStaged in
+  // the parent), missing inboxItemId no longer disqualifies a row — only
+  // status (already resolved) and guardrails do.
+  const isUnstaged = !action.inboxItemId;
   const canAct =
     !readOnly &&
     action.requiresApproval &&
-    action.inboxItemId &&
-    action.status === 'pending' &&
+    (action.status === 'pending' || action.status === undefined) &&
     !action.blockedByGuardrails &&
     (action.direction === 'BUY' || action.direction === 'SELL');
 
@@ -117,6 +126,25 @@ function ActionRow({
           {action.sizeDollars > 0 && (
             <span className="text-xs font-mono text-[#e8eaf0]">{fmt$(action.sizeDollars)}</span>
           )}
+          {/* Account chip — which Schwab account this trade is suggested for.
+              Tagged actions show the nickname / ···last4; untagged ones show
+              `→ selected` so the routing intent is never invisible. */}
+          {accountChip.text && (
+            <span
+              className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${
+                accountChip.isFallback
+                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                  : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+              }`}
+              title={
+                accountChip.isFallback
+                  ? 'No account tagged on this signal — order will route to the currently selected account on approve.'
+                  : 'Account this trade is suggested for'
+              }
+            >
+              {accountChip.text}
+            </span>
+          )}
           <span className={`text-[10px] px-1.5 py-0.5 rounded border ${priorityColor(action.priority)}`}>
             {action.priority}
           </span>
@@ -126,6 +154,17 @@ function ActionRow({
           {action.blockedByGuardrails && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/30">
               guardrail
+            </span>
+          )}
+          {/* "Not staged" pill — the recommendation is in the plan but has no
+              backing inbox row yet. Approve will auto-stage + execute; this
+              just makes the state explicit so the user knows what's happening. */}
+          {isUnstaged && !action.blockedByGuardrails && (
+            <span
+              className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#7c82a0] border border-[#3d4468]"
+              title="No inbox row yet. Clicking Approve will stage one and submit it."
+            >
+              not staged
             </span>
           )}
           {action.status && action.status !== 'pending' && (
@@ -140,7 +179,7 @@ function ActionRow({
               onClick={() => onApprove(action.signalId)}
               disabled={isBusy}
               className="text-xs px-2 py-1 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50 flex items-center gap-1"
-              title="Mark inbox item executed"
+              title={isUnstaged ? 'Stage in the inbox + submit to Schwab' : 'Submit this order to Schwab'}
             >
               {isBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
               Approve
@@ -161,6 +200,11 @@ function ActionRow({
   );
 }
 
+interface AccountSummary {
+  accountHash:   string;
+  accountNumber: string;
+}
+
 interface Props {
   /**
    * Selected account hash from the dashboard. Used as a fallback when a
@@ -169,6 +213,13 @@ interface Props {
    * has to send an accountHash to /api/orders.
    */
   accountHash?: string;
+  /**
+   * Linked accounts — passed by the dashboard so each row can resolve its
+   * targeted accountHash to a nickname / ···last4 label. When omitted, row
+   * chips fall back to `···{hash prefix}` for tagged items and `→ selected`
+   * for untagged ones (mirrors TradeInbox).
+   */
+  accounts?: AccountSummary[];
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
   /**
@@ -180,12 +231,45 @@ interface Props {
   readOnly?: boolean;
 }
 
-export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Props = {}) {
+export function DailyPlanPanel({ accountHash, accounts = [], onChanged, readOnly = false }: Props = {}) {
   const [data,    setData]    = useState<DailyPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
   const [busy,    setBusy]    = useState<string | null>(null);
   const [cachedAt, setCachedAt] = useState<number | null>(null);
+  const nicknames = useAccountNicknames();
+
+  /**
+   * Resolve an accountHash to a display label. Mirrors TradeInbox so plan
+   * rows and inbox rows speak the same vocabulary.
+   *   - Match in `accounts` → nickname (if set) or `···last4`
+   *   - Hash present, no match → `···{hash prefix}` (account was disconnected)
+   *   - No hash → empty string (callers handle "unknown")
+   */
+  const labelForHash = useCallback((hash: string | undefined): string => {
+    if (!hash) return '';
+    const match = accounts.find((a) => a.accountHash === hash);
+    if (match) {
+      const nick = nicknames[match.accountHash];
+      return nick && nick.trim() ? nick.trim() : `···${match.accountNumber.slice(-4)}`;
+    }
+    return `···${hash.slice(0, 6)}`;
+  }, [accounts, nicknames]);
+
+  /**
+   * Resolve a planned action's account chip — same routing rules as
+   * TradeInbox.labelForItem so the user sees consistent labels across panels.
+   */
+  const labelForAction = useCallback((a: PlannedAction): { text: string; isFallback: boolean } => {
+    if (a.accountHash) {
+      return { text: labelForHash(a.accountHash) || '···unknown', isFallback: false };
+    }
+    const selected = labelForHash(accountHash);
+    return {
+      text: selected ? `→ ${selected}` : '→ selected',
+      isFallback: true,
+    };
+  }, [labelForHash, accountHash]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -214,27 +298,40 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
   useEffect(() => { load(); }, [load]);
 
   async function patchInbox(action: PlannedAction, status: 'executed' | 'dismissed') {
-    if (!action.inboxItemId) return;
     setBusy(action.signalId);
     try {
       if (status === 'executed') {
+        // executeAction now auto-stages on demand, so we don't require an
+        // existing inboxItemId here.
         const ok = await executeAction(action);
         if (!ok) {
-          // executeAction already logs to console; surface a top-level error
-          // so the user sees that nothing was placed.
-          setError(`Order placement failed for ${action.ticker} — see browser console.`);
+          // executeAction sets a precise error itself; only fall back to a
+          // generic message when it didn't.
+          setError((prev) => prev ?? `Order placement failed for ${action.ticker} — see browser console.`);
         } else {
           onChanged?.();
         }
       } else {
-        const r = await fetch('/api/inbox', {
-          method:  'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body:    JSON.stringify({ id: action.inboxItemId, status }),
-        });
-        if (!r.ok) {
-          const d = await r.json().catch(() => ({}));
-          alert(`Inbox update failed: ${d.error ?? r.statusText}`);
+        // Dismiss path. If the row isn't staged yet, stage it first so the
+        // dismissal sticks across runs (dedup will keep it out of next morning's
+        // inbox). Cheap one-row stage; no broker call.
+        let inboxItemId = action.inboxItemId;
+        if (!inboxItemId) {
+          const staged = await ensureStaged([action]);
+          inboxItemId = staged[0]?.inboxItemId;
+        }
+        if (!inboxItemId) {
+          setError(`Couldn't stage ${action.ticker} for dismissal — see browser console.`);
+        } else {
+          const r = await fetch('/api/inbox', {
+            method:  'PATCH',
+            headers: { 'Content-Type': 'application/json' },
+            body:    JSON.stringify({ id: inboxItemId, status }),
+          });
+          if (!r.ok) {
+            const d = await r.json().catch(() => ({}));
+            alert(`Inbox update failed: ${d.error ?? r.statusText}`);
+          }
         }
       }
       await load();
@@ -244,19 +341,176 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
   }
 
   /**
+   * Stage planned actions that don't yet have a backing inbox row. For each
+   * unstaged action we:
+   *
+   *   1. Fetch a live quote via /api/quotes to learn the current price.
+   *   2. Compute shares = floor(sizeDollars / price) — same arithmetic the
+   *      engine's `signalsToInbox` uses, so the resulting inbox row is
+   *      indistinguishable from one staged by the scheduled engine run.
+   *   3. POST every staging input in one batch to /api/inbox.
+   *   4. GET /api/inbox?status=pending to find the assigned inboxItemIds
+   *      (covers dedup edge cases where appendInbox returns nothing because
+   *      the item already exists from a prior source).
+   *
+   * Returns the input action list with `inboxItemId` / `quantity` /
+   * `orderType` / `price` filled in for everything we could stage. Actions
+   * we couldn't stage (no price, no accountHash, sub-tradeable size) are
+   * returned unchanged so the caller can filter them.
+   */
+  async function ensureStaged(actions: PlannedAction[]): Promise<PlannedAction[]> {
+    const needsStaging = actions.filter((a) => !a.inboxItemId);
+    if (needsStaging.length === 0) return actions;
+
+    // Drop anything we structurally can't stage (no target account,
+    // non-BUY/SELL, zero size).
+    const stagable = needsStaging.filter((a) => {
+      const targetHash = a.accountHash || accountHash;
+      return (
+        targetHash &&
+        (a.direction === 'BUY' || a.direction === 'SELL') &&
+        a.sizeDollars > 0
+      );
+    });
+    if (stagable.length === 0) return actions;
+
+    // 1. Quotes — batch one POST for every unique symbol.
+    const symbols = Array.from(new Set(stagable.map((a) => a.ticker)));
+    let prices: Record<string, number> = {};
+    try {
+      const r = await fetch('/api/quotes', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ symbols }),
+      });
+      const d = await r.json();
+      prices = (d.prices ?? {}) as Record<string, number>;
+    } catch (err) {
+      console.warn('[DailyPlanPanel] quote fetch failed during staging:', err);
+      return actions;
+    }
+
+    // 2. Build inputs. Mirror lib/signals/run.ts signalsToInbox shape so the
+    // resulting inbox row is identical to a scheduled-engine stage.
+    const items = stagable
+      .map((a) => {
+        const price = prices[a.ticker];
+        if (!price || price <= 0) return null;
+        const quantity = Math.floor(a.sizeDollars / price);
+        if (quantity <= 0) return null;
+        const targetHash = a.accountHash || accountHash!;
+        return {
+          source:      'signal-engine' as const,
+          symbol:      a.ticker,
+          instruction: a.direction as 'BUY' | 'SELL',
+          quantity,
+          orderType:   'MARKET' as const,
+          price,
+          rationale:   `[${a.rule}] ${a.reason}`,
+          aiMode:      'signal_engine',
+          violations:  [],
+          tier:        a.tier,
+          accountHash: targetHash,
+        };
+      })
+      .filter((x): x is NonNullable<typeof x> => x !== null);
+
+    if (items.length === 0) return actions;
+
+    // 3. POST /api/inbox with the whole batch.
+    try {
+      const r = await fetch('/api/inbox', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({ items }),
+      });
+      if (!r.ok) {
+        const d = await r.json().catch(() => ({}));
+        console.warn('[DailyPlanPanel] stage POST failed:', d.error ?? r.statusText);
+        return actions;
+      }
+    } catch (err) {
+      console.warn('[DailyPlanPanel] stage POST crashed:', err);
+      return actions;
+    }
+
+    // 4. GET the pending inbox to learn the assigned ids. Filter to
+    // signal-engine entries that match (symbol, instruction, accountHash).
+    let pending: Array<{
+      id: string; source: string; symbol: string; instruction: string;
+      quantity: number; price?: number; accountHash?: string; createdAt?: number;
+    }> = [];
+    try {
+      const r = await fetch('/api/inbox?status=pending');
+      const d = await r.json();
+      pending = Array.isArray(d.items) ? d.items : [];
+    } catch (err) {
+      console.warn('[DailyPlanPanel] post-stage inbox read failed:', err);
+      return actions;
+    }
+
+    // Most-recent match wins — when two pending rows exist for the same
+    // (symbol, instruction, account) we want the one we just staged.
+    function findMatch(a: PlannedAction) {
+      const targetHash = a.accountHash || accountHash;
+      return pending
+        .filter(
+          (it) =>
+            it.source === 'signal-engine' &&
+            it.symbol === a.ticker &&
+            it.instruction === a.direction &&
+            (!targetHash || !it.accountHash || it.accountHash === targetHash),
+        )
+        .sort((x, y) => (y.createdAt ?? 0) - (x.createdAt ?? 0))[0];
+    }
+
+    return actions.map((a) => {
+      if (a.inboxItemId) return a;
+      const match = findMatch(a);
+      if (!match) return a;
+      return {
+        ...a,
+        inboxItemId: match.id,
+        quantity:    match.quantity,
+        orderType:   'MARKET' as const,
+        price:       match.price,
+        accountHash: match.accountHash ?? a.accountHash,
+      };
+    });
+  }
+
+  /**
    * Submit one planned action to Schwab via /api/orders, then PATCH the
    * matching inbox item to executed with the resulting orderId. Mirrors the
    * single-row execute flow in TradeInbox so bulk approve behaves identically.
+   *
+   * If the action has no backing inbox row yet, it's auto-staged first via
+   * `ensureStaged` — that's what makes Approve a one-click action even for
+   * recommendations the scheduled engine run didn't stage (e.g. fresh signals
+   * emitted after the morning stage pass).
    *
    * Returns true on success, false on any failure (so bulk can keep going
    * across the rest of the tier instead of aborting on the first reject).
    */
   async function executeAction(action: PlannedAction): Promise<boolean> {
-    if (!action.inboxItemId || !action.quantity || action.quantity <= 0) return false;
     const targetHash = action.accountHash || accountHash;
     if (!targetHash) {
       setError('No account selected — pick a single account before approving.');
       return false;
+    }
+
+    // Auto-stage if needed so we have inboxItemId + quantity for the order.
+    let staged = action;
+    if (!staged.inboxItemId || !staged.quantity || staged.quantity <= 0) {
+      const [resolved] = await ensureStaged([action]);
+      staged = resolved ?? action;
+      if (!staged.inboxItemId || !staged.quantity || staged.quantity <= 0) {
+        setError(
+          `Couldn't stage ${action.ticker} — no live quote, sub-tradeable size, ` +
+          'or dedup rejected the row. Try refreshing the plan.',
+        );
+        return false;
+      }
     }
     try {
       const r = await fetch('/api/orders', {
@@ -265,19 +519,19 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
         body:    JSON.stringify({
           accountHash: targetHash,
           orders: [{
-            symbol:      action.ticker,
-            instruction: action.direction,
-            quantity:    action.quantity,
-            orderType:   action.orderType ?? 'MARKET',
-            price:       action.orderType === 'LIMIT' ? action.price : undefined,
-            rationale:   `[${action.rule}] ${action.reason}`,
+            symbol:      staged.ticker,
+            instruction: staged.direction,
+            quantity:    staged.quantity,
+            orderType:   staged.orderType ?? 'MARKET',
+            price:       staged.orderType === 'LIMIT' ? staged.price : undefined,
+            rationale:   `[${staged.rule}] ${staged.reason}`,
             aiMode:      'signal_engine',
           }],
         }),
       });
       const result = await r.json();
       if (!r.ok || result.error) {
-        console.warn('[DailyPlanPanel] order failed for', action.ticker, result.error ?? r.statusText);
+        console.warn('[DailyPlanPanel] order failed for', staged.ticker, result.error ?? r.statusText);
         return false;
       }
       const first = result.results?.[0];
@@ -285,7 +539,7 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
         method:  'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body:    JSON.stringify({
-          id:      action.inboxItemId,
+          id:      staged.inboxItemId,
           status:  'executed',
           orderId: first?.orderId ?? null,
           message: first?.message,
@@ -293,48 +547,83 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
       });
       return true;
     } catch (err) {
-      console.warn('[DailyPlanPanel] execute crashed for', action.ticker, err);
+      console.warn('[DailyPlanPanel] execute crashed for', staged.ticker, err);
       return false;
     }
   }
 
   /**
-   * Bulk-approve / bulk-dismiss every actionable item in a tier. Approve fires
-   * the order through /api/orders and PATCHes the inbox to executed with the
-   * resulting orderId; dismiss just PATCHes to dismissed. Both filter to
-   * BUY/SELL items that are still pending, have a backing inbox item, and
-   * aren't guardrail-blocked. Sequential to keep Schwab rate limits from
-   * tripping and to keep error reporting per-item accurate.
+   * Bulk-approve / bulk-dismiss every actionable item in a tier.
+   *
+   * Approve flow:
+   *   1. Filter to BUY/SELL rows that are still pending and not guardrail-blocked.
+   *      Unstaged rows (no inboxItemId) are NOT filtered out — they get staged
+   *      on the fly via ensureStaged before the order fires.
+   *   2. Stage anything that needs staging (single batched /api/quotes +
+   *      /api/inbox roundtrip; see ensureStaged).
+   *   3. Sequentially submit each order via /api/orders and PATCH the inbox
+   *      row to executed. Sequential keeps Schwab rate limits happy and lets
+   *      us report per-item failures cleanly.
+   *
+   * Dismiss flow:
+   *   1. Same filter.
+   *   2. Stage any unstaged rows so the dedup window keeps them out of
+   *      tomorrow morning's plan after they're dismissed today.
+   *   3. PATCH every staged row to dismissed.
    */
   async function bulkAct(tierActions: PlannedAction[], status: 'executed' | 'dismissed') {
     const verb = status === 'executed' ? 'approve' : 'dismiss';
     const acting = tierActions.filter(
       (a) =>
-        a.inboxItemId &&
-        a.status === 'pending' &&
+        (a.status === 'pending' || a.status === undefined) &&
         !a.blockedByGuardrails &&
         (a.direction === 'BUY' || a.direction === 'SELL'),
     );
     if (acting.length === 0) {
+      // Diagnose why so the user knows whether to re-run the engine, switch
+      // accounts, or stop fighting an already-handled item.
+      const reasons: string[] = [];
+      const targets = tierActions.filter(
+        (a) => a.direction === 'BUY' || a.direction === 'SELL',
+      );
+      const notPending = targets.filter((a) => a.status && a.status !== 'pending').length;
+      const blocked    = targets.filter((a) => a.blockedByGuardrails).length;
+      if (notPending > 0) reasons.push(`${notPending} already ${verb === 'approve' ? 'executed/dismissed' : 'resolved'}`);
+      if (blocked    > 0) reasons.push(`${blocked} blocked by guardrails`);
+      const detail = reasons.length > 0 ? ` — ${reasons.join('; ')}` : '';
       setError(
         verb === 'approve'
-          ? 'No actionable items in this tier — items without a backing inbox entry can\'t be approved.'
-          : 'Nothing to dismiss in this tier.',
+          ? `No actionable items in this tier${detail}.`
+          : `Nothing to dismiss in this tier${detail}.`,
       );
       return;
     }
+    // Mention staging in the confirm so the user understands what's about to
+    // happen for the unstaged subset. Grouping by target account stays the
+    // same as before so the dialog tells you where orders will route.
+    const unstagedCount = acting.filter((a) => !a.inboxItemId).length;
+    const stagingNote = unstagedCount > 0 && verb === 'approve'
+      ? `\n\n${unstagedCount} of these aren't staged yet — they'll be staged in the inbox automatically before submission.`
+      : '';
     const verbWord = verb === 'approve' ? 'Submit' : 'Dismiss';
     const tail = verb === 'approve' ? ' to Schwab? This is irreversible once placed.' : '?';
-    if (!confirm(`${verbWord} ${acting.length} order${acting.length === 1 ? '' : 's'}${tail}`)) {
+    if (!confirm(`${verbWord} ${acting.length} order${acting.length === 1 ? '' : 's'}${tail}${stagingNote}`)) {
       return;
     }
     setBusy('__bulk__');
     setError(null);
     try {
+      // Stage anything missing an inbox row in one batched roundtrip (quotes
+      // + POST /api/inbox + GET /api/inbox to learn ids). After this call,
+      // `staged` carries inboxItemId + quantity for everything we could stage.
+      const stagedActions = await ensureStaged(acting);
+      const dropped       = stagedActions.filter((a) => !a.inboxItemId);
+      const runnable      = stagedActions.filter((a) =>  a.inboxItemId);
+
       if (status === 'executed') {
         const placed: string[] = [];
-        const failed: string[] = [];
-        for (const action of acting) {
+        const failed: string[] = dropped.map((a) => `${a.ticker} (couldn't stage)`);
+        for (const action of runnable) {
           const ok = await executeAction(action);
           if (ok) placed.push(action.ticker);
           else    failed.push(action.ticker);
@@ -353,16 +642,27 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
         }
         onChanged?.();
       } else {
-        for (const action of acting) {
+        const dismissed: string[] = [];
+        const failedToDismiss: string[] = dropped.map((a) => `${a.ticker} (couldn't stage)`);
+        for (const action of runnable) {
           try {
-            await fetch('/api/inbox', {
+            const r = await fetch('/api/inbox', {
               method:  'PATCH',
               headers: { 'Content-Type': 'application/json' },
               body:    JSON.stringify({ id: action.inboxItemId, status }),
             });
+            if (r.ok) dismissed.push(action.ticker);
+            else      failedToDismiss.push(action.ticker);
           } catch (err) {
             console.warn('[DailyPlanPanel] bulk dismiss failed for', action.ticker, err);
+            failedToDismiss.push(action.ticker);
           }
+        }
+        if (failedToDismiss.length > 0) {
+          setError(
+            `Couldn't dismiss: ${failedToDismiss.join(', ')}` +
+            (dismissed.length > 0 ? ` (dismissed ${dismissed.length}).` : '.'),
+          );
         }
       }
       await load();
@@ -379,7 +679,11 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
     );
   }
 
-  if (error || !data) {
+  // Only fall back to the error-only view when we have no plan to show.
+  // If `data` exists, mid-action errors (e.g. from bulkAct) are surfaced as a
+  // dismissible banner above the panel content so the user doesn't lose sight
+  // of the recommendations they were about to act on.
+  if (!data) {
     return (
       <div className="text-xs text-[#7c82a0] flex items-start gap-2 p-3">
         <Clock className="w-4 h-4 mt-0.5 flex-shrink-0" />
@@ -396,6 +700,24 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
 
   return (
     <div className="space-y-4">
+      {/* Transient error banner — set by bulkAct / executeAction / patchInbox.
+          Shown above the panel content so users don't lose sight of the rows
+          they were trying to act on. Dismissible. */}
+      {error && (
+        <div className="flex items-start justify-between gap-3 text-xs p-2.5 rounded border bg-amber-500/10 border-amber-500/30 text-amber-200">
+          <div className="flex items-start gap-2">
+            <ShieldAlert className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+            <span>{error}</span>
+          </div>
+          <button
+            onClick={() => setError(null)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/40 text-amber-200 hover:bg-amber-500/15 transition-colors shrink-0"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {/* Header — mode + summary counts */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-2 flex-wrap">
@@ -481,6 +803,7 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
             <ActionRow
               key={a.signalId}
               action={a}
+              accountChip={labelForAction(a)}
               onApprove={() => patchInbox(a, 'executed')}
               onDismiss={() => patchInbox(a, 'dismissed')}
               busy={busy}
@@ -504,6 +827,7 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
             <ActionRow
               key={a.signalId}
               action={a}
+              accountChip={labelForAction(a)}
               onApprove={() => patchInbox(a, 'executed')}
               onDismiss={() => patchInbox(a, 'dismissed')}
               busy={busy}
@@ -527,6 +851,7 @@ export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Pro
             <ActionRow
               key={a.signalId}
               action={a}
+              accountChip={labelForAction(a)}
               onApprove={() => patchInbox(a, 'executed')}
               onDismiss={() => patchInbox(a, 'dismissed')}
               busy={busy}
