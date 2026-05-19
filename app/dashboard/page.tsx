@@ -1168,24 +1168,26 @@ export default function DashboardPage() {
             {/* Daily autopilot plan — tier-classified preview of what the
                 engine would do today. Lives above the Today queue so the user
                 sees the structured plan (auto / approval / alert tiers) first,
-                then the unified inbox underneath for execution. */}
-            {!isAll && (
-              <CollapsiblePanel
-                id="today-daily-plan"
-                title="Daily autopilot plan"
-                icon={<ClipboardList className="w-4 h-4 text-emerald-400" />}
-                accentClass="border-emerald-500/40"
-                iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
-                defaultOpen={true}
-              >
-                <div className="pt-4">
-                  <DailyPlanPanel
-                    accountHash={account.accountHash}
-                    onChanged={() => fetchAccounts(true)}
-                  />
-                </div>
-              </CollapsiblePanel>
-            )}
+                then the unified inbox underneath for execution. In aggregate
+                (household) mode the plan renders read-only — tier counts
+                still visible, but Approve / Dismiss are hidden so the user
+                picks a single account before firing. */}
+            <CollapsiblePanel
+              id="today-daily-plan"
+              title="Daily autopilot plan"
+              icon={<ClipboardList className="w-4 h-4 text-emerald-400" />}
+              accentClass="border-emerald-500/40"
+              iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+              defaultOpen={true}
+            >
+              <div className="pt-4">
+                <DailyPlanPanel
+                  accountHash={isAll ? undefined : account.accountHash}
+                  onChanged={() => fetchAccounts(true)}
+                  readOnly={isAll}
+                />
+              </div>
+            </CollapsiblePanel>
 
             {/* Unified action queue. In aggregate mode the inbox renders
                 household-read-only — every account's items shown with their

@@ -90,14 +90,17 @@ function ActionRow({
   onApprove,
   onDismiss,
   busy,
+  readOnly = false,
 }: {
   action:    PlannedAction;
   onApprove: (id: string) => void;
   onDismiss: (id: string) => void;
   busy:      string | null;
+  readOnly?: boolean;
 }) {
   const isBusy = busy === action.signalId;
   const canAct =
+    !readOnly &&
     action.requiresApproval &&
     action.inboxItemId &&
     action.status === 'pending' &&
@@ -168,9 +171,16 @@ interface Props {
   accountHash?: string;
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
+  /**
+   * Render the plan as a household summary — tier counts and rows are still
+   * shown but Approve / Dismiss buttons (per-row and bulk) are hidden so the
+   * user has to pick a single account before firing orders. Mirrors the
+   * TradeInbox `householdReadOnly` mode.
+   */
+  readOnly?: boolean;
 }
 
-export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
+export function DailyPlanPanel({ accountHash, onChanged, readOnly = false }: Props = {}) {
   const [data,    setData]    = useState<DailyPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -322,14 +332,24 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
     setError(null);
     try {
       if (status === 'executed') {
-        let placed = 0;
-        let failed = 0;
+        const placed: string[] = [];
+        const failed: string[] = [];
         for (const action of acting) {
           const ok = await executeAction(action);
-          if (ok) placed++; else failed++;
+          if (ok) placed.push(action.ticker);
+          else    failed.push(action.ticker);
         }
-        if (failed > 0) {
-          setError(`${placed} placed, ${failed} failed — see browser console for details.`);
+        if (failed.length > 0) {
+          // Include each failed ticker so the user knows what to retry — the
+          // previous "X placed, Y failed" message forced a console dive.
+          const failList = failed.join(', ');
+          const placedNote = placed.length > 0
+            ? ` (${placed.length} placed: ${placed.join(', ')})`
+            : '';
+          setError(
+            `Order placement failed for: ${failList}${placedNote}. ` +
+            'Check the browser console for the underlying Schwab error, then retry from the row buttons or the Trade Inbox.',
+          );
         }
         onChanged?.();
       } else {
@@ -408,6 +428,12 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
         </button>
       </div>
 
+      {readOnly && data.counts.total > 0 && (
+        <div className="text-[11px] text-[#7c82a0] border border-dashed border-[#2d3248] rounded px-3 py-2">
+          Read-only household summary — pick a single account to approve or dismiss items.
+        </div>
+      )}
+
       {/* Tier 1 — auto-eligible */}
       {data.actions.auto.length > 0 && (
         <Section
@@ -418,8 +444,8 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
               : 'These would fire automatically if auto-execute mode were on. Currently requires approval.'
           }
           color="emerald"
-          onBulkApprove={() => bulkAct(data.actions.auto, 'executed')}
-          onBulkDismiss={() => bulkAct(data.actions.auto, 'dismissed')}
+          onBulkApprove={readOnly ? undefined : () => bulkAct(data.actions.auto, 'executed')}
+          onBulkDismiss={readOnly ? undefined : () => bulkAct(data.actions.auto, 'dismissed')}
           bulkBusy={busy === '__bulk__'}
         >
           {data.actions.auto.map((a) => (
@@ -429,6 +455,7 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
               onApprove={() => patchInbox(a, 'executed')}
               onDismiss={() => patchInbox(a, 'dismissed')}
               busy={busy}
+              readOnly={readOnly}
             />
           ))}
         </Section>
@@ -440,8 +467,8 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
           title="Tier 2 — Requires approval"
           subtitle="New positions, large trades, or anything outside the auto whitelist. Review and approve each before it executes."
           color="amber"
-          onBulkApprove={() => bulkAct(data.actions.approval, 'executed')}
-          onBulkDismiss={() => bulkAct(data.actions.approval, 'dismissed')}
+          onBulkApprove={readOnly ? undefined : () => bulkAct(data.actions.approval, 'executed')}
+          onBulkDismiss={readOnly ? undefined : () => bulkAct(data.actions.approval, 'dismissed')}
           bulkBusy={busy === '__bulk__'}
         >
           {data.actions.approval.map((a) => (
@@ -451,6 +478,7 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
               onApprove={() => patchInbox(a, 'executed')}
               onDismiss={() => patchInbox(a, 'dismissed')}
               busy={busy}
+              readOnly={readOnly}
             />
           ))}
         </Section>
@@ -463,7 +491,7 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
           subtitle="Informational signals that need your judgment, not a trade."
           color="cyan"
           onBulkApprove={undefined}
-          onBulkDismiss={() => bulkAct(data.actions.alert, 'dismissed')}
+          onBulkDismiss={readOnly ? undefined : () => bulkAct(data.actions.alert, 'dismissed')}
           bulkBusy={busy === '__bulk__'}
         >
           {data.actions.alert.map((a) => (
@@ -473,6 +501,7 @@ export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
               onApprove={() => patchInbox(a, 'executed')}
               onDismiss={() => patchInbox(a, 'dismissed')}
               busy={busy}
+              readOnly={readOnly}
             />
           ))}
         </Section>

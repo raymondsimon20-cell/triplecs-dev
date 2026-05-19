@@ -173,7 +173,13 @@ function evalDefenseMode(valuation, makeSignal) {
         // collide with rebalance-plan (which doesn't react to equity ratio).
         const qdteW = (weightPcts['QDTE'] ?? 0) / 100;
         if (qdteW > 0.20) {
-            signals.push(makeSignal('DEFENSE_MODE', 'TRIM_QDTE', 'QDTE', 'SELL', (qdteW - 0.15) * totalValue, 'CRITICAL', `Defense mode: QDTE at ${(qdteW * 100).toFixed(1)}% > 20% — trim to 15%`, { currentWeight: qdteW }));
+            // Same $100 floor as the other size-based rules — keeps tiny accounts
+            // from emitting sub-tradeable defense trims that signalsToInbox would
+            // reject anyway.
+            const trimDollars = (qdteW - 0.15) * totalValue;
+            if (trimDollars >= 100) {
+                signals.push(makeSignal('DEFENSE_MODE', 'TRIM_QDTE', 'QDTE', 'SELL', trimDollars, 'CRITICAL', `Defense mode: QDTE at ${(qdteW * 100).toFixed(1)}% > 20% — trim to 15%`, { currentWeight: qdteW }));
+            }
         }
     }
     return signals;
@@ -270,8 +276,16 @@ function evalClmCrf(valuation, makeSignal) {
     // Confirmed 2026-05-12: trim IS allowed (overrides prior never-sell rule).
     if (combined > exports.CONFIG.CLM_CRF_MAX) {
         const trimVal = (combined - exports.CONFIG.CLM_CRF_TARGET) * valuation.totalValue;
-        signals.push(makeSignal('CLM_CRF_TRIM', 'TRIM_CLM', 'CLM', 'SELL', trimVal / 2, 'MEDIUM', `CLM+CRF at ${(combined * 100).toFixed(1)}% > ${exports.CONFIG.CLM_CRF_MAX * 100}% hard cap — trim CLM half`, { combinedWeight: combined }));
-        signals.push(makeSignal('CLM_CRF_TRIM', 'TRIM_CRF', 'CRF', 'SELL', trimVal / 2, 'MEDIUM', `CLM+CRF at ${(combined * 100).toFixed(1)}% > ${exports.CONFIG.CLM_CRF_MAX * 100}% hard cap — trim CRF half`, { combinedWeight: combined }));
+        const halfTrim = trimVal / 2;
+        // Skip sub-tradeable trims — small accounts barely above the cap, or
+        // near-boundary diffs, would otherwise emit $0–$5 SELLs that
+        // signalsToInbox rejects (shares=0) but the plan UI surfaces as ghost
+        // tier-1 entries with no inbox item. $100 floor mirrors AIRBAG /
+        // MAINTENANCE_RANKED_TRIM / PILLAR_FILL.
+        if (halfTrim >= 100) {
+            signals.push(makeSignal('CLM_CRF_TRIM', 'TRIM_CLM', 'CLM', 'SELL', halfTrim, 'MEDIUM', `CLM+CRF at ${(combined * 100).toFixed(1)}% > ${exports.CONFIG.CLM_CRF_MAX * 100}% hard cap — trim CLM half`, { combinedWeight: combined }));
+            signals.push(makeSignal('CLM_CRF_TRIM', 'TRIM_CRF', 'CRF', 'SELL', halfTrim, 'MEDIUM', `CLM+CRF at ${(combined * 100).toFixed(1)}% > ${exports.CONFIG.CLM_CRF_MAX * 100}% hard cap — trim CRF half`, { combinedWeight: combined }));
+        }
     }
     // Daily premium check reminder — INFO only.
     signals.push(makeSignal('CLM_CRF_PREMIUM_CHECK', 'CHECK_PREMIUM', 'CLM+CRF', 'INFO', 0, 'INFO', 'Daily: verify CLM/CRF premium/discount at CEFConnect', { url: 'https://www.cefconnect.com/fund/CLM', combinedWeight: combined }));
@@ -559,6 +573,13 @@ function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, a
     const pickN = Math.min(exports.CONFIG.PILLAR_FILL_MAX_CANDIDATES, scored.length);
     const perCandidate = deployBudget / pickN;
     const sizePerSignal = Math.min(perCandidate, exports.CONFIG.PILLAR_FILL_MAX_DOLLARS);
+    // Per-candidate floor — the budget guard above checks the TOTAL, but with
+    // pickN=2 the per-candidate split can still be sub-$100 (e.g. $150 budget
+    // → $75 each). Those ghost tier-2 entries can't be staged (shares=0) and
+    // show up unapprovable in the UI. Skip the whole pass if individual
+    // signals would be too small to act on.
+    if (sizePerSignal < 100)
+        return [];
     const signals = [];
     const priority = gapPp > 10 ? 'HIGH' : 'MEDIUM';
     for (let i = 0; i < pickN; i += 1) {

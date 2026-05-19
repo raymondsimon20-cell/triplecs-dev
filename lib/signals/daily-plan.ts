@@ -155,6 +155,23 @@ function findInboxMatch(
   );
 }
 
+/**
+ * Defense-in-depth floor for BUY/SELL signals surfaced to the user. The
+ * engine rules (AIRBAG, CLM_CRF_TRIM, PILLAR_FILL, etc.) now enforce this
+ * at emission time, but cached engine results from before those fixes can
+ * still carry sub-tradeable ghost signals. signalsToInbox already rejects
+ * them at staging (shares=0), so they have no inbox item and the user
+ * can't approve them — drop them here so they don't appear at all.
+ */
+const MIN_TRADEABLE_DOLLARS = 100;
+
+function isUntradeableGhost(signal: TradeSignal): boolean {
+  return (
+    (signal.direction === 'BUY' || signal.direction === 'SELL') &&
+    signal.sizeDollars < MIN_TRADEABLE_DOLLARS
+  );
+}
+
 export function buildDailyPlan(
   engineResult: EngineResult,
   inbox: InboxItem[],
@@ -163,6 +180,10 @@ export function buildDailyPlan(
   const actions: DailyPlan['actions'] = { auto: [], approval: [], alert: [] };
 
   for (const signal of engineResult.signals) {
+    // Skip sub-tradeable BUY/SELL ghosts from legacy / pre-fix cached runs.
+    // ALERT/INFO signals with size 0 are intentional and keep flowing.
+    if (isUntradeableGhost(signal)) continue;
+
     const tier = classifySignal(signal);
     const inboxMatch = findInboxMatch(signal, inbox);
     const blocked = Boolean(inboxMatch?.blocked);

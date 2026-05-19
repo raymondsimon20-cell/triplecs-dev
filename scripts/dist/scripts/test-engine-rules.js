@@ -313,6 +313,68 @@ test('emits SPXU/SQQQ buys when the diff × totalValue clears the $100 floor', (
         strict_1.default.ok(f.sizeDollars >= 100, `${f.ticker} size $${f.sizeDollars} below floor`);
     }
 });
+// ─── CLM_CRF_TRIM tests ──────────────────────────────────────────────────────
+console.log('\nCLM_CRF_TRIM');
+test('skips sub-$100 trims on small accounts barely above the cap', () => {
+    // $1,000 portfolio with CLM+CRF combined just over the 12% MAX → trim
+    // would be tiny ($5 per side). Pre-fix this produced ghost tier-1 SELLs.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [
+            enrichedPosition('CLM', 30, 60),
+            enrichedPosition('CRF', 30, 60),
+            enrichedPosition('SCHD', 10, 880),
+        ],
+        cash: 0,
+        prices: { CLM: 2, CRF: 2, SCHD: 88, UPRO: 50, TQQQ: 50, SPY: 500 },
+    }));
+    const fires = findSignals(result.signals, 'CLM_CRF_TRIM');
+    strict_1.default.equal(fires.length, 0, `expected no CLM_CRF_TRIM signals on tiny account; got ${fires.length}`);
+});
+test('emits CLM+CRF trims when each half clears the $100 floor', () => {
+    // Large portfolio meaningfully over the CLM+CRF cap → trims are substantial.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [
+            enrichedPosition('CLM', 5000, 50000),
+            enrichedPosition('CRF', 5000, 50000),
+            enrichedPosition('SCHD', 100, 8000),
+        ],
+        cash: 0,
+        prices: { CLM: 10, CRF: 10, SCHD: 80, UPRO: 50, TQQQ: 50, SPY: 500 },
+    }));
+    const fires = findSignals(result.signals, 'CLM_CRF_TRIM');
+    const tickers = fires.map((s) => s.ticker).sort();
+    strict_1.default.deepEqual(tickers, ['CLM', 'CRF'], `expected CLM+CRF SELLs; got ${tickers.join(',')}`);
+    for (const f of fires) {
+        strict_1.default.ok(f.sizeDollars >= 100, `${f.ticker} size $${f.sizeDollars} below floor`);
+    }
+});
+// ─── PILLAR_FILL per-candidate floor test ────────────────────────────────────
+console.log('\nPILLAR_FILL per-candidate floor');
+test('skips when per-candidate size would be sub-$100 even with budget ≥ $100', () => {
+    // Construct a gap small enough that deployBudget * 1/3 / pickN < $100 but
+    // > $100 total. Budget guard alone would let this through pre-fix.
+    // Pillar gap of ~6pp on a $2k portfolio → fullGap ≈ $120, budget ≈ $40
+    // (33% fraction) — but the budget guard catches that. Use a $5k portfolio
+    // with a ~5.5pp gap so budget ≈ $90 — under budget guard.
+    // Instead: $4.5k portfolio, 6pp gap → fullGap=270, budget=90 (under guard),
+    // so this case never reaches the per-candidate floor. Pick portfolio where
+    // budget > 100 but per-candidate < 100: $5.5k, 6pp gap → fullGap=330,
+    // budget=110, per-candidate=55. This is the exact pre-fix bug.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [
+            // No income holdings — gap is the full target.
+            enrichedPosition('SCHD', 70, 5500), // cornerstone-ish
+        ],
+        cash: 1000,
+        marginDebt: 0,
+        pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 6, hedgePct: 5 },
+    }));
+    const fires = findSignals(result.signals, 'PILLAR_FILL');
+    // With per-candidate floor, no signals when each would be sub-$100.
+    for (const f of fires) {
+        strict_1.default.ok(f.sizeDollars >= 100, `PILLAR_FILL ${f.ticker} size $${f.sizeDollars} below per-candidate floor`);
+    }
+});
 // ─── Summary ─────────────────────────────────────────────────────────────────
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);
