@@ -156,16 +156,30 @@ function ActionRow({
               guardrail
             </span>
           )}
-          {/* "Not staged" pill — the recommendation is in the plan but has no
-              backing inbox row yet. Approve will auto-stage + execute; this
-              just makes the state explicit so the user knows what's happening. */}
-          {isUnstaged && !action.blockedByGuardrails && (
-            <span
-              className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#7c82a0] border border-[#3d4468]"
-              title="No inbox row yet. Clicking Approve will stage one and submit it."
-            >
-              not staged
-            </span>
+          {/* Stage state pill — symmetric so the user always sees where the
+              row is in the pipeline.
+                - "staged" (green): row exists in the inbox; Approve fires the
+                  order immediately, no stage step.
+                - "not staged" (grey): no inbox row yet; Approve will stage and
+                  submit in one click via ensureStaged.
+              Guardrail-blocked rows skip this — they can't be acted on either
+              way and already have a red "guardrail" pill. */}
+          {!action.blockedByGuardrails && (action.direction === 'BUY' || action.direction === 'SELL') && (
+            isUnstaged ? (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#7c82a0] border border-[#3d4468]"
+                title="No inbox row yet. Clicking Approve will stage one and submit it."
+              >
+                not staged
+              </span>
+            ) : (
+              <span
+                className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
+                title="Row is staged in the inbox. Approve will submit it to Schwab immediately."
+              >
+                staged
+              </span>
+            )
           )}
           {action.status && action.status !== 'pending' && (
             <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#4a5070] border border-[#2d3248]">
