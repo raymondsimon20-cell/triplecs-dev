@@ -285,12 +285,17 @@ export async function listInbox(filter?: {
    */
   accountHash?: string;
 }): Promise<InboxItem[]> {
-  // Expire-on-read takes the write lock only if something actually aged
-  // out — keeps the read path cheap when nothing's stale.
-  const items = await mutateInbox<InboxItem[]>((raw) => {
-    const { items: next, changed } = expireStale(raw);
-    return changed ? { items: next, result: next } : { result: next };
-  }, 'listInbox:expireOnRead');
+  // Unlocked read + in-memory expireStale. NO write lock here — the
+  // dashboard fires 3-5 concurrent listInbox calls per page load (Today,
+  // DailyPlan, PendingOrders, polling), and serializing all of them behind
+  // the same lock as appendInbox / updateItem caused thundering-herd
+  // timeouts when contention piled up. Expirations are deterministic
+  // (status flips when expiresAt ≤ now), so concurrent in-memory
+  // computation produces the same result. The persisted state catches up
+  // the next time a user-driven mutation runs through mutateInbox, which
+  // calls expireStale before its own dedup logic.
+  const raw = await readAll();
+  const { items } = expireStale(raw);
 
   let out = items;
   if (filter?.status) {
