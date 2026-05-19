@@ -1184,6 +1184,16 @@ export default function DashboardPage() {
                 <DailyPlanPanel
                   accountHash={isAll ? undefined : account.accountHash}
                   accounts={accounts}
+                  /* Flatten every account's positions into the share-info
+                     shape DailyPlanPanel uses for the keep-one-share clamp
+                     in on-demand SELL staging. */
+                  positions={accounts.flatMap((a) =>
+                    a.positions.map((p) => ({
+                      symbol:      p.instrument.symbol,
+                      shares:      p.longQuantity,
+                      accountHash: a.accountHash,
+                    })),
+                  )}
                   onChanged={() => fetchAccounts(true)}
                   readOnly={isAll}
                 />

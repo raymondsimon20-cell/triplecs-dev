@@ -406,8 +406,12 @@ function signalsToInbox(
   accountHash: string,
 ): AppendInput[] {
   const positionAccount = new Map<string, string>();
+  const positionShares  = new Map<string, number>();
   for (const p of positions) {
     if (p.accountHash) positionAccount.set(p.symbol, p.accountHash);
+    // Aggregate share count per symbol — used to enforce the "always keep
+    // at least one share" rule on SELL signals (see below).
+    positionShares.set(p.symbol, (positionShares.get(p.symbol) ?? 0) + p.shares);
   }
 
   const out: AppendInput[] = [];
@@ -419,7 +423,7 @@ function signalsToInbox(
     const price = prices[s.ticker];
     if (!price || price <= 0) continue;
 
-    const shares = Math.floor(s.sizeDollars / price);
+    let shares = Math.floor(s.sizeDollars / price);
     if (shares <= 0) continue;
 
     // Cross-check: a SELL must be for a symbol THIS account actually holds.
@@ -429,6 +433,14 @@ function signalsToInbox(
     if (s.direction === 'SELL') {
       const owner = positionAccount.get(s.ticker);
       if (owner && owner !== accountHash) continue;
+
+      // Always-keep-one-share rule. Never stage a SELL that would close the
+      // entire position — cap at currentShares - 1, and drop the signal
+      // outright when the account only holds a single share (can't sell
+      // anything without violating the rule).
+      const currentShares = positionShares.get(s.ticker) ?? 0;
+      if (currentShares < 2) continue;
+      if (shares >= currentShares) shares = currentShares - 1;
     }
 
     out.push({

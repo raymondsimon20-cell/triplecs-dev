@@ -219,6 +219,16 @@ interface AccountSummary {
   accountNumber: string;
 }
 
+/**
+ * Per-symbol share count, scoped to an account. Used by ensureStaged to
+ * enforce the keep-one-share rule on SELL signals before they're staged.
+ */
+interface PositionShareInfo {
+  symbol:       string;
+  shares:       number;
+  accountHash?: string;
+}
+
 interface Props {
   /**
    * Selected account hash from the dashboard. Used as a fallback when a
@@ -234,6 +244,15 @@ interface Props {
    * for untagged ones (mirrors TradeInbox).
    */
   accounts?: AccountSummary[];
+  /**
+   * Current per-symbol share counts across the relevant accounts. Used by
+   * ensureStaged to clamp on-demand SELL stagings so they never close a
+   * position (mirrors lib/signals/run.ts:signalsToInbox). When omitted, the
+   * keep-one-share rule is still enforced by the server-side guardrail at
+   * /api/orders submission time, but the staged row will show the engine's
+   * raw share count instead of the clamped value.
+   */
+  positions?: PositionShareInfo[];
   /** Called after any execute or dismiss so the parent can refresh portfolio. */
   onChanged?: () => void;
   /**
@@ -245,7 +264,7 @@ interface Props {
   readOnly?: boolean;
 }
 
-export function DailyPlanPanel({ accountHash, accounts = [], onChanged, readOnly = false }: Props = {}) {
+export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onChanged, readOnly = false }: Props = {}) {
   const [data,    setData]    = useState<DailyPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -404,15 +423,50 @@ export function DailyPlanPanel({ accountHash, accounts = [], onChanged, readOnly
       return actions;
     }
 
+    // Build a fast lookup for current share counts by (symbol, accountHash).
+    // Sum across rows that match — covers fractional share splits across
+    // sub-accounts under one hash, though that's rare. Falls back to a
+    // symbol-only lookup when no accountHash on the position context.
+    const sharesBy = new Map<string, number>();
+    for (const p of positions) {
+      const key = `${p.symbol}|${p.accountHash ?? ''}`;
+      sharesBy.set(key, (sharesBy.get(key) ?? 0) + p.shares);
+    }
+    function currentSharesFor(symbol: string, hash: string): number {
+      const scoped = sharesBy.get(`${symbol}|${hash}`);
+      if (typeof scoped === 'number') return scoped;
+      // Fall back to "any account" when share data isn't tagged with a hash.
+      let total = 0;
+      for (const [k, v] of sharesBy) {
+        if (k.startsWith(`${symbol}|`)) total += v;
+      }
+      return total;
+    }
+
     // 2. Build inputs. Mirror lib/signals/run.ts signalsToInbox shape so the
-    // resulting inbox row is identical to a scheduled-engine stage.
+    // resulting inbox row is identical to a scheduled-engine stage. SELL
+    // signals are clamped to currentShares - 1 (keep-one-share rule) and
+    // dropped entirely when the position holds < 2 shares.
     const items = stagable
       .map((a) => {
         const price = prices[a.ticker];
         if (!price || price <= 0) return null;
-        const quantity = Math.floor(a.sizeDollars / price);
+        let quantity = Math.floor(a.sizeDollars / price);
         if (quantity <= 0) return null;
         const targetHash = a.accountHash || accountHash!;
+
+        if (a.direction === 'SELL') {
+          const currentShares = currentSharesFor(a.ticker, targetHash);
+          if (currentShares > 0) {
+            if (currentShares < 2) return null;
+            if (quantity >= currentShares) quantity = currentShares - 1;
+          }
+          // If we have no position data at all (currentShares === 0), let
+          // the server-side guardrail (lib/guardrails.ts:checkFullExit) do
+          // the final check at /api/orders time. Better to stage and block
+          // than to silently drop a legitimate signal.
+        }
+
         return {
           source:      'signal-engine' as const,
           symbol:      a.ticker,

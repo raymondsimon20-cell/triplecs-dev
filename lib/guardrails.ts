@@ -92,7 +92,8 @@ export type ViolationCode =
   | 'margin_cap'
   | 'daily_order_count'
   | 'wash_sale'
-  | 'drawdown_breaker';
+  | 'drawdown_breaker'
+  | 'full_exit_blocked';
 
 export interface GuardrailViolation {
   code:       ViolationCode;
@@ -121,6 +122,34 @@ function withinDays(timestampISO: string, days: number, now = Date.now()): boole
 }
 
 // ─── Individual checks ───────────────────────────────────────────────────────
+
+/**
+ * Always-keep-one-share rule. SELL orders that would close the entire position
+ * are blocked outright. The intent: never fully exit a holding via the
+ * automated path — leave at least one share behind so the position stays on
+ * the book (preserves history, cost basis, dividend trail).
+ *
+ * Applies to equity SELLs only — option closes (SELL_TO_CLOSE) routinely
+ * close to zero contracts and are out of scope. The signal engine's primary
+ * staging path (lib/signals/run.ts:signalsToInbox) already caps shares at
+ * currentShares - 1; this guardrail is the defense-in-depth catch for any
+ * SELL that gets routed through /api/orders without going through
+ * signalsToInbox (e.g. on-demand staging from the panel).
+ */
+function checkFullExit(t: ProposedTrade, ctx: GuardrailContext): GuardrailViolation | null {
+  if (t.instruction !== 'SELL') return null;
+  const position = ctx.positions.find((p) => p.symbol === t.symbol);
+  if (!position || position.shares <= 0) return null;
+  if (t.shares < position.shares) return null;
+  return {
+    code: 'full_exit_blocked',
+    severity: 'block',
+    message:
+      `SELL ${t.shares} ${t.symbol} would close the entire position ` +
+      `(holding ${position.shares} share${position.shares === 1 ? '' : 's'}). ` +
+      'Keep-one-share rule active — reduce quantity to leave at least one share.',
+  };
+}
 
 function checkOrderSize(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailLimits): GuardrailViolation | null {
   if (ctx.totalValue <= 0) return null;
@@ -257,6 +286,7 @@ function checkDrawdown(_t: ProposedTrade, ctx: GuardrailContext, limits: Guardra
 export function validateProposedTrade(trade: ProposedTrade, ctx: GuardrailContext): ValidationResult {
   const limits: GuardrailLimits = { ...DEFAULT_LIMITS, ...(ctx.limits ?? {}) };
   const checks = [
+    checkFullExit(trade, ctx),
     checkOrderSize(trade, ctx, limits),
     checkConcentration(trade, ctx, limits),
     checkPillarOverdrift(trade, ctx, limits),
