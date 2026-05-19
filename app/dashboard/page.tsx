@@ -44,6 +44,7 @@ import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
 import { TodayPanel } from '@/components/TodayPanel';
 import { DailyPlanPanel } from '@/components/DailyPlanPanel';
+import { SeedUniverseButton } from '@/components/SeedUniverseButton';
 import { ReplayPanel } from '@/components/ReplayPanel';
 import { PlanArchivePanel } from '@/components/PlanArchivePanel';
 import { RollbackPanel } from '@/components/RollbackPanel';
@@ -1180,7 +1181,24 @@ export default function DashboardPage() {
               iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
               defaultOpen={true}
             >
-              <div className="pt-4">
+              <div className="pt-4 space-y-3">
+                {/* Admin action — one-shot universe seed. Hidden in aggregate
+                    mode (needs a single account); the button itself is
+                    disabled when accountHash is undefined as a second safety. */}
+                {!isAll && (
+                  <div className="flex items-center justify-between gap-3 pb-2 border-b border-[#1f2334]">
+                    <span className="text-[11px] text-[#7c82a0]">
+                      One-time tools
+                    </span>
+                    <SeedUniverseButton
+                      accountHash={account.accountHash}
+                      accountLabel={
+                        nicknames[account.accountHash] || `···${account.accountNumber.slice(-4)}`
+                      }
+                      onStaged={() => fetchAccounts(true)}
+                    />
+                  </div>
+                )}
                 <DailyPlanPanel
                   accountHash={isAll ? undefined : account.accountHash}
                   accounts={accounts}
