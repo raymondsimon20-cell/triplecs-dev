@@ -190,6 +190,42 @@ test('respects PILLAR_FILL_MAX_CANDIDATES cap (≤ 2 proposals per pillar)', () 
     const fires = findSignals(result.signals, 'PILLAR_FILL');
     strict_1.default.ok(fires.length <= 2, `expected ≤2 candidates, got ${fires.length}`);
 });
+test('runtime marginThresholds override CONFIG defaults', () => {
+    // At 35% utilization, default CONFIG would fire MAINTENANCE_RANKED_TRIM
+    // (threshold 30%). With runtime marginThresholds.trimAbovePct = 47, the
+    // same portfolio should NOT fire (35% is below 47%).
+    // Margin debt = $35k, totalValue = $100k → utilization = 35%.
+    const positionsAndCash = {
+        positions: [enrichedPosition('OXLC', 5000, 40000), enrichedPosition('SCHD', 250, 20000)],
+        cash: 40000, // total $100k
+        marginDebt: 35000,
+    };
+    const defaultResult = (0, engine_1.runSignalEngine)(baseInputs(positionsAndCash));
+    strict_1.default.ok(findSignals(defaultResult.signals, 'MAINTENANCE_RANKED_TRIM').length > 0, 'expected default (30%) threshold to fire at 35% utilization');
+    const runtimeResult = (0, engine_1.runSignalEngine)(baseInputs({
+        ...positionsAndCash,
+        marginThresholds: { trimAbovePct: 47, trimTargetPct: 42, newBuyCeilingPct: 47 },
+    }));
+    strict_1.default.equal(findSignals(runtimeResult.signals, 'MAINTENANCE_RANKED_TRIM').length, 0, 'expected runtime threshold (47%) to suppress firing at 35% utilization');
+});
+test('PILLAR_FILL respects runtime newBuyCeilingPct', () => {
+    // Underweight income (50% of $70k vs 65% target → 15pp gap), 30% utilization.
+    //   positions $35k + cash $35k = totalValue $70k
+    //   income% = 35/70 = 50% (gap 15pp ✓)
+    //   marginDebt $21k → util ≈ 30%
+    const inputs = {
+        positions: [enrichedPosition('SCHD', 437, 35000)],
+        cash: 35000,
+        marginDebt: 21000,
+    };
+    const defaultResult = (0, engine_1.runSignalEngine)(baseInputs(inputs));
+    strict_1.default.ok(findSignals(defaultResult.signals, 'PILLAR_FILL').length > 0, 'expected default ceiling (35%) to allow PILLAR_FILL at 30% utilization');
+    const tightenedResult = (0, engine_1.runSignalEngine)(baseInputs({
+        ...inputs,
+        marginThresholds: { trimAbovePct: 30, trimTargetPct: 25, newBuyCeilingPct: 25 },
+    }));
+    strict_1.default.equal(findSignals(tightenedResult.signals, 'PILLAR_FILL').length, 0, 'expected runtime ceiling (25%) to suppress PILLAR_FILL at 30% utilization');
+});
 test('individual proposal stays within PILLAR_FILL_MAX_DOLLARS = $5,000', () => {
     // Huge gap, plenty of cash — still each proposal should be capped at $5k.
     const result = (0, engine_1.runSignalEngine)(baseInputs({
@@ -200,6 +236,81 @@ test('individual proposal stays within PILLAR_FILL_MAX_DOLLARS = $5,000', () => 
     const fires = findSignals(result.signals, 'PILLAR_FILL');
     for (const f of fires) {
         strict_1.default.ok(f.sizeDollars <= 5000 + 0.01, `proposal ${f.ticker} ${f.sizeDollars} exceeds $5k cap`);
+    }
+});
+// ─── AFW_TRIGGER tests ───────────────────────────────────────────────────────
+console.log('\nAFW_TRIGGER (Available For Withdrawal)');
+test('skips deployment when afwDollars below minimum headroom', () => {
+    // SPY drops 12% off the 7-day max → dip condition met. But AFW = $4000,
+    // below the $10k minimum headroom → rule should emit an INFO note, not BUYs.
+    const spyHistory = [500, 500, 500, 500, 500, 500, 440]; // -12% off max
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('SCHD', 100, 8000)],
+        cash: 100,
+        spyHistory,
+        afwDollars: 4000,
+    }));
+    const fires = findSignals(result.signals, 'AFW_TRIGGER');
+    const buys = fires.filter((s) => s.direction === 'BUY');
+    strict_1.default.equal(buys.length, 0, `expected no BUYs when AFW < $10k headroom; got ${buys.length}`);
+    const infos = fires.filter((s) => s.direction === 'INFO');
+    strict_1.default.ok(infos.length > 0, 'expected an INFO note explaining the skip');
+});
+test('fires deployment when SPY dips AND afwDollars sufficient', () => {
+    const spyHistory = [500, 500, 500, 500, 500, 500, 440]; // -12% off max
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('SCHD', 100, 8000)],
+        cash: 15000,
+        spyHistory,
+        afwDollars: 15000, // well above the $10k headroom floor
+    }));
+    const fires = findSignals(result.signals, 'AFW_TRIGGER');
+    const buys = fires.filter((s) => s.direction === 'BUY');
+    strict_1.default.ok(buys.length >= 1, `expected BUY signals when AFW ≥ $10k; got ${buys.length}`);
+});
+test('fires when afwDollars is undefined (legacy / replay path)', () => {
+    // When AFW data isn't available, the rule should still fire on the dip
+    // (the guardrail layer will enforce the 50% Schwab ceiling at stage time).
+    const spyHistory = [500, 500, 500, 500, 500, 500, 440];
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('SCHD', 100, 8000)],
+        cash: 10000,
+        spyHistory,
+        // afwDollars intentionally omitted
+    }));
+    const fires = findSignals(result.signals, 'AFW_TRIGGER');
+    const buys = fires.filter((s) => s.direction === 'BUY');
+    strict_1.default.ok(buys.length >= 1, 'expected BUYs when AFW data is unavailable (fallback to SPY-only)');
+});
+// ─── AIRBAG_SCALE tests ──────────────────────────────────────────────────────
+console.log('\nAIRBAG_SCALE');
+test('skips sub-$100 hedge buys on small / empty accounts', () => {
+    // Empty account (totalValue ≈ cash only, ~$500). At AIRBAG_NORMAL=1% target
+    // with currentW=0, raw size would be 0.01 × $500 = $5 — well below the $100
+    // floor. Pre-fix this produced ghost tier-1 BUYs that signalsToInbox then
+    // rejected (shares=0). The min-size guard should skip emitting them.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [],
+        cash: 500,
+        spyHistory: Array(25).fill(500),
+        vix: 18,
+    }));
+    const fires = findSignals(result.signals, 'AIRBAG_SCALE');
+    strict_1.default.equal(fires.length, 0, `expected no AIRBAG signals when size < $100; got ${fires.length}`);
+});
+test('emits SPXU/SQQQ buys when the diff × totalValue clears the $100 floor', () => {
+    // $20k account, currentW=0, target=1% → size = $200 per ticker, above floor.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('SCHD', 100, 20000)],
+        cash: 0,
+        spyHistory: Array(25).fill(500),
+        vix: 18,
+    }));
+    const fires = findSignals(result.signals, 'AIRBAG_SCALE');
+    const tickers = fires.map((s) => s.ticker).sort();
+    strict_1.default.deepEqual(tickers, ['SPXU', 'SQQQ'], `expected SPXU+SQQQ signals; got ${tickers.join(',')}`);
+    for (const f of fires) {
+        strict_1.default.ok(f.sizeDollars >= 100, `${f.ticker} size $${f.sizeDollars} below floor`);
     }
 });
 // ─── Summary ─────────────────────────────────────────────────────────────────

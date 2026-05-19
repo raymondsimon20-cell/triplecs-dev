@@ -33,10 +33,24 @@ exports.runSignalEngine = runSignalEngine;
 const fund_metadata_1 = require("../data/fund-metadata");
 // ─── Config ──────────────────────────────────────────────────────────────────
 exports.CONFIG = {
-    // AFW
+    // ── AFW (Available For Withdrawal) deployment trigger ─────────────────────
+    // AFW is Schwab's margin-headroom metric: equity minus maintenance
+    // requirement. As the market drops, equity drops, AFW drops in lockstep.
+    // Vol-7 rule: when AFW drops 10% (equivalent to a 10% market drop), deploy
+    // capital from available margin into Triples to buy the dip.
+    //
+    // Current implementation uses SPY 7-day drawdown as the proxy for AFW
+    // drawdown (we don't yet snapshot AFW history per day). The PROXY fires on
+    // the same condition Vol-7 describes; the SOURCE of deployed capital is
+    // your available margin (AFW). Future: store afwDollars on PortfolioSnapshot
+    // so we can switch to true AFW-drawdown detection.
     AFW_LOOKBACK: 7,
-    AFW_THRESHOLD: 0.90,
-    AFW_DEPLOY: 1000,
+    AFW_DRAWDOWN_THRESHOLD: 0.90, // fire when SPY ≤ 90% of 7-day max
+    AFW_DEPLOY: 1000, // total $ deployed per fire
+    /** Skip the rule entirely when available AFW dollars fall below this. The
+     *  deployment itself is $1k; the $10k headroom keeps a 10× buffer so the
+     *  buy doesn't push utilization right up to the Schwab 50% wall. */
+    AFW_MIN_HEADROOM: 10000,
     // Defense
     DEFENSE_EQUITY_RATIO: 0.40,
     // Airbag
@@ -87,6 +101,12 @@ exports.CONFIG = {
      * be firing first to relieve margin pressure, not new buys that add to it.
      */
     PILLAR_FILL_MAX_MARGIN_PCT: 0.35,
+    /**
+     * AFW-dollar floor for PILLAR_FILL. When afwDollars is available, prefer
+     * this absolute check over the ratio gate — it's more honest math. If AFW
+     * headroom is below this, no new positions proposed regardless of pillar gap.
+     */
+    PILLAR_FILL_MIN_AFW_DOLLARS: 5000,
 };
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 function makeSignalFactory(runTimestamp) {
@@ -158,24 +178,48 @@ function evalDefenseMode(valuation, makeSignal) {
     }
     return signals;
 }
-function evalAfwTrigger(spyHistory, valuation, inDefense, makeSignal) {
+/**
+ * AFW_TRIGGER — Vol-7 "dip deployment from Available For Withdrawal."
+ *
+ * AFW = Available For Withdrawal — Schwab's margin headroom dollar metric.
+ * Vol-7 rule: when AFW drops ~10% (because the market dropped and equity
+ * eroded), deploy $1000 of available margin into Triples to buy the dip.
+ *
+ * The proxy: we don't yet snapshot AFW per day, so we fire on SPY 7-day
+ * drawdown — a correlated signal. When AFW history is in the snapshot blob
+ * (todo), this rule can fire on true AFW drawdown.
+ *
+ * Headroom gate: even when the dip condition fires, if `afwDollars` is below
+ * the deploy amount, the rule skips with an INFO note rather than emit a
+ * BUY that the broker would reject at the 50% margin ceiling.
+ */
+function evalAfwTrigger(spyHistory, valuation, inDefense, afwDollars, makeSignal) {
     if (inDefense || spyHistory.length < exports.CONFIG.AFW_LOOKBACK) {
         return { signals: [], fired: false };
     }
     const signals = [];
     const recent = spyHistory.slice(-exports.CONFIG.AFW_LOOKBACK);
-    const afw = Math.max(...recent);
+    const spy7dMax = Math.max(...recent);
     const spyNow = spyHistory[spyHistory.length - 1];
-    if (spyNow > exports.CONFIG.AFW_THRESHOLD * afw) {
+    const spyDrawdownPct = (1 - spyNow / spy7dMax) * 100;
+    if (spyNow > exports.CONFIG.AFW_DRAWDOWN_THRESHOLD * spy7dMax) {
         return { signals: [], fired: false };
     }
+    // AFW headroom gate. When we don't have AFW data (replay/legacy), skip the
+    // gate and let the guardrail layer enforce the 50% Schwab ceiling.
+    if (typeof afwDollars === 'number' && afwDollars < exports.CONFIG.AFW_MIN_HEADROOM) {
+        signals.push(makeSignal('AFW_TRIGGER', 'AFW_HEADROOM_LOW', 'AFW', 'INFO', 0, 'HIGH', `Dip detected (SPY ${spyDrawdownPct.toFixed(1)}% off 7d high) but AFW is only $${Math.round(afwDollars)} — ` +
+            `below the $${exports.CONFIG.AFW_MIN_HEADROOM} minimum headroom. Skipping deployment to avoid hitting Schwab's 50% margin cap.`, { spy: spyNow, spy7dMax, spyDrawdownPct, afwDollars, threshold: exports.CONFIG.AFW_MIN_HEADROOM }));
+        return { signals, fired: false };
+    }
     const triplesW = ((valuation.weightPcts['UPRO'] ?? 0) + (valuation.weightPcts['TQQQ'] ?? 0)) / 100;
+    const afwNote = typeof afwDollars === 'number' ? ` (AFW headroom: $${Math.round(afwDollars)})` : '';
     if (triplesW < 0.10) {
-        signals.push(makeSignal('AFW_TRIGGER', 'BUY_UPRO', 'UPRO', 'BUY', exports.CONFIG.AFW_DEPLOY * 0.5, 'HIGH', `AFW: SPY $${spyNow.toFixed(2)} ≤ 90% of $${afw.toFixed(2)} 7-day max — deploy $500 UPRO`, { spy: spyNow, afw, triplesWeight: triplesW }));
-        signals.push(makeSignal('AFW_TRIGGER', 'BUY_TQQQ', 'TQQQ', 'BUY', exports.CONFIG.AFW_DEPLOY * 0.5, 'HIGH', `AFW: SPY $${spyNow.toFixed(2)} ≤ 90% of $${afw.toFixed(2)} 7-day max — deploy $500 TQQQ`, { spy: spyNow, afw, triplesWeight: triplesW }));
+        signals.push(makeSignal('AFW_TRIGGER', 'BUY_UPRO', 'UPRO', 'BUY', exports.CONFIG.AFW_DEPLOY * 0.5, 'HIGH', `Dip: SPY ${spyDrawdownPct.toFixed(1)}% off 7d high — deploy $500 AFW into UPRO${afwNote}`, { spy: spyNow, spy7dMax, spyDrawdownPct, triplesWeight: triplesW, afwDollars }));
+        signals.push(makeSignal('AFW_TRIGGER', 'BUY_TQQQ', 'TQQQ', 'BUY', exports.CONFIG.AFW_DEPLOY * 0.5, 'HIGH', `Dip: SPY ${spyDrawdownPct.toFixed(1)}% off 7d high — deploy $500 AFW into TQQQ${afwNote}`, { spy: spyNow, spy7dMax, spyDrawdownPct, triplesWeight: triplesW, afwDollars }));
     }
     else {
-        signals.push(makeSignal('AFW_TRIGGER', 'BUY_QDTE', 'QDTE', 'BUY', exports.CONFIG.AFW_DEPLOY, 'HIGH', `AFW: SPY $${spyNow.toFixed(2)} ≤ 90% of $${afw.toFixed(2)} — triples at capacity (${(triplesW * 100).toFixed(1)}%), buy QDTE`, { spy: spyNow, afw, triplesWeight: triplesW }));
+        signals.push(makeSignal('AFW_TRIGGER', 'BUY_QDTE', 'QDTE', 'BUY', exports.CONFIG.AFW_DEPLOY, 'HIGH', `Dip: SPY ${spyDrawdownPct.toFixed(1)}% off 7d high — Triples at ${(triplesW * 100).toFixed(1)}%, deploy $1000 AFW into QDTE${afwNote}`, { spy: spyNow, spy7dMax, spyDrawdownPct, triplesWeight: triplesW, afwDollars }));
     }
     return { signals, fired: true };
 }
@@ -206,6 +250,13 @@ function evalAirbag(vix, spyHistory, valuation, makeSignal) {
         if (Math.abs(diff) > 0.005) {
             const direction = diff > 0 ? 'BUY' : 'SELL';
             const size = Math.abs(diff) * valuation.totalValue;
+            // Skip sub-tradeable signals — small/empty accounts (or near-threshold
+            // diffs at the 0.5% boundary) would otherwise emit $0–$5 BUYs that
+            // signalsToInbox rejects (shares=0) but the daily-plan UI surfaces
+            // as ghost tier-1 entries with no inbox item. Mirror the $100 floor
+            // used by MAINTENANCE_RANKED_TRIM and PILLAR_FILL.
+            if (size < 100)
+                continue;
             const priority = target > exports.CONFIG.AIRBAG_NORMAL ? 'HIGH' : 'MEDIUM';
             signals.push(makeSignal('AIRBAG_SCALE', diff > 0 ? `SCALE_UP_${ticker}` : `SCALE_DOWN_${ticker}`, ticker, direction, size, priority, `Airbag ${ticker}: ${(currentW * 100).toFixed(1)}% → ${(target * 100).toFixed(1)}% (${label})`, { vix, spyDrawdown: spyDD, currentWeight: currentW, targetWeight: target }));
         }
@@ -268,7 +319,8 @@ function evalMarginKillSwitch(marginDebt, state, makeSignal) {
     }
     const growth = marginDebt - prev.margin;
     if (growth > exports.CONFIG.KILL_SWITCH_DEBT_GROWTH && !state.afwThisMonth.fired) {
-        const reason = `Margin debt grew $${growth.toFixed(0)} MoM without an AFW trigger this month`;
+        const reason = `Margin debt grew $${growth.toFixed(0)} MoM without an AFW (Available For Withdrawal) ` +
+            `deployment this month — margin grew for some other reason, which is concerning`;
         return {
             signals: [makeSignal('MARGIN_KILL_SWITCH', 'PAUSE_ALL_PURCHASES', 'MARGIN', 'ALERT', 0, 'CRITICAL', `${reason} — PAUSE all new purchases until gap closes`, { prevMargin: prev.margin, currentMargin: marginDebt, growth })],
             tripped: true,
@@ -329,17 +381,25 @@ function evalFreedomRatio(history, makeSignal) {
  * those), and CLM/CRF (DRIP-protected by separate rule). The candidate set is
  * effectively "income pillar positions ranked by maintenance × marketValue".
  */
-function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchActive, makeSignal) {
+function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchActive, thresholds, afwDollars, makeSignal) {
     if (inDefense || killSwitchActive)
         return [];
     if (valuation.totalValue <= 0)
         return [];
+    // Prefer runtime thresholds from strategy store; fall back to CONFIG defaults.
+    const trimAbove = thresholds ? thresholds.trimAbovePct / 100 : exports.CONFIG.MARGIN_TRIM_THRESHOLD;
+    const trimTarget = thresholds ? thresholds.trimTargetPct / 100 : exports.CONFIG.MARGIN_TRIM_TARGET;
     const marginUtilPct = valuation.marginDebt / valuation.totalValue;
-    if (marginUtilPct <= exports.CONFIG.MARGIN_TRIM_THRESHOLD)
+    if (marginUtilPct <= trimAbove)
         return [];
-    // Equity we need to free to bring utilization to TARGET. Each dollar sold
-    // frees `maintenancePct%` of equity, so we need to sell more than the gap.
-    const requiredEquityFreed = (marginUtilPct - exports.CONFIG.MARGIN_TRIM_TARGET) * valuation.totalValue;
+    // Equity to free to bring utilization to TARGET. Each dollar sold at
+    // maintenance% M frees M/100 of equity (the maintenance requirement
+    // against that dollar disappears, returning to AFW).
+    //
+    // When afwDollars is known we report it in the signal data so the digest
+    // can show "AFW will rise from $X to $Y" — but the SIZING math is
+    // algebraically identical either way: `(util − target) × totalValue`.
+    const requiredEquityFreed = (marginUtilPct - trimTarget) * valuation.totalValue;
     // Eligible candidates: income (and "other") positions only. Triples/hedges/
     // cornerstone owned by other rules. Skip positions without maintenance data
     // (we'd be guessing).
@@ -364,16 +424,23 @@ function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchAc
         return []; // not worth a signal
     const signals = [];
     const priority = marginUtilPct > 0.40 ? 'HIGH' : 'MEDIUM';
-    signals.push(makeSignal('MAINTENANCE_RANKED_TRIM', `TRIM_${top.pos.symbol}`, top.pos.symbol, 'SELL', trimDollars, priority, `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(exports.CONFIG.MARGIN_TRIM_THRESHOLD * 100).toFixed(0)}%. ` +
+    signals.push(makeSignal('MAINTENANCE_RANKED_TRIM', `TRIM_${top.pos.symbol}`, top.pos.symbol, 'SELL', trimDollars, priority, `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(trimAbove * 100).toFixed(0)}%. ` +
         `${top.pos.symbol} has highest maintenance (${top.maint}%) among holdings — selling $${Math.round(trimDollars)} ` +
-        `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(exports.CONFIG.MARGIN_TRIM_TARGET * 100).toFixed(0)}%).`, {
+        `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(trimTarget * 100).toFixed(0)}%).`, {
         marginUtilPct,
-        targetMarginPct: exports.CONFIG.MARGIN_TRIM_TARGET,
+        trimAboveThresholdPct: trimAbove,
+        targetMarginPct: trimTarget,
         candidateSymbol: top.pos.symbol,
         candidateMaintPct: top.maint,
         candidateMaintSource: top.pos.maintenancePctSource ?? 'default',
         requiredEquityFreed,
         cappedAtHalfPosition: rawTrim > maxTrim,
+        // AFW (Available For Withdrawal) context — present when Schwab data
+        // was fed through. Tells the digest how much headroom this trim frees.
+        afwBefore: afwDollars,
+        afwAfterEstimate: typeof afwDollars === 'number'
+            ? afwDollars + (trimDollars * top.maint / 100)
+            : undefined,
     }));
     // Vol-7 1/3 rotation pair — only when 1/3 is large enough to be worth an order.
     const rotationDollars = trimDollars * exports.CONFIG.ROTATION_INTO_TRIPLES_PCT;
@@ -416,17 +483,25 @@ function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchAc
  *  - Capped at PILLAR_FILL_MAX_DOLLARS per candidate, MAX_CANDIDATES per pillar
  *  - Bounded by 95% of available cash to leave a buffer
  */
-function evalPillarFill(positions, valuation, pillarTargets, buyingPowerAvail, inDefense, killSwitchActive, recentSells30d, makeSignal) {
+function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, afwDollars, buyingPowerAvail, inDefense, killSwitchActive, recentSells30d, makeSignal) {
     if (!pillarTargets)
         return [];
     if (inDefense || killSwitchActive)
         return [];
     if (buyingPowerAvail < 100)
         return [];
-    // Hard margin ceiling for the rule itself. Above this, the user should be
-    // trimming not buying — MAINTENANCE_RANKED_TRIM handles that side.
+    // Two-part margin gate:
+    //  (a) AFW-dollar floor — when we know real headroom, refuse to propose any
+    //      new position if AFW is below the floor. Most honest check.
+    //  (b) Utilization-ratio ceiling — fallback when AFW data is absent.
+    if (typeof afwDollars === 'number' && afwDollars < exports.CONFIG.PILLAR_FILL_MIN_AFW_DOLLARS) {
+        return [];
+    }
+    const newBuyCeiling = marginThresholds
+        ? marginThresholds.newBuyCeilingPct / 100
+        : exports.CONFIG.PILLAR_FILL_MAX_MARGIN_PCT;
     const utilFirstCheck = valuation.totalValue > 0 ? valuation.marginDebt / valuation.totalValue : 0;
-    if (utilFirstCheck > exports.CONFIG.PILLAR_FILL_MAX_MARGIN_PCT)
+    if (utilFirstCheck > newBuyCeiling)
         return [];
     // Aggregate dollars by pillar and by family.
     const dollarsByPillar = {
@@ -529,10 +604,11 @@ function runSignalEngine(inputs) {
             : null,
         equityRatio: valuation.equityRatio,
     };
-    // 2. AFW trigger — fires only when not in defense.
-    const afw = evalAfwTrigger(inputs.spyHistory, valuation, inDefense, makeSignal);
-    all.push(...afw.signals);
-    if (afw.fired) {
+    // 2. AFW (Available For Withdrawal) deployment trigger — Vol-7 buy-the-dip
+    //    rule that uses available margin headroom. Skipped in defense mode.
+    const afwResult = evalAfwTrigger(inputs.spyHistory, valuation, inDefense, inputs.afwDollars, makeSignal);
+    all.push(...afwResult.signals);
+    if (afwResult.fired) {
         nextState.afwThisMonth = {
             month: currentYearMonth(),
             fired: true,
@@ -566,12 +642,16 @@ function runSignalEngine(inputs) {
     // 8. Freedom ratio.
     all.push(...evalFreedomRatio(inputs.state.freedomRatioHistory, makeSignal));
     // 9. (Phase 2) Maintenance-ranked margin-relief trim. Gated by inDefense and
-    //    killSwitchActive — both are dominant when active.
-    all.push(...evalMaintenanceRankedTrim(inputs.positions, valuation, inDefense, nextState.killSwitch.active, makeSignal));
+    //    killSwitchActive — both are dominant when active. Thresholds come from
+    //    the strategy store when provided; otherwise CONFIG defaults. AFW is
+    //    used for digest context (sizing math is algebraically the same).
+    all.push(...evalMaintenanceRankedTrim(inputs.positions, valuation, inDefense, nextState.killSwitch.active, inputs.marginThresholds, inputs.afwDollars, makeSignal));
     // 10. (Phase 2) Pillar-fill new-position suggestions. Requires pillarTargets;
-    //     gated by inDefense and killSwitchActive. Income pillar only.
+    //     gated by inDefense and killSwitchActive. Income pillar only. Hard
+    //     AFW-dollar floor when AFW data available — no new buys when headroom
+    //     is too low, regardless of utilization ratio.
     const buyingPowerAvail = inputs.buyingPowerAvailable ?? Math.max(0, inputs.cash);
-    all.push(...evalPillarFill(inputs.positions, valuation, inputs.pillarTargets, buyingPowerAvail, inDefense, nextState.killSwitch.active, inputs.recentSells30d ?? [], makeSignal));
+    all.push(...evalPillarFill(inputs.positions, valuation, inputs.pillarTargets, inputs.marginThresholds, inputs.afwDollars, buyingPowerAvail, inDefense, nextState.killSwitch.active, inputs.recentSells30d ?? [], makeSignal));
     // Update prevMonth at month boundary (snapshot current margin for next month's
     // kill-switch comparison).
     const thisMonth = currentYearMonth();

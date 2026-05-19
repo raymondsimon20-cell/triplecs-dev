@@ -52,6 +52,15 @@ export interface PlannedAction {
    * accountHash). Used by the daily digest to group actions per-account.
    */
   accountHash?: string;
+  /**
+   * Order parameters from the matching inbox item, copied here so the daily
+   * plan UI can fire orders via /api/orders on bulk approve without a second
+   * round-trip. Undefined when the signal didn't stage (e.g. shares=0 or
+   * ALERT/INFO directions).
+   */
+  quantity?:    number;
+  orderType?:   'MARKET' | 'LIMIT';
+  price?:       number;
 }
 
 export interface DailyPlan {
@@ -181,6 +190,9 @@ export function buildDailyPlan(
       status:             inboxMatch?.status,
       blockedByGuardrails: blocked,
       accountHash:        inboxMatch?.accountHash,
+      quantity:           inboxMatch?.quantity,
+      orderType:          inboxMatch?.orderType,
+      price:              inboxMatch?.price,
     };
 
     actions[tier].push(action);

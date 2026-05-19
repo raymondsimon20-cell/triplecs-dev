@@ -326,6 +326,41 @@ test('fires when afwDollars is undefined (legacy / replay path)', () => {
   assert.ok(buys.length >= 1, 'expected BUYs when AFW data is unavailable (fallback to SPY-only)');
 });
 
+// ─── AIRBAG_SCALE tests ──────────────────────────────────────────────────────
+
+console.log('\nAIRBAG_SCALE');
+
+test('skips sub-$100 hedge buys on small / empty accounts', () => {
+  // Empty account (totalValue ≈ cash only, ~$500). At AIRBAG_NORMAL=1% target
+  // with currentW=0, raw size would be 0.01 × $500 = $5 — well below the $100
+  // floor. Pre-fix this produced ghost tier-1 BUYs that signalsToInbox then
+  // rejected (shares=0). The min-size guard should skip emitting them.
+  const result = runSignalEngine(baseInputs({
+    positions:  [],
+    cash:       500,
+    spyHistory: Array(25).fill(500),
+    vix:        18,
+  }));
+  const fires = findSignals(result.signals, 'AIRBAG_SCALE');
+  assert.equal(fires.length, 0, `expected no AIRBAG signals when size < $100; got ${fires.length}`);
+});
+
+test('emits SPXU/SQQQ buys when the diff × totalValue clears the $100 floor', () => {
+  // $20k account, currentW=0, target=1% → size = $200 per ticker, above floor.
+  const result = runSignalEngine(baseInputs({
+    positions:  [enrichedPosition('SCHD', 100, 20_000)],
+    cash:       0,
+    spyHistory: Array(25).fill(500),
+    vix:        18,
+  }));
+  const fires = findSignals(result.signals, 'AIRBAG_SCALE');
+  const tickers = fires.map((s) => s.ticker).sort();
+  assert.deepEqual(tickers, ['SPXU', 'SQQQ'], `expected SPXU+SQQQ signals; got ${tickers.join(',')}`);
+  for (const f of fires) {
+    assert.ok(f.sizeDollars >= 100, `${f.ticker} size $${f.sizeDollars} below floor`);
+  }
+});
+
 // ─── Summary ─────────────────────────────────────────────────────────────────
 
 console.log(`\n${pass} passed, ${fail} failed`);

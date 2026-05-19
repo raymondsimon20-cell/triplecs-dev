@@ -514,6 +514,12 @@ function evalAirbag(
     if (Math.abs(diff) > 0.005) {
       const direction: SignalDirection = diff > 0 ? 'BUY' : 'SELL';
       const size      = Math.abs(diff) * valuation.totalValue;
+      // Skip sub-tradeable signals — small/empty accounts (or near-threshold
+      // diffs at the 0.5% boundary) would otherwise emit $0–$5 BUYs that
+      // signalsToInbox rejects (shares=0) but the daily-plan UI surfaces
+      // as ghost tier-1 entries with no inbox item. Mirror the $100 floor
+      // used by MAINTENANCE_RANKED_TRIM and PILLAR_FILL.
+      if (size < 100) continue;
       const priority: SignalPriority  = target > CONFIG.AIRBAG_NORMAL ? 'HIGH' : 'MEDIUM';
 
       signals.push(makeSignal(

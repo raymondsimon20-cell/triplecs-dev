@@ -1165,6 +1165,28 @@ export default function DashboardPage() {
               />
             </div>
 
+            {/* Daily autopilot plan — tier-classified preview of what the
+                engine would do today. Lives above the Today queue so the user
+                sees the structured plan (auto / approval / alert tiers) first,
+                then the unified inbox underneath for execution. */}
+            {!isAll && (
+              <CollapsiblePanel
+                id="today-daily-plan"
+                title="Daily autopilot plan"
+                icon={<ClipboardList className="w-4 h-4 text-emerald-400" />}
+                accentClass="border-emerald-500/40"
+                iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+                defaultOpen={true}
+              >
+                <div className="pt-4">
+                  <DailyPlanPanel
+                    accountHash={account.accountHash}
+                    onChanged={() => fetchAccounts(true)}
+                  />
+                </div>
+              </CollapsiblePanel>
+            )}
+
             {/* Unified action queue. In aggregate mode the inbox renders
                 household-read-only — every account's items shown with their
                 chips, but Approve / Dismiss are hidden so the user has to
@@ -1447,17 +1469,6 @@ export default function DashboardPage() {
               defaultOpen={false}
             >
               <div className="pt-4"><PerformancePanel accountHash={isAll ? undefined : account?.accountHash} /></div>
-            </CollapsiblePanel>
-
-            <CollapsiblePanel
-              id="daily-plan"
-              title="Daily autopilot plan"
-              icon={<ClipboardList className="w-4 h-4 text-emerald-400" />}
-              accentClass="border-emerald-500/40"
-              iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
-              defaultOpen={false}
-            >
-              <div className="pt-4"><DailyPlanPanel /></div>
             </CollapsiblePanel>
 
             <CollapsiblePanel

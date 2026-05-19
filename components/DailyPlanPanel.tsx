@@ -39,6 +39,13 @@ interface PlannedAction {
   requiresApproval:    boolean;
   status?:             'pending' | 'executed' | 'dismissed' | 'expired';
   blockedByGuardrails: boolean;
+  /** Schwab account hash from the matching inbox item; falls back to the
+   *  panel's `accountHash` prop on submit. */
+  accountHash?:        string;
+  /** Order params copied from the inbox item — needed for /api/orders. */
+  quantity?:           number;
+  orderType?:          'MARKET' | 'LIMIT';
+  price?:              number;
 }
 
 interface DailyPlan {
@@ -151,7 +158,19 @@ function ActionRow({
   );
 }
 
-export function DailyPlanPanel() {
+interface Props {
+  /**
+   * Selected account hash from the dashboard. Used as a fallback when a
+   * planned action's matching inbox item wasn't tagged with its own
+   * accountHash (legacy items). Required for the bulk-approve flow which
+   * has to send an accountHash to /api/orders.
+   */
+  accountHash?: string;
+  /** Called after any execute or dismiss so the parent can refresh portfolio. */
+  onChanged?: () => void;
+}
+
+export function DailyPlanPanel({ accountHash, onChanged }: Props = {}) {
   const [data,    setData]    = useState<DailyPlan | null>(null);
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
@@ -188,26 +207,94 @@ export function DailyPlanPanel() {
     if (!action.inboxItemId) return;
     setBusy(action.signalId);
     try {
-      const r = await fetch('/api/inbox', {
-        method:  'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body:    JSON.stringify({ id: action.inboxItemId, status }),
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => ({}));
-        alert(`Inbox update failed: ${d.error ?? r.statusText}`);
+      if (status === 'executed') {
+        const ok = await executeAction(action);
+        if (!ok) {
+          // executeAction already logs to console; surface a top-level error
+          // so the user sees that nothing was placed.
+          setError(`Order placement failed for ${action.ticker} — see browser console.`);
+        } else {
+          onChanged?.();
+        }
       } else {
-        await load();
+        const r = await fetch('/api/inbox', {
+          method:  'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body:    JSON.stringify({ id: action.inboxItemId, status }),
+        });
+        if (!r.ok) {
+          const d = await r.json().catch(() => ({}));
+          alert(`Inbox update failed: ${d.error ?? r.statusText}`);
+        }
       }
+      await load();
     } finally {
       setBusy(null);
     }
   }
 
   /**
-   * Bulk-approve every actionable item in a tier. Filters to BUY/SELL items
-   * that are still pending and not guardrail-blocked. PATCHes sequentially so
-   * a Schwab rate limit on the downstream order endpoint doesn't backfire.
+   * Submit one planned action to Schwab via /api/orders, then PATCH the
+   * matching inbox item to executed with the resulting orderId. Mirrors the
+   * single-row execute flow in TradeInbox so bulk approve behaves identically.
+   *
+   * Returns true on success, false on any failure (so bulk can keep going
+   * across the rest of the tier instead of aborting on the first reject).
+   */
+  async function executeAction(action: PlannedAction): Promise<boolean> {
+    if (!action.inboxItemId || !action.quantity || action.quantity <= 0) return false;
+    const targetHash = action.accountHash || accountHash;
+    if (!targetHash) {
+      setError('No account selected — pick a single account before approving.');
+      return false;
+    }
+    try {
+      const r = await fetch('/api/orders', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          accountHash: targetHash,
+          orders: [{
+            symbol:      action.ticker,
+            instruction: action.direction,
+            quantity:    action.quantity,
+            orderType:   action.orderType ?? 'MARKET',
+            price:       action.orderType === 'LIMIT' ? action.price : undefined,
+            rationale:   `[${action.rule}] ${action.reason}`,
+            aiMode:      'signal_engine',
+          }],
+        }),
+      });
+      const result = await r.json();
+      if (!r.ok || result.error) {
+        console.warn('[DailyPlanPanel] order failed for', action.ticker, result.error ?? r.statusText);
+        return false;
+      }
+      const first = result.results?.[0];
+      await fetch('/api/inbox', {
+        method:  'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body:    JSON.stringify({
+          id:      action.inboxItemId,
+          status:  'executed',
+          orderId: first?.orderId ?? null,
+          message: first?.message,
+        }),
+      });
+      return true;
+    } catch (err) {
+      console.warn('[DailyPlanPanel] execute crashed for', action.ticker, err);
+      return false;
+    }
+  }
+
+  /**
+   * Bulk-approve / bulk-dismiss every actionable item in a tier. Approve fires
+   * the order through /api/orders and PATCHes the inbox to executed with the
+   * resulting orderId; dismiss just PATCHes to dismissed. Both filter to
+   * BUY/SELL items that are still pending, have a backing inbox item, and
+   * aren't guardrail-blocked. Sequential to keep Schwab rate limits from
+   * tripping and to keep error reporting per-item accurate.
    */
   async function bulkAct(tierActions: PlannedAction[], status: 'executed' | 'dismissed') {
     const verb = status === 'executed' ? 'approve' : 'dismiss';
@@ -218,21 +305,44 @@ export function DailyPlanPanel() {
         !a.blockedByGuardrails &&
         (a.direction === 'BUY' || a.direction === 'SELL'),
     );
-    if (acting.length === 0) return;
-    if (!confirm(`${verb === 'approve' ? 'Approve' : 'Dismiss'} all ${acting.length} item(s) in this tier?`)) {
+    if (acting.length === 0) {
+      setError(
+        verb === 'approve'
+          ? 'No actionable items in this tier — items without a backing inbox entry can\'t be approved.'
+          : 'Nothing to dismiss in this tier.',
+      );
+      return;
+    }
+    const verbWord = verb === 'approve' ? 'Submit' : 'Dismiss';
+    const tail = verb === 'approve' ? ' to Schwab? This is irreversible once placed.' : '?';
+    if (!confirm(`${verbWord} ${acting.length} order${acting.length === 1 ? '' : 's'}${tail}`)) {
       return;
     }
     setBusy('__bulk__');
+    setError(null);
     try {
-      for (const action of acting) {
-        try {
-          await fetch('/api/inbox', {
-            method:  'PATCH',
-            headers: { 'Content-Type': 'application/json' },
-            body:    JSON.stringify({ id: action.inboxItemId, status }),
-          });
-        } catch (err) {
-          console.warn('[DailyPlanPanel] bulk patch failed for', action.ticker, err);
+      if (status === 'executed') {
+        let placed = 0;
+        let failed = 0;
+        for (const action of acting) {
+          const ok = await executeAction(action);
+          if (ok) placed++; else failed++;
+        }
+        if (failed > 0) {
+          setError(`${placed} placed, ${failed} failed — see browser console for details.`);
+        }
+        onChanged?.();
+      } else {
+        for (const action of acting) {
+          try {
+            await fetch('/api/inbox', {
+              method:  'PATCH',
+              headers: { 'Content-Type': 'application/json' },
+              body:    JSON.stringify({ id: action.inboxItemId, status }),
+            });
+          } catch (err) {
+            console.warn('[DailyPlanPanel] bulk dismiss failed for', action.ticker, err);
+          }
         }
       }
       await load();
