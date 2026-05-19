@@ -909,7 +909,17 @@ function evalPillarFill(
   //  (a) AFW-dollar floor — when we know real headroom, refuse to propose any
   //      new position if AFW is below the floor. Most honest check.
   //  (b) Utilization-ratio ceiling — fallback when AFW data is absent.
-  if (typeof afwDollars === 'number' && afwDollars < CONFIG.PILLAR_FILL_MIN_AFW_DOLLARS) {
+  //
+  // The AFW floor only matters when margin is actually in play. For an
+  // account with zero debt (cash-only, or margin-enabled but unused), the
+  // entire AFW number IS the cash on hand — gating on $5K would block every
+  // sub-$5K account forever even though there's no leverage cliff to fall
+  // off. Skip the gate when marginDebt is zero.
+  if (
+    valuation.marginDebt > 0 &&
+    typeof afwDollars === 'number' &&
+    afwDollars < CONFIG.PILLAR_FILL_MIN_AFW_DOLLARS
+  ) {
     return [];
   }
   const newBuyCeiling = marginThresholds
@@ -983,15 +993,25 @@ function evalPillarFill(
 
   if (scored.length === 0) return [];
 
-  const pickN          = Math.min(CONFIG.PILLAR_FILL_MAX_CANDIDATES, scored.length);
+  // Pick count is budget-aware. Previously a fixed 2-way split would push
+  // every small-account budget below the $100 tradability floor (e.g. $107
+  // → 2 × $53.50, both unapprovable). Now we cap pickN by how many
+  // ≥$100 slices the budget can support, so a $107 budget yields ONE $107
+  // suggestion instead of being silently dropped.
+  const PER_CANDIDATE_FLOOR = 100;
+  const budgetSupports = Math.floor(deployBudget / PER_CANDIDATE_FLOOR);
+  const pickN          = Math.min(
+    CONFIG.PILLAR_FILL_MAX_CANDIDATES,
+    scored.length,
+    Math.max(1, budgetSupports),
+  );
   const perCandidate   = deployBudget / pickN;
   const sizePerSignal  = Math.min(perCandidate, CONFIG.PILLAR_FILL_MAX_DOLLARS);
-  // Per-candidate floor — the budget guard above checks the TOTAL, but with
-  // pickN=2 the per-candidate split can still be sub-$100 (e.g. $150 budget
-  // → $75 each). Those ghost tier-2 entries can't be staged (shares=0) and
-  // show up unapprovable in the UI. Skip the whole pass if individual
-  // signals would be too small to act on.
-  if (sizePerSignal < 100) return [];
+  // Final per-candidate floor — guards against the edge case where the
+  // budget itself was just barely under $100 (the budgetSupports clamp
+  // would give pickN=1 with size <$100). Shares would round to 0 at stage
+  // time and the row would be unapprovable.
+  if (sizePerSignal < PER_CANDIDATE_FLOOR) return [];
   const signals: TradeSignal[] = [];
   const priority: SignalPriority = gapPp > 10 ? 'HIGH' : 'MEDIUM';
 
