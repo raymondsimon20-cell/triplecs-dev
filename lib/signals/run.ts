@@ -62,6 +62,16 @@ export interface RunResult {
   proposed: number;
   /** Items that actually landed in the inbox after dedup. */
   staged:   number;
+  /**
+   * When `proposed > 0` and `staged === 0`, this is populated with the
+   * reason — distinguishes silent dedup ('all-deduped') from a timeout
+   * ('staging-timeout') from a thrown error ('staging-error'). Lets the
+   * /api/signals response (and the cron log) make it obvious why staging
+   * produced no rows. Pre-fix this was silent: 0 staged with no signal.
+   */
+  stagingFailureReason?: 'staging-timeout' | 'staging-error' | 'all-deduped';
+  /** Free-form detail when stagingFailureReason is set. */
+  stagingFailureDetail?: string;
   /** Auto-execute outcome — populated only when auto-config.mode !== 'manual'. */
   autoExecute?: AutoExecuteResult;
 }
@@ -669,20 +679,34 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
   const stageInputs = perAccount.flatMap((r) => r.stageInputs);
   let staged = 0;
   let freshItems: InboxItem[] = [];
+  let stagingFailureReason: RunResult['stagingFailureReason'];
+  let stagingFailureDetail: string | undefined;
   if (stageInputs.length > 0) {
+    // Bumped to 15s in 2026-05. The previous 5s was tight for the locked
+    // appendInbox path (acquire + verify + readAll + writeAll over Netlify
+    // Blobs ≈ 4-8 round trips; a cold start could blow past 5s and silently
+    // drop every signal that day).
+    const STAGING_TIMEOUT_MS = 15_000;
     try {
       const persisted = await Promise.race([
         appendInbox(stageInputs),
         new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('staging timeout')), 5000),
+          setTimeout(() => reject(new Error('staging timeout')), STAGING_TIMEOUT_MS),
         ),
       ]);
       if (Array.isArray(persisted)) {
         freshItems = persisted;
         staged     = persisted.length;
+        if (staged === 0) {
+          stagingFailureReason = 'all-deduped';
+          stagingFailureDetail = `appendInbox returned 0 items — all ${stageInputs.length} inputs were dropped by same-source or cross-source dedup. Check console for "[inbox] cross-source dedup" entries.`;
+        }
       }
     } catch (err) {
-      console.warn('[signals/run] inbox staging failed:', err);
+      const msg = err instanceof Error ? err.message : String(err);
+      stagingFailureReason = msg.includes('timeout') ? 'staging-timeout' : 'staging-error';
+      stagingFailureDetail = msg;
+      console.warn('[signals/run] inbox staging failed:', msg);
     }
   }
 
@@ -868,6 +892,8 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
     result,
     proposed: stageInputs.length,
     staged,
+    stagingFailureReason,
+    stagingFailureDetail,
     autoExecute: autoExecuteResult,
   };
 }

@@ -44,8 +44,15 @@ export async function POST() {
   try { await requireAuth(); } catch { return unauthorized(); }
 
   try {
-    const { result, proposed, staged } = await runSignalsAndStage();
-    return NextResponse.json({ ok: true, staged, proposed, result });
+    const run = await runSignalsAndStage();
+    return NextResponse.json({
+      ok:       true,
+      staged:   run.staged,
+      proposed: run.proposed,
+      stagingFailureReason: run.stagingFailureReason,
+      stagingFailureDetail: run.stagingFailureDetail,
+      result:   run.result,
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('[/api/signals POST]', err);
