@@ -33,10 +33,8 @@ import {
 import { autoExecute, type AutoExecuteResult } from './auto-execute';
 import { loadAutoConfig } from './auto-config';
 import { buildDailyPlan, classifySignalTier } from './daily-plan';
-import { buildDigest, shouldSend } from './daily-digest';
 import { archiveDailyPlan } from './plan-archive';
-import { recordHeartbeat, getCronHealth } from './cron-health';
-import { sendNotification } from '../notifications';
+import { recordHeartbeat } from './cron-health';
 import { runOptionScan } from './option-scan';
 import { getFundMetadata } from '../data/fund-metadata';
 import { getServerStrategyTargets } from '../strategy-store';
@@ -879,25 +877,13 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
       }
     }));
 
-    // Pull current cron health for the digest. Read happens AFTER we recorded
-    // this run's heartbeat, so health reflects the just-finished cycle.
-    const cronHealth = await getCronHealth().catch(() => undefined);
-
-    if (shouldSend({ plan, autoExecute: autoExecuteResult, cronHealth })) {
-      const dashboardUrl = process.env.URL || process.env.DEPLOY_URL || undefined;
-      const digest = buildDigest({
-        plan,
-        autoExecute: autoExecuteResult,
-        dashboardUrl: dashboardUrl ? `${dashboardUrl}/dashboard` : undefined,
-        cronHealth,
-      });
-      const sent = await sendNotification(digest);
-      if (!sent.delivered) {
-        console.warn('[signals/run] digest not delivered:', sent.reason);
-      }
-    }
+    // Email send is intentionally NOT here as of 2026-05. The after-close
+    // signal engine just stages signals and archives the plan; the
+    // daily-rebalance cron (15 min later) is the single consolidation point
+    // that reads this archived plan + the morning alerts + its own drift
+    // result and sends one combined email. See netlify/functions/daily-rebalance.mts.
   } catch (err) {
-    console.warn('[signals/run] daily digest failed:', err);
+    console.warn('[signals/run] post-run bookkeeping failed:', err);
   }
 
   return {

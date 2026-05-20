@@ -12,7 +12,7 @@
  *   1. Owner (already logged in on desktop) calls GET /api/auth/link-device
  *      and receives a one-time URL with a signed token.
  *   2. Owner opens that URL on the second device. /api/auth/link verifies the
- *      token and sets `device_link` as a 10-minute HttpOnly cookie, then
+ *      token and sets `device_link` as a 1-hour HttpOnly cookie, then
  *      redirects to /api/auth/login to start the normal Schwab OAuth flow.
  *   3. The callback gate accepts a valid `device_link` cookie in lieu of a
  *      session cookie, then deletes it after success.
@@ -25,7 +25,7 @@ import { SignJWT, jwtVerify } from 'jose';
 import { cookies } from 'next/headers';
 
 export const DEVICE_LINK_COOKIE = 'device_link';
-export const DEVICE_LINK_TTL_SECONDS = 10 * 60;
+export const DEVICE_LINK_TTL_SECONDS = 60 * 60;
 const ALG = 'HS256';
 
 function getSecret(): Uint8Array {

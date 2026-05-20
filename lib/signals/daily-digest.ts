@@ -21,6 +21,8 @@
 import type { DailyPlan } from './daily-plan';
 import type { AutoExecuteResult } from './auto-execute';
 import type { CronHealth } from './cron-health';
+import type { StoredAlert } from '../storage';
+import type { RebalanceCronResult } from '../rebalance/cron';
 
 export interface DigestInput {
   plan:        DailyPlan;
@@ -29,6 +31,18 @@ export interface DigestInput {
   dashboardUrl?: string;
   /** Optional cron health snapshot — surfaced as a warning when stale. */
   cronHealth?: CronHealth;
+  /**
+   * Optional alerts written by the morning daily-alert cron earlier today.
+   * Filtered to "unread, today only" by the caller so the digest reflects
+   * only fresh alerts from this calendar day.
+   */
+  morningAlerts?: StoredAlert[];
+  /**
+   * Optional drift-rebalance result from the daily-rebalance cron. Renders
+   * a brief per-account summary at the bottom so the user can see which
+   * accounts drifted enough to stage rebalance orders.
+   */
+  rebalance?: RebalanceCronResult;
 }
 
 export interface FormattedDigest {
@@ -40,11 +54,17 @@ export interface FormattedDigest {
 }
 
 /**
- * Should we send an email for this digest? Returns false when nothing
- * actionable happened. Conservative: when in doubt, send.
+ * Should we send an email for this digest? Historically this gated the
+ * after-close signal-engine cron's email — the engine was "quiet by default"
+ * and only emailed on actionable days.
+ *
+ * As of 2026-05 the consolidating cron (daily-rebalance) calls buildDigest
+ * directly and ALWAYS sends weekday emails, so this function is no longer on
+ * that critical path. It's still exported because the manual /api/recap-stats
+ * route and a few ad-hoc tools call it to decide whether to nudge the user.
  */
 export function shouldSend(input: DigestInput): boolean {
-  const { plan, autoExecute, cronHealth } = input;
+  const { plan, autoExecute, cronHealth, morningAlerts, rebalance } = input;
   // Always send when defense or kill switch is active — the user needs to know.
   if (plan.inDefenseMode || plan.killSwitchActive) return true;
   // Always send when the engine is stale or errored — most important signal.
@@ -55,6 +75,10 @@ export function shouldSend(input: DigestInput): boolean {
   if (autoExecute && autoExecute.executed > 0) return true;
   // Send when auto-execute was tripped by circuit breaker.
   if (autoExecute && autoExecute.breakerTripped) return true;
+  // Send when the morning alert cron flagged anything at danger/warn level.
+  if (morningAlerts && morningAlerts.some((a) => a.level !== 'ok')) return true;
+  // Send when the drift-rebalance cron staged orders.
+  if (rebalance && rebalance.accounts.some((a) => a.staged > 0)) return true;
   // Otherwise: clean day, no email.
   return false;
 }
@@ -68,10 +92,20 @@ function fmt$(n: number): string {
   });
 }
 
-function buildSubject(plan: DailyPlan, autoExecute?: AutoExecuteResult, cronHealth?: CronHealth): string {
+function buildSubject(
+  plan: DailyPlan,
+  autoExecute?: AutoExecuteResult,
+  cronHealth?: CronHealth,
+  morningAlerts?: StoredAlert[],
+  rebalance?: RebalanceCronResult,
+): string {
   if (cronHealth?.isStale)               return 'Autopilot: engine is stale';
   if (plan.killSwitchActive)             return 'Autopilot: kill switch tripped';
   if (plan.inDefenseMode)                return 'Autopilot: defense mode active';
+  if (morningAlerts && morningAlerts.some((a) => a.level === 'danger')) {
+    const n = morningAlerts.filter((a) => a.level === 'danger').length;
+    return `Autopilot: ${n} morning alert${n === 1 ? '' : 's'}`;
+  }
   if (plan.counts.approval > 0) {
     return `Autopilot: ${plan.counts.approval} item${plan.counts.approval === 1 ? '' : 's'} need${plan.counts.approval === 1 ? 's' : ''} approval`;
   }
@@ -80,6 +114,10 @@ function buildSubject(plan: DailyPlan, autoExecute?: AutoExecuteResult, cronHeal
   }
   if (autoExecute && autoExecute.breakerTripped) {
     return 'Autopilot: circuit breaker tripped';
+  }
+  const rebalanceStaged = rebalance?.accounts.reduce((s, a) => s + a.staged, 0) ?? 0;
+  if (rebalanceStaged > 0) {
+    return `Autopilot: drift rebalance staged ${rebalanceStaged} order${rebalanceStaged === 1 ? '' : 's'}`;
   }
   return 'Autopilot: daily summary';
 }
@@ -118,8 +156,8 @@ function shortHash(hash: string): string {
 }
 
 export function buildDigest(input: DigestInput): FormattedDigest {
-  const { plan, autoExecute, dashboardUrl, cronHealth } = input;
-  const subject = buildSubject(plan, autoExecute, cronHealth);
+  const { plan, autoExecute, dashboardUrl, cronHealth, morningAlerts, rebalance } = input;
+  const subject = buildSubject(plan, autoExecute, cronHealth, morningAlerts, rebalance);
 
   // ─── Plain text body ────────────────────────────────────────────────────────
   const lines: string[] = [];
@@ -212,7 +250,49 @@ export function buildDigest(input: DigestInput): FormattedDigest {
     lines.push('');
   }
 
-  if (plan.counts.total === 0 && !autoExecute?.executed) {
+  // ── Morning alert digest (from daily-alert cron earlier today) ───────────
+  if (morningAlerts && morningAlerts.length > 0) {
+    const danger = morningAlerts.filter((a) => a.level === 'danger');
+    const warn   = morningAlerts.filter((a) => a.level === 'warn');
+    const ok     = morningAlerts.filter((a) => a.level === 'ok');
+    lines.push(
+      `MORNING CHECK — ${danger.length} danger / ${warn.length} warn / ${ok.length} ok:`,
+    );
+    for (const a of [...danger, ...warn]) {
+      const tag = a.level === 'danger' ? '⛔' : '⚠';
+      lines.push(`  ${tag} ${a.rule}: ${a.detail}`);
+    }
+    if (danger.length === 0 && warn.length === 0) {
+      lines.push('  • All clear at open.');
+    }
+    lines.push('');
+  }
+
+  // ── Drift rebalance summary (from daily-rebalance cron just now) ─────────
+  if (rebalance && rebalance.accounts.length > 0) {
+    const staged = rebalance.accounts.reduce((s, a) => s + a.staged, 0);
+    const drifted = rebalance.accounts.filter((a) => a.drift > 2);
+    lines.push(
+      `DRIFT REBALANCE — ${rebalance.accounts.length} account(s), ` +
+        `${drifted.length} drifted, ${staged} order(s) staged:`,
+    );
+    for (const a of rebalance.accounts) {
+      const tag = a.skipped
+        ? `skipped (${a.skipped})`
+        : a.error
+        ? `error: ${a.error}`
+        : `staged ${a.staged}`;
+      lines.push(`  [${shortHash(a.accountHash)}] drift=${a.drift.toFixed(1)}% — ${tag}`);
+    }
+    lines.push('');
+  }
+
+  if (
+    plan.counts.total === 0 &&
+    !autoExecute?.executed &&
+    !(morningAlerts && morningAlerts.some((a) => a.level !== 'ok')) &&
+    !(rebalance && rebalance.accounts.some((a) => a.staged > 0))
+  ) {
     lines.push('Engine ran clean — no actions today.');
     lines.push('');
   }
@@ -224,7 +304,7 @@ export function buildDigest(input: DigestInput): FormattedDigest {
   const text = lines.join('\n');
 
   // ─── HTML body ──────────────────────────────────────────────────────────────
-  const html = renderHtml(plan, autoExecute, dashboardUrl);
+  const html = renderHtml(plan, autoExecute, dashboardUrl, morningAlerts, rebalance);
 
   // ─── Idempotency: one digest per date ───────────────────────────────────────
   const date = new Date(plan.generatedAt).toISOString().slice(0, 10);
@@ -233,7 +313,13 @@ export function buildDigest(input: DigestInput): FormattedDigest {
   return { subject, text, html, idempotencyKey };
 }
 
-function renderHtml(plan: DailyPlan, autoExecute: AutoExecuteResult | undefined, dashboardUrl?: string): string {
+function renderHtml(
+  plan: DailyPlan,
+  autoExecute: AutoExecuteResult | undefined,
+  dashboardUrl?: string,
+  morningAlerts?: StoredAlert[],
+  rebalance?: RebalanceCronResult,
+): string {
   const section = (color: string, title: string, rows: string[]): string => {
     if (rows.length === 0) return '';
     return `
@@ -259,6 +345,35 @@ function renderHtml(plan: DailyPlan, autoExecute: AutoExecuteResult | undefined,
   const tier1 = section('#10b981', 'Tier 1 — Auto-eligible', plan.actions.auto.map(actionRowHtml));
   const tier2 = section('#f59e0b', 'Tier 2 — Needs approval', plan.actions.approval.map(actionRowHtml));
   const tier3 = section('#06b6d4', 'Tier 3 — Alerts',         plan.actions.alert.map(actionRowHtml));
+
+  // Morning alert rows
+  const morningRows = (morningAlerts ?? [])
+    .filter((a) => a.level !== 'ok')
+    .map((a) => {
+      const color = a.level === 'danger' ? '#dc2626' : '#f59e0b';
+      return `<span style="color: ${color}; font-weight: 600;">${a.level.toUpperCase()}</span> <strong>${a.rule}</strong><br><span style="color: #555; font-size: 13px;">${a.detail}</span>`;
+    });
+  const morningSection =
+    morningAlerts && morningAlerts.length > 0
+      ? section('#8b5cf6', 'Morning check', morningRows.length > 0 ? morningRows : ['<em style="color: #888;">All clear at open.</em>'])
+      : '';
+
+  // Drift rebalance rows
+  const rebalanceRows = (rebalance?.accounts ?? []).map((a) => {
+    const driftColor = a.drift > 5 ? '#dc2626' : a.drift > 2 ? '#f59e0b' : '#10b981';
+    const status = a.skipped
+      ? `<span style="color: #888;">skipped (${a.skipped})</span>`
+      : a.error
+      ? `<span style="color: #dc2626;">error: ${a.error}</span>`
+      : a.staged > 0
+      ? `<strong>${a.staged}</strong> order${a.staged === 1 ? '' : 's'} staged`
+      : `<span style="color: #888;">no action</span>`;
+    return `<code style="font-family: monospace;">${a.accountHash.slice(0, 8)}…</code> drift <span style="color: ${driftColor}; font-weight: 600;">${a.drift.toFixed(1)}%</span> — ${status}`;
+  });
+  const rebalanceSection =
+    rebalance && rebalance.accounts.length > 0
+      ? section('#0ea5e9', 'Drift rebalance', rebalanceRows)
+      : '';
 
   const gateWarning =
     plan.killSwitchActive ? '<p style="color: #dc2626; font-weight: bold;">⚠ Margin kill switch tripped — all new purchases paused.</p>' :
@@ -293,10 +408,15 @@ function renderHtml(plan: DailyPlan, autoExecute: AutoExecuteResult | undefined,
   </p>
   ${gateWarning}
   ${autoSummary}
+  ${morningSection}
   ${tier1}
   ${tier2}
   ${tier3}
-  ${plan.counts.total === 0 && !autoExecute?.executed
+  ${rebalanceSection}
+  ${plan.counts.total === 0
+    && !autoExecute?.executed
+    && !(morningAlerts && morningAlerts.some((a) => a.level !== 'ok'))
+    && !(rebalance && rebalance.accounts.some((a) => a.staged > 0))
     ? '<p style="color: #888; font-style: italic;">Engine ran clean — no actions today.</p>'
     : ''}
   ${dashboardLink}

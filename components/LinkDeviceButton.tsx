@@ -100,7 +100,7 @@ export function LinkDeviceButton() {
                 </h2>
                 <p className="text-xs text-[#7c82a0] mt-1 leading-relaxed">
                   Open this URL on the device you want to authorize, then click
-                  Connect Schwab on that device. The link expires in 10 minutes.
+                  Connect Schwab on that device. The link is valid for 1 hour.
                 </p>
               </div>
               <button
