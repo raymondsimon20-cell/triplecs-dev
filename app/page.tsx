@@ -16,6 +16,10 @@ export default async function Home({
     state_mismatch: 'Security check failed. Please try again.',
     token_exchange_failed: 'Could not exchange authorization code. Please try again.',
     missing_env: 'App is not configured. Check environment variables.',
+    oauth_not_permitted:
+      'This device isn’t authorized yet. From a device that’s already logged in, open Link new device and follow the URL here.',
+    invalid_device_link:
+      'Device link expired or invalid. Generate a fresh link from a logged-in device.',
   };
 
   const errorMsg = searchParams.error

@@ -39,6 +39,7 @@ import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyTargetsFor } from '@/components/SettingsPanel';
+import { LinkDeviceButton } from '@/components/LinkDeviceButton';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
@@ -1023,6 +1024,7 @@ export default function DashboardPage() {
                 pillarSummary={account.pillarSummary}
                 dividendsAnnual={dividendsTotal}
               />
+              <LinkDeviceButton />
               <form action="/api/auth/logout" method="POST">
                 <button
                   type="submit"

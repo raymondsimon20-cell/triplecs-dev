@@ -2,6 +2,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens } from '@/lib/schwab/auth';
 import { saveTokens, getTokens } from '@/lib/storage';
 import { createSession, getSession } from '@/lib/session';
+import {
+  hasValidDeviceLinkCookie,
+  DEVICE_LINK_COOKIE,
+} from '@/lib/device-link';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,17 +41,22 @@ export async function GET(req: NextRequest) {
   // who completed the OAuth dance (knowing the deployed redirect URL +
   // forging or stealing the `oauth_state` cookie) could overwrite the
   // stored tokens with their own and silently take over the session.
-  // Rule: if tokens already exist, the caller MUST already hold a valid
-  // current session cookie. A fresh install with no tokens stored is the
-  // ONLY case where an unauthenticated OAuth completion succeeds.
-  // Additionally honor an optional env allowlist (ALLOWED_OAUTH_EMAILS,
-  // comma-separated) when set, so admin-controlled deployments can name
-  // exactly which Schwab account is permitted to link.
+  //
+  // Rule: if tokens already exist, the caller MUST present proof that
+  // they're the legitimate owner. Either:
+  //   (a) a valid `triple_c_session` cookie — re-auth from a known device, or
+  //   (b) a valid `device_link` cookie — a new device authorized by the owner
+  //       via /api/auth/link-device (see lib/device-link.ts).
+  // A fresh install with no tokens stored is the only case where an
+  // unauthenticated OAuth completion succeeds.
   const existingTokens = await getTokens().catch(() => null);
   const existingSession = await getSession();
+  const validDeviceLink = await hasValidDeviceLinkCookie();
 
-  if (existingTokens && !existingSession?.authenticated) {
-    console.warn('[oauth] callback rejected — tokens exist but caller has no valid session');
+  if (existingTokens && !existingSession?.authenticated && !validDeviceLink) {
+    console.warn(
+      '[oauth] callback rejected — tokens exist but caller has no valid session or device-link',
+    );
     return NextResponse.redirect(appUrl('/?error=oauth_not_permitted'));
   }
 
@@ -67,6 +76,7 @@ export async function GET(req: NextRequest) {
       path: '/',
     });
     response.cookies.delete('oauth_state');
+    response.cookies.delete(DEVICE_LINK_COOKIE);
 
     return response;
   } catch (err) {
