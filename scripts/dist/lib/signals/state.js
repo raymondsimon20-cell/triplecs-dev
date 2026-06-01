@@ -59,6 +59,7 @@ function defaultSignalState() {
         freedomRatioHistory: [],
         prevMonth: null,
         afwThisMonth: { month: currentYearMonth(), fired: false },
+        triplesDipLadder: {},
     };
 }
 // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -81,6 +82,7 @@ function mergeWithDefaults(raw) {
         pivot: { ...defaults.pivot, ...(raw.pivot ?? {}) },
         afwThisMonth: { ...defaults.afwThisMonth, ...(raw.afwThisMonth ?? {}) },
         freedomRatioHistory: raw.freedomRatioHistory ?? [],
+        triplesDipLadder: raw.triplesDipLadder ?? {},
     };
 }
 // ─── Public API ──────────────────────────────────────────────────────────────
