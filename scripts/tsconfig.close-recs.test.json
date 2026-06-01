@@ -1,0 +1,22 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2020",
+    "outDir": "./dist",
+    "rootDir": "..",
+    "noEmit": false,
+    "jsx": "preserve",
+    "isolatedModules": false,
+    "paths": {
+      "@/*": ["../*"]
+    },
+    "skipLibCheck": true
+  },
+  "include": [
+    "./test-afw-close-recs.ts",
+    "../lib/options/afw-close-recs.ts",
+    "../lib/schwab/types.ts"
+  ]
+}
