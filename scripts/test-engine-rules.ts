@@ -27,6 +27,7 @@ import {
 } from '../lib/signals/engine';
 import { defaultSignalState } from '../lib/signals/state';
 import { getFundMetadata } from '../lib/data/fund-metadata';
+import { pickTrimTarget } from '../lib/rebalance/cron';
 
 // ─── Test harness ────────────────────────────────────────────────────────────
 
@@ -429,6 +430,302 @@ test('skips when per-candidate size would be sub-$100 even with budget ≥ $100'
     assert.ok(f.sizeDollars >= 100,
       `PILLAR_FILL ${f.ticker} size $${f.sizeDollars} below per-candidate floor`);
   }
+});
+
+// ─── TRIPLES_DIP_LADDER tests ────────────────────────────────────────────────
+//
+// The ladder fires a fixed-size BUY each fresh 5% drop below a per-ticker
+// anchor high, only when:
+//   - combined SOXL+UPRO+TQQQ weight < 10%
+//   - AFW headroom ≥ $10k (or undefined for legacy paths)
+//   - not in defense mode, not killSwitch, AFW_TRIGGER didn't fire this run.
+// State carries anchorHigh + lastFiredStep per ticker between runs.
+
+console.log('\nTRIPLES_DIP_LADDER');
+
+// Helper: build a fresh state with a pre-seeded ladder anchor for one or more tickers.
+function stateWithLadder(anchors: Record<string, { anchorHigh: number; lastFiredStep?: number }>) {
+  const s = defaultSignalState();
+  for (const [sym, { anchorHigh, lastFiredStep }] of Object.entries(anchors)) {
+    s.triplesDipLadder[sym] = { anchorHigh, lastFiredStep: lastFiredStep ?? 0 };
+  }
+  return s;
+}
+
+// Common: empty portfolio (low triples weight so the 10% gate doesn't fire),
+// enough cash for AFW to pass, flat SPY history so AFW_TRIGGER doesn't fire.
+function ladderInputs(overrides: Partial<EngineInputs> = {}): EngineInputs {
+  return baseInputs({
+    positions: [],
+    cash: 100_000,
+    afwDollars: 50_000,
+    spyHistory: Array(25).fill(500),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 20, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+    ...overrides,
+  });
+}
+
+test('seeds anchor on first run and does not fire (no prior anchor)', () => {
+  const result = runSignalEngine(ladderInputs({ state: defaultSignalState() }));
+  const fires = findSignals(result.signals, 'TRIPLES_DIP_LADDER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 0, 'no BUYs on first run — anchor just being seeded');
+  // Anchor should be seeded for each configured ticker.
+  for (const sym of ['SOXL', 'UPRO', 'TQQQ']) {
+    const slot = result.nextState.triplesDipLadder[sym];
+    assert.ok(slot, `expected anchor seeded for ${sym}`);
+    assert.equal(slot.lastFiredStep, 0);
+  }
+});
+
+test('fires once when a single ticker drops a fresh 5% below its anchor', () => {
+  // Anchor SOXL at 20, drop price to 18.9 (= -5.5%, step 1).
+  const result = runSignalEngine(ladderInputs({
+    state: stateWithLadder({ SOXL: { anchorHigh: 20 }, UPRO: { anchorHigh: 50 }, TQQQ: { anchorHigh: 50 } }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 18.9, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  const fires = findSignals(result.signals, 'TRIPLES_DIP_LADDER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 1, `expected exactly 1 BUY (MAX_STEPS_PER_RUN=1); got ${buys.length}`);
+  assert.equal(buys[0].ticker, 'SOXL', `expected SOXL to fire first; got ${buys[0].ticker}`);
+  // SOXL gets 50% of the $1k per-step budget = $500.
+  assert.ok(Math.abs(buys[0].sizeDollars - 500) < 0.01, `expected $500 size, got $${buys[0].sizeDollars}`);
+  // State should reflect the step bump.
+  assert.equal(result.nextState.triplesDipLadder.SOXL.lastFiredStep, 1);
+});
+
+test('does not refire on bounce back above the step', () => {
+  // SOXL already fired step 1 at -5%. Price bounces back to -3% (above step 1
+  // but still below anchor). Should NOT refire.
+  const result = runSignalEngine(ladderInputs({
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 20, lastFiredStep: 1 },
+      UPRO: { anchorHigh: 50 },
+      TQQQ: { anchorHigh: 50 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 19.4, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  const buys = findSignals(result.signals, 'TRIPLES_DIP_LADDER').filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 0, 'should not refire on a bounce within already-fired step');
+  assert.equal(result.nextState.triplesDipLadder.SOXL.lastFiredStep, 1, 'step should not regress');
+});
+
+test('rearms on new anchor high and resumes laddering from fresh anchor', () => {
+  // SOXL had fired step 2 at the old anchor (20). New price 22 sets new high.
+  const result = runSignalEngine(ladderInputs({
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 20, lastFiredStep: 2 },
+      UPRO: { anchorHigh: 50 },
+      TQQQ: { anchorHigh: 50 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 22, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  assert.equal(result.nextState.triplesDipLadder.SOXL.anchorHigh, 22, 'anchor should be reset to new high');
+  assert.equal(result.nextState.triplesDipLadder.SOXL.lastFiredStep, 0, 'lastFiredStep should reset to 0');
+});
+
+test('fires next step when ladder progresses past the previous fire', () => {
+  // SOXL anchor 20, lastFiredStep=1 (so step 1 / -5% already taken).
+  // Price drops to 17.9 → drawdown = 10.5% → currentStep = 2 → fires.
+  const result = runSignalEngine(ladderInputs({
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 20, lastFiredStep: 1 },
+      UPRO: { anchorHigh: 50 },
+      TQQQ: { anchorHigh: 50 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 17.9, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  const buys = findSignals(result.signals, 'TRIPLES_DIP_LADDER').filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 1);
+  assert.equal(buys[0].ticker, 'SOXL');
+  assert.equal(result.nextState.triplesDipLadder.SOXL.lastFiredStep, 2);
+});
+
+test('skips entirely when combined triples weight ≥ 10% (re-added gate)', () => {
+  // Build a portfolio where SOXL+UPRO+TQQQ together are ~12% of $100k total.
+  // SOXL drops below step 1 — without the gate this would fire.
+  const result = runSignalEngine(ladderInputs({
+    positions: [
+      enrichedPosition('UPRO', 100, 5_000),
+      enrichedPosition('TQQQ', 100, 5_000),
+      enrichedPosition('SOXL', 100, 2_000),
+      enrichedPosition('SCHD', 1100, 88_000),
+    ],
+    cash: 0,
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 25 },
+      UPRO: { anchorHigh: 60 },
+      TQQQ: { anchorHigh: 60 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 20, SCHD: 80, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60 },
+  }));
+  const fires = findSignals(result.signals, 'TRIPLES_DIP_LADDER');
+  const buys = fires.filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 0, 'gate should suppress BUYs when combined weight ≥ 10%');
+  // Should still emit the INFO gate notice since a step would have fired.
+  const infos = fires.filter((s) => s.direction === 'INFO');
+  assert.ok(infos.length >= 1, 'expected INFO note explaining the gate');
+});
+
+test('skips when AFW headroom < $10k floor (and surfaces INFO)', () => {
+  const result = runSignalEngine(ladderInputs({
+    afwDollars: 4_000,
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 20 },
+      UPRO: { anchorHigh: 50 },
+      TQQQ: { anchorHigh: 50 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 18.9, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  const fires = findSignals(result.signals, 'TRIPLES_DIP_LADDER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 0, 'no BUYs when AFW < $10k headroom');
+  const infos = fires.filter((s) => s.direction === 'INFO');
+  assert.ok(infos.length >= 1, 'expected INFO note explaining the AFW skip');
+});
+
+test('skips when AFW_TRIGGER fires the same run (avoids double-buy at -10%)', () => {
+  // SPY dip + SOXL anchor drop. AFW_TRIGGER fires on the SPY -12%; ladder
+  // should yield to it for the day.
+  const result = runSignalEngine(ladderInputs({
+    spyHistory: [500, 500, 500, 500, 500, 500, 440],   // -12% triggers AFW
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 20 },
+      UPRO: { anchorHigh: 50 },
+      TQQQ: { anchorHigh: 50 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 18.9, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  const afwFires = findSignals(result.signals, 'AFW_TRIGGER').filter((s) => s.direction === 'BUY');
+  assert.ok(afwFires.length >= 1, 'expected AFW_TRIGGER to fire first');
+  const ladderBuys = findSignals(result.signals, 'TRIPLES_DIP_LADDER').filter((s) => s.direction === 'BUY');
+  assert.equal(ladderBuys.length, 0, 'ladder should yield to AFW_TRIGGER same-day');
+});
+
+test('skips SOXL fire when SOXL is at its 5% per-ticker cap, still fires next eligible ticker', () => {
+  // SOXL position = $6k of $100k portfolio = 6% (above 5% cap).
+  // UPRO/TQQQ small enough that combined triples stays under 10%.
+  // SOXL price drops a fresh step — should skip SOXL, fire UPRO instead.
+  const result = runSignalEngine(ladderInputs({
+    positions: [
+      enrichedPosition('SOXL', 300, 6_000),   // 6% of $100k → over 5% cap
+      enrichedPosition('UPRO', 20, 1_000),    // 1% → low
+      enrichedPosition('TQQQ', 20, 1_000),    // 1% → low; combined 8% < 10% gate
+      enrichedPosition('SCHD', 1150, 92_000),
+    ],
+    cash: 0,
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 25 },                   // price 18.9 → -24%, step 4
+      UPRO: { anchorHigh: 52.7 },                 // price 50  → -5.1%, step 1
+      TQQQ: { anchorHigh: 50 },                   // price 50  → flat, no step
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 18.9, SCHD: 80, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60 },
+  }));
+  const fires = findSignals(result.signals, 'TRIPLES_DIP_LADDER');
+  const buys  = fires.filter((s) => s.direction === 'BUY');
+  // Exactly one BUY, and it should be UPRO (not SOXL).
+  assert.equal(buys.length, 1, `expected 1 BUY (UPRO); got ${buys.length}: ${buys.map((b) => b.ticker).join(',')}`);
+  assert.equal(buys[0].ticker, 'UPRO', `expected UPRO fire when SOXL capped; got ${buys[0].ticker}`);
+  // INFO note about the SOXL cap should be present.
+  const capInfo = fires.find((s) => s.direction === 'INFO' && s.ticker === 'SOXL');
+  assert.ok(capInfo, 'expected INFO note explaining SOXL cap skip');
+  // SOXL lastFiredStep should bump to the current step so we don't re-emit
+  // the INFO on every subsequent run while price stays below.
+  assert.ok(
+    result.nextState.triplesDipLadder.SOXL.lastFiredStep > 0,
+    'expected SOXL lastFiredStep to advance even when cap-skipped',
+  );
+});
+
+test('SOXL cap does not affect UPRO/TQQQ fires when SOXL is under the cap', () => {
+  // SOXL at 3% (well under 5% cap). All three drop a fresh step.
+  // Per the iteration order (SOXL first in CONFIG.TRIPLES_DIP_WEIGHTS), SOXL
+  // should fire — no cap interference.
+  const result = runSignalEngine(ladderInputs({
+    positions: [
+      enrichedPosition('SOXL', 150, 3_000),   // 3% < cap
+      enrichedPosition('UPRO', 20, 1_000),
+      enrichedPosition('TQQQ', 20, 1_000),
+      enrichedPosition('SCHD', 1200, 95_000),
+    ],
+    cash: 0,
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 25 },
+      UPRO: { anchorHigh: 52.7 },
+      TQQQ: { anchorHigh: 52.7 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 18.9, SCHD: 79, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60 },
+  }));
+  const buys = findSignals(result.signals, 'TRIPLES_DIP_LADDER').filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 1);
+  assert.equal(buys[0].ticker, 'SOXL', 'SOXL should fire normally when under its cap');
+});
+
+test('skips in defense mode (equity ratio ≤ 40%)', () => {
+  // Force defense by deep margin: equity ratio = 20%.
+  const result = runSignalEngine(ladderInputs({
+    positions: [enrichedPosition('OXLC', 1000, 20_000)],
+    cash: 5_000,
+    marginDebt: 20_000,
+    state: stateWithLadder({
+      SOXL: { anchorHigh: 20 },
+      UPRO: { anchorHigh: 50 },
+      TQQQ: { anchorHigh: 50 },
+    }),
+    prices: { UPRO: 50, TQQQ: 50, SOXL: 18.9, SPY: 500, OXLC: 8, ULTY: 7, JEPI: 60, SCHD: 80 },
+  }));
+  assert.equal(result.inDefenseMode, true, 'expected defense mode');
+  const buys = findSignals(result.signals, 'TRIPLES_DIP_LADDER').filter((s) => s.direction === 'BUY');
+  assert.equal(buys.length, 0, 'no BUYs in defense mode');
+});
+
+// ─── pickTrimTarget (rebalance) tests ────────────────────────────────────────
+//
+// SOXL-first trim preference for the triples pillar — the bounce-side half
+// of the decay guardrail (pairs with the SOXL per-ticker cap in the ladder).
+
+console.log('\npickTrimTarget (rebalance triples preference)');
+
+test('triples pillar: prefers SOXL over the largest holding when SOXL meets the min-value floor', () => {
+  // Largest is UPRO ($10k). SOXL is smaller ($2k) but above the $500 floor.
+  // With the preference rule, SOXL should be picked.
+  const sorted = [
+    { symbol: 'UPRO', marketValue: 10_000 },
+    { symbol: 'TQQQ', marketValue: 6_000 },
+    { symbol: 'SOXL', marketValue: 2_000 },
+  ];
+  const picked = pickTrimTarget('triples', sorted);
+  assert.equal(picked.symbol, 'SOXL', `expected SOXL preference, got ${picked.symbol}`);
+});
+
+test('triples pillar: falls back to largest when SOXL position is below the $500 floor', () => {
+  // SOXL only $200 — not worth trimming. Falls back to largest (UPRO).
+  const sorted = [
+    { symbol: 'UPRO', marketValue: 10_000 },
+    { symbol: 'TQQQ', marketValue: 6_000 },
+    { symbol: 'SOXL', marketValue: 200 },
+  ];
+  const picked = pickTrimTarget('triples', sorted);
+  assert.equal(picked.symbol, 'UPRO', `expected fallback to UPRO, got ${picked.symbol}`);
+});
+
+test('triples pillar: falls back to largest when SOXL is not held at all', () => {
+  const sorted = [
+    { symbol: 'UPRO', marketValue: 10_000 },
+    { symbol: 'TQQQ', marketValue: 6_000 },
+  ];
+  const picked = pickTrimTarget('triples', sorted);
+  assert.equal(picked.symbol, 'UPRO');
+});
+
+test('non-triples pillars: no preference, just picks largest', () => {
+  // Income pillar — no SOXL preference applies. SCHD largest wins.
+  const sorted = [
+    { symbol: 'SCHD', marketValue: 20_000 },
+    { symbol: 'JEPI', marketValue: 10_000 },
+  ];
+  const picked = pickTrimTarget('income', sorted);
+  assert.equal(picked.symbol, 'SCHD');
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

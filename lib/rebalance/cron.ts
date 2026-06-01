@@ -142,6 +142,38 @@ function targetMapFor(strategy: { triplesPct: number; cornerstonePct: number; in
 }
 
 /**
+ * Per-pillar trim ordering preference. When a pillar is over-target, this
+ * picks which holding to trim — defaults to largest-by-value (caller already
+ * sorted that way), but allows a specific ticker to jump the queue if it's
+ * present with a meaningful position.
+ *
+ * Triples preference: SOXL is preferred over UPRO/TQQQ because it's a sector
+ * triple that decays during flat/choppy markets (Triple-Cs-Volume-7-Rules.md
+ * §2). Pairs with the per-ticker cap in the TRIPLES_DIP_LADDER signal rule —
+ * ladder buys SOXL heavy on dips, this trims it heavy on bounces, keeps the
+ * position from sitting and bleeding. Falls back to largest-by-value when
+ * SOXL isn't held at a trim-worthy size (< $500).
+ */
+const TRIM_PREFERRED_TICKER_BY_PILLAR: Record<string, string> = {
+  triples: 'SOXL',
+};
+const TRIM_PREFERENCE_MIN_VALUE = 500;
+
+export function pickTrimTarget<T extends { symbol: string; marketValue: number }>(
+  pillar:    string,
+  sorted:    T[],   // already largest-by-value first
+): T {
+  const preferredSym = TRIM_PREFERRED_TICKER_BY_PILLAR[pillar];
+  if (preferredSym) {
+    const preferred = sorted.find(
+      (p) => p.symbol === preferredSym && p.marketValue >= TRIM_PREFERENCE_MIN_VALUE,
+    );
+    if (preferred) return preferred;
+  }
+  return sorted[0];
+}
+
+/**
  * Build a small set of deterministic rebalance orders for ONE account.
  * Rule of thumb (matches Vol-7):
  *   - Income overweight → trim the biggest income position; 1/3 of proceeds
@@ -169,12 +201,11 @@ function buildOrders(
     if (d.pillar === 'cornerstone') continue;
     if (remainingBudget() <= 0) break;
     const trimDollars = (d.drift / 100) * slice.totalValue;
-    // Largest holding in this pillar gets trimmed.
     const positionsInPillar = slice.positions
       .filter((p) => (p.pillar ?? 'other') === d.pillar)
       .sort((a, b) => b.marketValue - a.marketValue);
     if (positionsInPillar.length === 0) continue;
-    const target = positionsInPillar[0];
+    const target = pickTrimTarget(d.pillar, positionsInPillar);
     const price = slice.prices[target.symbol];
     if (!price || price <= 0) continue;
     const shares = Math.floor(Math.min(trimDollars, target.marketValue * 0.5) / price);

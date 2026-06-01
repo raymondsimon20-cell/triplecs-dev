@@ -86,6 +86,24 @@ export interface AfwMonthFlag {
   fired:  boolean;
 }
 
+/**
+ * Per-ticker dip-ladder anchor used by TRIPLES_DIP_LADDER.
+ *
+ * The rule fires a fixed-size BUY each time the ticker drops a fresh 5%
+ * (TRIPLES_DIP_STEP_PCT) below its anchor. Bounces don't refire — only NEW
+ * lows past the most-recently-fired step. The anchor self-resets when the
+ * ticker prints a new high (price > anchorHigh), so the ladder rearms after
+ * a recovery.
+ *
+ *   - anchorHigh:    last observed all-run-history high for this ticker
+ *   - lastFiredStep: integer step number of the most recent fire (0 = none).
+ *                    e.g. 1 = first 5% step fired, 2 = -10% step fired, etc.
+ */
+export interface TriplesDipLadderTickerState {
+  anchorHigh:     number | null;
+  lastFiredStep:  number;
+}
+
 export interface SignalEngineState {
   schemaVersion:       number;
   lastRunAt:           number | null;
@@ -95,6 +113,8 @@ export interface SignalEngineState {
   freedomRatioHistory: FreedomRatioPoint[];
   prevMonth:           PrevMonthSnapshot | null;
   afwThisMonth:        AfwMonthFlag;
+  /** Per-ticker dip-ladder anchors. Keyed by symbol (UPRO, TQQQ, ...). */
+  triplesDipLadder:    Record<string, TriplesDipLadderTickerState>;
 }
 
 // ─── Defaults ────────────────────────────────────────────────────────────────
@@ -114,6 +134,7 @@ export function defaultSignalState(): SignalEngineState {
     freedomRatioHistory: [],
     prevMonth:           null,
     afwThisMonth:        { month: currentYearMonth(), fired: false },
+    triplesDipLadder:    {},
   };
 }
 
@@ -133,11 +154,12 @@ function mergeWithDefaults(raw: Partial<SignalEngineState> | null): SignalEngine
   return {
     ...defaults,
     ...raw,
-    defenseMode:  { ...defaults.defenseMode,  ...(raw.defenseMode  ?? {}) },
-    killSwitch:   { ...defaults.killSwitch,   ...(raw.killSwitch   ?? {}) },
-    pivot:        { ...defaults.pivot,        ...(raw.pivot        ?? {}) },
-    afwThisMonth: { ...defaults.afwThisMonth, ...(raw.afwThisMonth ?? {}) },
+    defenseMode:      { ...defaults.defenseMode,  ...(raw.defenseMode  ?? {}) },
+    killSwitch:       { ...defaults.killSwitch,   ...(raw.killSwitch   ?? {}) },
+    pivot:            { ...defaults.pivot,        ...(raw.pivot        ?? {}) },
+    afwThisMonth:     { ...defaults.afwThisMonth, ...(raw.afwThisMonth ?? {}) },
     freedomRatioHistory: raw.freedomRatioHistory ?? [],
+    triplesDipLadder: raw.triplesDipLadder ?? {},
   };
 }
 

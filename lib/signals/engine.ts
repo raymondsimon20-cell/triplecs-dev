@@ -288,6 +288,65 @@ export const CONFIG = {
    * headroom is below this, no new positions proposed regardless of pillar gap.
    */
   PILLAR_FILL_MIN_AFW_DOLLARS: 5_000,
+
+  // ── TRIPLES_DIP_LADDER — buy-the-dip ladder on triple-leveraged ETFs ──────
+  // Per-ticker pivot-anchored ladder. Every fresh 5% drop below the anchor
+  // high fires one BUY of fixed size. Bounces don't refire (only NEW lows
+  // past the most recently fired step). The anchor self-resets when the
+  // ticker prints a new high (price > anchorHigh).
+  //
+  // Differences vs AFW_TRIGGER:
+  //   - 5% step (vs 10%)
+  //   - Per-ticker anchor (vs SPY shared)
+  //   - Fires REGARDLESS of current Triples weight (AFW_TRIGGER gates at <10%)
+  //   - Skips when AFW_TRIGGER fired this run, to avoid double-buying at -10%.
+  //
+  // Margin safety: same AFW headroom floor as AFW_TRIGGER ($10K). Skipped in
+  // defense mode and when killSwitch active. Per-trade size stays under the
+  // auto-execute $5K cap.
+  //
+  // Vol-7 note: SOXL is a sector triple ("decays badly over time" per
+  // Triple-Cs-Volume-7-Rules.md §2). Included per user request — keep an eye
+  // on its position size and trim on bounces. UPRO/TQQQ are the
+  // long-term-friendly core.
+  TRIPLES_DIP_STEP_PCT:         0.05,        // 5% step
+  TRIPLES_DIP_PER_STEP_DOLLARS: 1_000,       // total $ deployed per fresh step
+  /** Weighted split of the per-step budget across tickers. Must sum to 1.0. */
+  TRIPLES_DIP_WEIGHTS: {
+    SOXL: 0.50,  // prioritized "for now"
+    UPRO: 0.25,
+    TQQQ: 0.25,
+  } as Record<string, number>,
+  /** AFW headroom floor — same as AFW_TRIGGER. Below this the rule skips. */
+  TRIPLES_DIP_MIN_AFW_HEADROOM: 10_000,
+  /** Per-ticker minimum order size after weighting. Sub-floor fires are skipped. */
+  TRIPLES_DIP_MIN_TICKER_DOLLARS: 100,
+  /** Cap the step count we'll fire in one run (safety against bad anchor data). */
+  TRIPLES_DIP_MAX_STEPS_PER_RUN: 1,
+  /**
+   * Hard ceiling on combined triples (sum of TRIPLES_DIP_WEIGHTS tickers) as
+   * a fraction of total portfolio. At or above this, the ladder hard-skips —
+   * keeps the position from over-concentrating past Vol-7's "10% sweet spot
+   * in a bull market" target. AFW_TRIGGER's QDTE-divert covers what happens
+   * above this gate; this rule stays in its lane.
+   */
+  TRIPLES_DIP_MAX_COMBINED_WEIGHT: 0.10,
+  /**
+   * Per-ticker hard ceilings as a fraction of total portfolio. When a ticker
+   * is at or above its cap, the ladder skips THAT ticker's fire but continues
+   * to the next one in TRIPLES_DIP_WEIGHTS. Tickers not listed have no
+   * per-ticker cap (the combined-weight gate still applies).
+   *
+   * SOXL is capped because it's a sector triple that decays badly during
+   * flat/choppy periods (Triple-Cs-Volume-7-Rules.md §2: "Sector-specific
+   * triples (SOXL, TECL, LABU) decay badly over time"). Pairs with the
+   * SOXL-first trim preference in lib/rebalance/cron.ts — ladder fills it
+   * heavy on dips, trim drains it heavy on bounces, never lets it sit and
+   * decay past 5%.
+   */
+  TRIPLES_DIP_PER_TICKER_MAX_WEIGHT: {
+    SOXL: 0.05,
+  } as Record<string, number>,
 } as const;
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -485,6 +544,218 @@ function evalAfwTrigger(
   }
 
   return { signals, fired: true };
+}
+
+/**
+ * TRIPLES_DIP_LADDER — buy-the-dip ladder on triple-leveraged ETFs.
+ *
+ * Per-ticker pivot-anchored ladder. For each configured triple (SOXL, UPRO,
+ * TQQQ) we track an anchorHigh and the lastFiredStep in engine state. On each
+ * run:
+ *
+ *   1. If price > anchorHigh → bump anchor up, reset lastFiredStep to 0
+ *      (rearms the ladder after a recovery to new highs).
+ *   2. Compute currentStep = floor((1 - price/anchor) / 5%).
+ *   3. If currentStep > lastFiredStep → fire one BUY, bump lastFiredStep.
+ *      (Capped at MAX_STEPS_PER_RUN per run as a safety against bad data.)
+ *
+ * The "bounces don't refire" behavior falls out naturally — lastFiredStep
+ * only ever increments while below the anchor. The ladder rearms only on a
+ * NEW anchor high.
+ *
+ * Unlike AFW_TRIGGER this fires regardless of current Triples weight — the
+ * user explicitly wants to keep buying on dips even when triples are already
+ * at or above the 10% target. The hard backstop remains AFW headroom and the
+ * Schwab 50% margin ceiling (enforced by guardrails downstream).
+ *
+ * Skipped when:
+ *   - inDefense (equity ratio ≤ 0.40 — same as AFW_TRIGGER)
+ *   - killSwitchActive
+ *   - afwDollars < TRIPLES_DIP_MIN_AFW_HEADROOM
+ *   - afwTriggerFired this run (avoid double-buying at the -10% mark)
+ *   - missing/zero price data for the ticker (no fire on bad data)
+ *
+ * State mutation: returns nextLadder (a fresh map) — the caller writes it
+ * back into nextState.triplesDipLadder. No I/O in this function.
+ */
+function evalTriplesDipLadder(
+  prices:           Record<string, number>,
+  valuation:        PortfolioValuation,
+  inDefense:        boolean,
+  killSwitchActive: boolean,
+  afwDollars:       number | undefined,
+  afwTriggerFired:  boolean,
+  ladderState:      Record<string, { anchorHigh: number | null; lastFiredStep: number }>,
+  makeSignal:       MakeSignal,
+): {
+  signals:    TradeSignal[];
+  nextLadder: Record<string, { anchorHigh: number | null; lastFiredStep: number }>;
+} {
+  const nextLadder: Record<string, { anchorHigh: number | null; lastFiredStep: number }> = {};
+
+  // Always carry forward the existing ladder slots, even if we skip firing.
+  // The anchor needs to keep tracking new highs even during defense mode so
+  // that when conditions clear, the ladder picks up from the right anchor
+  // rather than re-anchoring on a depressed price.
+  for (const sym of Object.keys(CONFIG.TRIPLES_DIP_WEIGHTS)) {
+    const prev = ladderState[sym] ?? { anchorHigh: null, lastFiredStep: 0 };
+    const price = prices[sym];
+    if (typeof price === 'number' && price > 0) {
+      if (prev.anchorHigh == null || price > prev.anchorHigh) {
+        // New high → rearm the ladder.
+        nextLadder[sym] = { anchorHigh: price, lastFiredStep: 0 };
+      } else {
+        nextLadder[sym] = { ...prev };
+      }
+    } else {
+      // No price → carry prev unchanged.
+      nextLadder[sym] = { ...prev };
+    }
+  }
+
+  const signals: TradeSignal[] = [];
+
+  // Gate ordering: cheap-first, INFO-emit on the gates the user most needs to
+  // see surfaced (AFW low, combined-weight cap). The other gates fail silently
+  // — they're either dominant rules already emitting their own signals
+  // (defense/killSwitch) or expected coordination (AFW fired same day).
+  if (inDefense || killSwitchActive) return { signals, nextLadder };
+  if (afwTriggerFired)                return { signals, nextLadder };
+
+  // Combined-triples weight gate — keep the ladder out of "over-concentration"
+  // territory. AFW_TRIGGER still fires above this (with its QDTE redirect),
+  // so the user isn't blind to bigger dips — they just don't get the extra
+  // ladder leg into triples on top of an already-large position.
+  const combinedTriplesPct =
+    Object.keys(CONFIG.TRIPLES_DIP_WEIGHTS)
+      .reduce((acc, sym) => acc + (valuation.weightPcts[sym] ?? 0), 0) / 100;
+  if (combinedTriplesPct >= CONFIG.TRIPLES_DIP_MAX_COMBINED_WEIGHT) {
+    // Surface only when a step would have fired — otherwise the digest gets
+    // noisy with "ladder gated" lines on uneventful days.
+    const anyWouldFire = Object.entries(nextLadder).some(([sym, s]) => {
+      const price = prices[sym];
+      if (!price || s.anchorHigh == null) return false;
+      const step = Math.floor((1 - price / s.anchorHigh) / CONFIG.TRIPLES_DIP_STEP_PCT);
+      return step > s.lastFiredStep;
+    });
+    if (anyWouldFire) {
+      signals.push(makeSignal(
+        'TRIPLES_DIP_LADDER', 'WEIGHT_GATE', 'TRIPLES', 'INFO', 0, 'MEDIUM',
+        `Dip ladder gated: combined triples (${Object.keys(CONFIG.TRIPLES_DIP_WEIGHTS).join('+')}) at ` +
+          `${(combinedTriplesPct * 100).toFixed(1)}% ≥ ${(CONFIG.TRIPLES_DIP_MAX_COMBINED_WEIGHT * 100).toFixed(0)}% cap. ` +
+          `Skipping ladder fire. AFW_TRIGGER's QDTE redirect still covers deeper dips.`,
+        {
+          combinedTriplesPct: Math.round(combinedTriplesPct * 10000) / 100,
+          capPct:             CONFIG.TRIPLES_DIP_MAX_COMBINED_WEIGHT * 100,
+          tickers:            Object.keys(CONFIG.TRIPLES_DIP_WEIGHTS),
+        },
+      ));
+    }
+    return { signals, nextLadder };
+  }
+
+  if (typeof afwDollars === 'number' && afwDollars < CONFIG.TRIPLES_DIP_MIN_AFW_HEADROOM) {
+    // Surface the gate so the user understands why the ladder isn't firing
+    // even when prices are below trigger steps. Mirrors AFW_TRIGGER's pattern.
+    const anyBelowStep = Object.entries(nextLadder).some(([sym, s]) => {
+      const price = prices[sym];
+      if (!price || s.anchorHigh == null) return false;
+      const step = Math.floor((1 - price / s.anchorHigh) / CONFIG.TRIPLES_DIP_STEP_PCT);
+      return step > s.lastFiredStep;
+    });
+    if (anyBelowStep) {
+      signals.push(makeSignal(
+        'TRIPLES_DIP_LADDER', 'AFW_HEADROOM_LOW', 'AFW', 'INFO', 0, 'MEDIUM',
+        `Triples dip ladder ready to fire but AFW is only $${Math.round(afwDollars)} — ` +
+          `below the $${CONFIG.TRIPLES_DIP_MIN_AFW_HEADROOM} minimum headroom. Skipping to stay under Schwab's 50% margin cap.`,
+        { afwDollars, threshold: CONFIG.TRIPLES_DIP_MIN_AFW_HEADROOM },
+      ));
+    }
+    return { signals, nextLadder };
+  }
+
+  // Validate weights sum (defensive — catches typos in CONFIG edits).
+  const weightSum = Object.values(CONFIG.TRIPLES_DIP_WEIGHTS).reduce((a, b) => a + b, 0);
+  if (Math.abs(weightSum - 1) > 0.001) {
+    signals.push(makeSignal(
+      'TRIPLES_DIP_LADDER', 'CONFIG_ERROR', 'CONFIG', 'INFO', 0, 'HIGH',
+      `TRIPLES_DIP_WEIGHTS sum to ${weightSum.toFixed(3)}, not 1.0 — fix CONFIG before this rule will fire.`,
+      { weights: CONFIG.TRIPLES_DIP_WEIGHTS },
+    ));
+    return { signals, nextLadder };
+  }
+
+  let stepsFiredThisRun = 0;
+
+  for (const [sym, weight] of Object.entries(CONFIG.TRIPLES_DIP_WEIGHTS)) {
+    if (stepsFiredThisRun >= CONFIG.TRIPLES_DIP_MAX_STEPS_PER_RUN) break;
+
+    const slot  = nextLadder[sym];
+    const price = prices[sym];
+    if (!slot || slot.anchorHigh == null || !price || price <= 0) continue;
+
+    const drawdown   = 1 - price / slot.anchorHigh;
+    const currentStep = Math.floor(drawdown / CONFIG.TRIPLES_DIP_STEP_PCT);
+    if (currentStep <= slot.lastFiredStep) continue;
+
+    const sizeDollars = CONFIG.TRIPLES_DIP_PER_STEP_DOLLARS * weight;
+    if (sizeDollars < CONFIG.TRIPLES_DIP_MIN_TICKER_DOLLARS) continue;
+
+    const currentW = (valuation.weightPcts[sym] ?? 0) / 100;
+    const afwNote = typeof afwDollars === 'number' ? ` (AFW headroom: $${Math.round(afwDollars)})` : '';
+
+    // Per-ticker cap — skip this ticker if it's already at/above its
+    // individual ceiling (e.g. SOXL at 5%). Iteration continues to the next
+    // eligible ticker in TRIPLES_DIP_WEIGHTS rather than aborting the run.
+    // Surfaces an INFO note the first time it bites so the user understands
+    // why SOXL didn't fire despite the drop.
+    const perTickerCap = CONFIG.TRIPLES_DIP_PER_TICKER_MAX_WEIGHT[sym];
+    if (typeof perTickerCap === 'number' && currentW >= perTickerCap) {
+      signals.push(makeSignal(
+        'TRIPLES_DIP_LADDER',
+        `TICKER_CAP_${sym}`,
+        sym, 'INFO', 0, 'MEDIUM',
+        `Dip ladder: ${sym} at ${(currentW * 100).toFixed(1)}% ≥ ${(perTickerCap * 100).toFixed(0)}% per-ticker cap. ` +
+          `Skipping ${sym} fire (decay guardrail). Other ladder tickers may still fire.`,
+        {
+          ticker: sym, currentWeight: currentW, capWeight: perTickerCap,
+          drawdownPct: Math.round(drawdown * 10000) / 100, stepWouldHaveFired: currentStep,
+        },
+      ));
+      // Still mark the step as "fired" so we don't keep emitting this INFO
+      // every run while price stays below the step. The anchor will rearm
+      // naturally on a new high.
+      nextLadder[sym] = { ...slot, lastFiredStep: currentStep };
+      continue;
+    }
+
+    signals.push(makeSignal(
+      'TRIPLES_DIP_LADDER',
+      `BUY_${sym}`,
+      sym,
+      'BUY',
+      sizeDollars,
+      'HIGH',
+      `Dip ladder: ${sym} ${(drawdown * 100).toFixed(1)}% off anchor ($${slot.anchorHigh.toFixed(2)} → $${price.toFixed(2)}). ` +
+        `Step ${currentStep} (prev fired: ${slot.lastFiredStep}). Deploy $${sizeDollars.toFixed(0)}. ` +
+        `Current ${sym} weight: ${(currentW * 100).toFixed(1)}%${afwNote}.`,
+      {
+        ticker:        sym,
+        price,
+        anchorHigh:    slot.anchorHigh,
+        drawdownPct:   Math.round(drawdown * 10000) / 100,
+        stepFired:     currentStep,
+        prevStep:      slot.lastFiredStep,
+        currentWeight: currentW,
+        afwDollars,
+      },
+    ));
+
+    nextLadder[sym] = { ...slot, lastFiredStep: currentStep };
+    stepsFiredThisRun += 1;
+  }
+
+  return { signals, nextLadder };
 }
 
 function evalAirbag(
@@ -1057,10 +1328,11 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
   // Start from the previous state — each rule mutates a copy of the slice it owns.
   const nextState: SignalEngineState = {
     ...inputs.state,
-    defenseMode: { ...inputs.state.defenseMode },
-    killSwitch:  { ...inputs.state.killSwitch },
-    pivot:       { ...inputs.state.pivot },
-    afwThisMonth: { ...inputs.state.afwThisMonth },
+    defenseMode:      { ...inputs.state.defenseMode },
+    killSwitch:       { ...inputs.state.killSwitch },
+    pivot:            { ...inputs.state.pivot },
+    afwThisMonth:     { ...inputs.state.afwThisMonth },
+    triplesDipLadder: { ...(inputs.state.triplesDipLadder ?? {}) },
   };
 
   const all: TradeSignal[] = [];
@@ -1085,6 +1357,22 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
       fired: true,
     };
   }
+
+  // 2b. Triples dip ladder — fires on every fresh 5% drop per-ticker below
+  //     a sticky anchor high. Gated by combined triples weight (≤10%), AFW
+  //     headroom, defense, killSwitch, and AFW_TRIGGER same-day fire.
+  const ladderResult = evalTriplesDipLadder(
+    inputs.prices,
+    valuation,
+    inDefense,
+    nextState.killSwitch.active,
+    inputs.afwDollars,
+    afwResult.fired,
+    inputs.state.triplesDipLadder ?? {},
+    makeSignal,
+  );
+  all.push(...ladderResult.signals);
+  nextState.triplesDipLadder = ladderResult.nextLadder;
 
   // 3. Airbag — sole owner of SPXU/SQQQ sizing.
   all.push(...evalAirbag(inputs.vix, inputs.spyHistory, valuation, makeSignal));
