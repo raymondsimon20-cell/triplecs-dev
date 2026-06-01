@@ -38,6 +38,7 @@ import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
+import { OptionsCloseRecsPanel } from '@/components/OptionsCloseRecsPanel';
 import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyTargetsFor } from '@/components/SettingsPanel';
 import { LinkDeviceButton } from '@/components/LinkDeviceButton';
 import { ThemeToggle } from '@/components/ThemeToggle';
@@ -1340,6 +1341,18 @@ export default function DashboardPage() {
                         accountHash={account.accountHash}
                         strategyTargets={strategyTargets}
                       />
+                    </div>
+                  </CollapsiblePanel>
+                  <CollapsiblePanel
+                    id="option-close-recs"
+                    title="Options AFW close-recs"
+                    icon={<Shield className="w-4 h-4 text-amber-400" />}
+                    accentClass="border-amber-500/40"
+                    iconContainerClass="bg-amber-500/10 border border-amber-500/20"
+                    defaultOpen={false}
+                  >
+                    <div className="pt-4">
+                      <OptionsCloseRecsPanel accountHash={account.accountHash} />
                     </div>
                   </CollapsiblePanel>
                 </>
