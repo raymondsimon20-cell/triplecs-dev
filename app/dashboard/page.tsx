@@ -1336,6 +1336,7 @@ export default function DashboardPage() {
                         totalValue={account.totalValue}
                         equity={account.equity}
                         marginBalance={account.marginBalance}
+                        afwDollars={account.availableForWithdrawal}
                         accountHash={account.accountHash}
                         strategyTargets={strategyTargets}
                       />

@@ -1,0 +1,22 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2020",
+    "outDir": "./dist",
+    "rootDir": "..",
+    "noEmit": false,
+    "jsx": "preserve",
+    "isolatedModules": false,
+    "paths": {
+      "@/*": ["../*"]
+    },
+    "skipLibCheck": true
+  },
+  "include": [
+    "./test-guardrails.ts",
+    "../lib/guardrails.ts",
+    "../lib/storage.ts"
+  ]
+}

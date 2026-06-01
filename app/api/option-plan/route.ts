@@ -42,8 +42,15 @@ import { getTokens } from '@/lib/storage';
 import { getOptionsChain } from '@/lib/schwab/client';
 import { cachedSystemPrompt, withContext } from '@/lib/ai/prompt-cache';
 import { loadFeedbackBlock, loadPaceBlock } from '@/lib/ai/recap-loader';
-import { getAutomationGate } from '@/lib/guardrails';
+import {
+  getAutomationGate,
+  validateProposedTrade,
+  type GuardrailContext,
+  type GuardrailViolation,
+  type ProposedTrade,
+} from '@/lib/guardrails';
 import { appendInbox } from '@/lib/inbox';
+import { fetchAccountState } from '@/lib/portfolio/fetch';
 
 export const dynamic = 'force-dynamic';
 
@@ -456,6 +463,60 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
         finalPlan.limitPrice = +Math.max(selectedContract.bid, Math.min(selectedContract.ask, finalPlan.limitPrice)).toFixed(2);
         finalPlan.contracts  = Math.max(1, Math.min(3, Math.floor(finalPlan.contracts)));
 
+        // ── Guardrail validation ─────────────────────────────────────────────
+        // Builds a minimal GuardrailContext from the account's current balances.
+        // The critical check here is AFW_HEADROOM: a short put can lock up
+        // strike × 100 × contracts in margin, and pre-trade AFW alone doesn't
+        // tell us whether the trade leaves us close to Schwab's 50% wall.
+        //
+        // Cash-secured assumption: sell_put follows Vol-6 framing as a
+        // "cash/margin-secured" short put. Using cash-secured here gives the
+        // most conservative margin estimate (full strike × 100 × contracts).
+        // If you want to size against naked Reg-T margin instead, pass
+        // option.style explicitly when extending the request body.
+        let guardrailViolations: GuardrailViolation[] = [];
+        let guardrailBlocked = false;
+        if (body.accountHash) {
+          try {
+            const state = await fetchAccountState(body.accountHash);
+            const ctx: GuardrailContext = {
+              totalValue:    state.totalValue,
+              equity:        state.equity,
+              marginBalance: state.marginBalance,
+              afwDollars:    state.afwDollars,
+              positions: state.positions.map((p) => ({
+                symbol:      p.instrument.symbol,
+                pillar:      p.pillar,
+                marketValue: p.marketValue,
+                shares:      p.longQuantity,
+              })),
+              pillars:      [],   // option-plan doesn't drive pillar drift; safe to leave empty
+              recentTrades: [],   // wash-sale doesn't apply to opening option trades
+            };
+            const proposed: ProposedTrade = {
+              symbol:      symbol.toUpperCase(),
+              instruction: finalPlan.instruction,
+              shares:      finalPlan.contracts,    // each = 100 shares of underlying
+              price:       finalPlan.limitPrice,
+              pillar:      position?.pillar ?? 'other',
+              option: {
+                kind:             'put',
+                style:            finalPlan.instruction === 'SELL_TO_OPEN' ? 'cash-secured' : 'naked',
+                strike:           selectedContract.strike,
+                underlyingPrice,
+              },
+            };
+            const result = validateProposedTrade(proposed, ctx);
+            guardrailViolations = result.violations;
+            guardrailBlocked    = !result.allowed;
+          } catch (err) {
+            // Fail-open on Schwab fetch errors with a logged warning — better
+            // to let the user see the plan than silently 500 mid-stream. The
+            // explicit miss is logged so we notice and can investigate.
+            console.warn('[option-plan] guardrail fetch failed (fail-open):', err);
+          }
+        }
+
         // Emit result first so the client always gets it; staging follows with
         // a timeout so a slow blob write can never block the response.
         const result = JSON.stringify({
@@ -463,9 +524,19 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
           contracts: finalPlan.contracts, limitPrice: finalPlan.limitPrice,
           rationale: finalPlan.rationale, selectedContract,
           validationPassed, symbol: symbol.toUpperCase(), underlyingPrice, mode,
+          violations: guardrailViolations,
+          blocked:    guardrailBlocked,
         });
         controller.enqueue(encoder.encode(`\n__RESULT__${result}`));
         controller.enqueue(encoder.encode('\n__DONE__'));
+
+        // Skip staging entirely if guardrails blocked the trade — surfacing
+        // a "you'll go under the AFW floor" violation on a row the user could
+        // one-click approve would be worse than no row at all.
+        if (guardrailBlocked) {
+          controller.close();
+          return;
+        }
 
         try {
           await Promise.race([
@@ -481,7 +552,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
               pillar:      position?.pillar,
               rationale:   finalPlan.rationale,
               aiMode:      mode,
-              violations:  [],
+              violations:  guardrailViolations,
               // Option trades always require human approval — auto-execute
               // does not touch contracts regardless of order size.
               tier:        'approval',

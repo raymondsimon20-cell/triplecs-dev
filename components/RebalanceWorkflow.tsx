@@ -208,6 +208,8 @@ interface Props {
   totalValue:      number;
   equity:          number;
   marginBalance:   number;
+  /** AFW (Available For Withdrawal) — powers the post-trade AFW-headroom guardrail. */
+  afwDollars?:     number;
   accountHash:     string;
   strategyTargets: StrategyTargets;
 }
@@ -218,6 +220,7 @@ export function RebalanceWorkflow({
   totalValue,
   equity,
   marginBalance,
+  afwDollars,
   accountHash,
   strategyTargets,
 }: Props) {
@@ -253,7 +256,7 @@ export function RebalanceWorkflow({
         // Pass accountHash so the server scopes its automation gate (defense
         // mode / kill-switch / user pause) to this account rather than the
         // household aggregate.
-        body: JSON.stringify({ totalValue, equity, positions, pillarSummary, targets, accountHash }),
+        body: JSON.stringify({ totalValue, equity, afwDollars, positions, pillarSummary, targets, accountHash }),
       });
 
       if (!res.ok || !res.body) {

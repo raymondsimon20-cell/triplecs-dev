@@ -15,12 +15,39 @@ import type { CashFlowEvent, PortfolioSnapshot } from './storage';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
+/**
+ * Option-specific metadata. Required for option instructions (the
+ * SELL_TO_OPEN / BUY_TO_OPEN / *_TO_CLOSE family) so margin-draw projection
+ * can size the trade's margin call correctly. Equity trades leave this unset.
+ *
+ *   - kind:             'put' or 'call'
+ *   - style:            'cash-secured' = full strike collateral set aside (short put)
+ *                       'naked'        = Reg-T-style margin (~20% underlying)
+ *                       'covered'      = backed by an existing position (short call)
+ *   - strike:           strike price in dollars (per share, not per contract)
+ *   - underlyingPrice:  current price of the underlying — required for
+ *                       'naked' Reg-T calculations. Optional for 'cash-secured'.
+ *
+ * For multi-leg orders (spreads, condors), the caller should pass the
+ * NET margin requirement on the dominant leg and set `style: 'cash-secured'`
+ * to be conservative, OR submit each leg as a separate ProposedTrade.
+ */
+export interface OptionMetadata {
+  kind:             'put' | 'call';
+  style:            'cash-secured' | 'naked' | 'covered';
+  strike:           number;
+  underlyingPrice?: number;
+}
+
 export interface ProposedTrade {
   symbol:      string;
   instruction: 'BUY' | 'SELL' | 'BUY_TO_OPEN' | 'SELL_TO_OPEN' | 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE';
+  /** For equities: share count. For options: contract count (each = 100 shares). */
   shares:      number;
   price:       number;
   pillar:      string;
+  /** Required for option instructions; omitted for equity trades. */
+  option?:     OptionMetadata;
 }
 
 export interface PositionContext {
@@ -53,6 +80,13 @@ export interface GuardrailLimits {
   maxPillarOverdriftPp: number;       // default 8
   /** Max margin utilization after the trade. */
   maxMarginUtilizationPct: number;    // default 50
+  /**
+   * Minimum AFW (Available For Withdrawal) headroom dollars AFTER the trade
+   * clears. Below this the trade is blocked. Mirrors the signal-engine
+   * AFW_TRIGGER / TRIPLES_DIP_LADDER constant so all rules use the same floor.
+   * Skipped if ctx.afwDollars is undefined (legacy / replay paths).
+   */
+  minAfwHeadroomAfterTrade: number;   // default 10_000
   /** Max number of orders placed today (across the trade-history blob). */
   maxOrdersPerDay: number;            // default 8
   /** Wash-sale lookback window in days. */
@@ -63,20 +97,27 @@ export interface GuardrailLimits {
 }
 
 export const DEFAULT_LIMITS: GuardrailLimits = {
-  maxOrderPctOfPortfolio: 0.05,
-  maxConcentrationPct:    25,
-  maxPillarOverdriftPp:   8,
-  maxMarginUtilizationPct: 50,
-  maxOrdersPerDay:        8,
-  washSaleWindowDays:     30,
-  drawdownTriggerPct:     10,
-  drawdownLookbackDays:   14,
+  maxOrderPctOfPortfolio:   0.05,
+  maxConcentrationPct:      25,
+  maxPillarOverdriftPp:     8,
+  maxMarginUtilizationPct:  50,
+  minAfwHeadroomAfterTrade: 10_000,
+  maxOrdersPerDay:          8,
+  washSaleWindowDays:       30,
+  drawdownTriggerPct:       10,
+  drawdownLookbackDays:     14,
 };
 
 export interface GuardrailContext {
   totalValue:    number;
   equity:        number;
   marginBalance: number;            // absolute value
+  /**
+   * AFW (Available For Withdrawal) headroom from Schwab's balances response.
+   * Powers the post-trade AFW-floor check (checkAfwHeadroom). Optional for
+   * backwards-compat — when undefined the check is skipped silently.
+   */
+  afwDollars?:   number;
   positions:     PositionContext[];
   pillars:       PillarTargetContext[];
   recentTrades:  RecentTrade[];     // for wash-sale + daily count + duplicate
@@ -90,6 +131,7 @@ export type ViolationCode =
   | 'concentration_cap'
   | 'pillar_overdrift'
   | 'margin_cap'
+  | 'afw_headroom'
   | 'daily_order_count'
   | 'wash_sale'
   | 'drawdown_breaker'
@@ -112,8 +154,90 @@ function isBuy(instr: ProposedTrade['instruction']): boolean {
   return instr === 'BUY' || instr === 'BUY_TO_OPEN' || instr === 'BUY_TO_CLOSE';
 }
 
+function isOption(instr: ProposedTrade['instruction']): boolean {
+  return instr === 'BUY_TO_OPEN'  || instr === 'SELL_TO_OPEN'
+      || instr === 'BUY_TO_CLOSE' || instr === 'SELL_TO_CLOSE';
+}
+
 function tradeNotional(t: ProposedTrade): number {
   return t.shares * t.price;
+}
+
+/**
+ * Project the dollar margin requirement a trade will consume from AFW
+ * headroom once it fills. Used by both checkMargin (utilization ratio) and
+ * checkAfwHeadroom (post-trade absolute floor), so both gates see the same
+ * impact.
+ *
+ * Equity:
+ *   - BUY:               max(0, notional − availableCash)
+ *   - SELL:              0 (releases collateral; no NEW margin draw)
+ *
+ * Options (one contract = 100 shares of underlying):
+ *   - BUY_TO_OPEN  long: full debit (premium × 100 × contracts) — cash, not margin draw,
+ *                       but it reduces buying power 1:1 from cash → conservative to count as draw.
+ *   - BUY_TO_CLOSE:      premium debit — same conservative treatment.
+ *   - SELL_TO_CLOSE:     0 (credit; releases margin, not a draw).
+ *   - SELL_TO_OPEN put:
+ *     - cash-secured:    strike × 100 × contracts (full strike collateral set aside)
+ *     - naked (Reg-T):   max(0.20 × U − OTM, 0.10 × strike) × 100 × contracts
+ *                       — where OTM = max(0, U − strike) for puts
+ *   - SELL_TO_OPEN call:
+ *     - covered:         0 (backed by long equity already held)
+ *     - naked (Reg-T):   max(0.20 × U − OTM, 0.10 × strike) × 100 × contracts
+ *                       — where OTM = max(0, strike − U) for calls
+ *
+ * Missing option metadata on an option trade returns the conservative
+ * cash-secured estimate using `strike = price × 100` if no strike given —
+ * i.e. assume worst case rather than skip the check.
+ */
+export function projectMarginDraw(t: ProposedTrade, ctx: GuardrailContext): number {
+  const contracts = t.shares;
+
+  // Closing short options releases margin — conservative: 0 (not negative).
+  if (t.instruction === 'SELL_TO_CLOSE') return 0;
+  // Closing long options is a debit, but small — conservative: 0.
+  if (t.instruction === 'BUY_TO_CLOSE')  return 0;
+
+  if (isOption(t.instruction)) {
+    if (t.instruction === 'BUY_TO_OPEN') {
+      // Long option debit. The full premium is paid out of cash; treat as draw
+      // to be conservative (option-plan callers pass `price` as premium).
+      return contracts * t.price * 100;
+    }
+    // SELL_TO_OPEN — short option, real margin lock.
+    const opt = t.option;
+    if (!opt) {
+      // Defensive: missing option metadata is a caller bug. Use a conservative
+      // estimate so the AFW guardrail trips and surfaces the problem rather
+      // than letting an under-estimated trade slip through. Treat the entire
+      // equity slice as locked — caller will see the AFW violation and fix.
+      return Math.max(0, ctx.equity);
+    }
+    const strike = opt.strike;
+    const U      = opt.underlyingPrice ?? strike;   // fall back to strike if missing
+    const otm    = opt.kind === 'put'
+      ? Math.max(0, U - strike)
+      : Math.max(0, strike - U);
+
+    if (opt.style === 'cash-secured') {
+      return contracts * strike * 100;
+    }
+    if (opt.style === 'covered') {
+      return 0;   // already collateralized by the long equity position
+    }
+    // Naked — Reg-T short-option formula.
+    const regt = Math.max(0.20 * U - otm, 0.10 * strike);
+    return contracts * regt * 100;
+  }
+
+  // Equity.
+  if (isBuy(t.instruction)) {
+    const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
+    return Math.max(0, tradeNotional(t) - availableCash);
+  }
+  // Equity SELL — releases collateral, no new draw.
+  return 0;
 }
 
 function withinDays(timestampISO: string, days: number, now = Date.now()): boolean {
@@ -199,14 +323,14 @@ function checkPillarOverdrift(t: ProposedTrade, ctx: GuardrailContext, limits: G
 }
 
 function checkMargin(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailLimits): GuardrailViolation | null {
-  if (!isBuy(t.instruction)) return null;
   if (ctx.totalValue <= 0) return null;
 
-  // Best-effort post-trade margin estimate: assume any BUY beyond available cash
-  // dips into margin. We approximate available cash as (equity − marginBalance).
-  const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
-  const notional      = tradeNotional(t);
-  const newMarginDraw = Math.max(0, notional - availableCash);
+  // Use the shared projectMarginDraw so short options are no longer invisible
+  // to this check (previously: isBuy() returned false for SELL_TO_OPEN and
+  // the whole check was skipped, even though short puts lock real margin).
+  const newMarginDraw = projectMarginDraw(t, ctx);
+  if (newMarginDraw <= 0) return null;
+
   const projectedMargin = ctx.marginBalance + newMarginDraw;
   const projectedTotal  = ctx.totalValue + newMarginDraw;
   const pct = projectedTotal > 0 ? (projectedMargin / projectedTotal) * 100 : 0;
@@ -215,10 +339,45 @@ function checkMargin(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailL
     return {
       code: 'margin_cap',
       severity: 'block',
-      message: `BUY would push margin utilization to ${pct.toFixed(1)}% — cap is ${limits.maxMarginUtilizationPct}%.`,
+      message: `${t.instruction} would push margin utilization to ${pct.toFixed(1)}% — cap is ${limits.maxMarginUtilizationPct}%.`,
     };
   }
   return null;
+}
+
+/**
+ * Post-trade AFW floor.
+ *
+ * Projects AFW = (pre-trade AFW − margin draw from this trade). If the result
+ * dips below the configured minimum headroom, BLOCK. Catches the case where
+ * a single trade — especially a short put — passes the pre-trade AFW check
+ * in the signal engine but its own margin requirement leaves you dangerously
+ * close to Schwab's 50% wall.
+ *
+ * Skipped when ctx.afwDollars is undefined (legacy / replay paths). The
+ * upstream margin_cap check is the secondary line of defense in that case.
+ */
+function checkAfwHeadroom(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailLimits): GuardrailViolation | null {
+  if (typeof ctx.afwDollars !== 'number') return null;
+
+  const draw  = projectMarginDraw(t, ctx);
+  if (draw <= 0) return null;
+
+  const postAfw = ctx.afwDollars - draw;
+  if (postAfw >= limits.minAfwHeadroomAfterTrade) return null;
+
+  const drawHuman = `$${Math.round(draw).toLocaleString()}`;
+  const preHuman  = `$${Math.round(ctx.afwDollars).toLocaleString()}`;
+  const postHuman = `$${Math.round(postAfw).toLocaleString()}`;
+  const floorHuman = `$${Math.round(limits.minAfwHeadroomAfterTrade).toLocaleString()}`;
+  return {
+    code: 'afw_headroom',
+    severity: 'block',
+    message:
+      `${t.instruction} ${t.shares} ${t.symbol} would consume ${drawHuman} of AFW headroom ` +
+      `(pre: ${preHuman} → post: ${postHuman}). Minimum floor is ${floorHuman} to stay clear ` +
+      `of Schwab's 50% margin cap.`,
+  };
 }
 
 function checkDailyCount(_t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailLimits): GuardrailViolation | null {
@@ -291,6 +450,7 @@ export function validateProposedTrade(trade: ProposedTrade, ctx: GuardrailContex
     checkConcentration(trade, ctx, limits),
     checkPillarOverdrift(trade, ctx, limits),
     checkMargin(trade, ctx, limits),
+    checkAfwHeadroom(trade, ctx, limits),
     checkDailyCount(trade, ctx, limits),
     checkWashSale(trade, ctx, limits),
     checkDrawdown(trade, ctx, limits),

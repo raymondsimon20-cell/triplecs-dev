@@ -84,6 +84,13 @@ interface PillarDrift {
 interface RebalancePlanRequest {
   totalValue:    number;
   equity:        number;
+  /**
+   * AFW (Available For Withdrawal) in dollars — Schwab's `availableFunds`.
+   * Optional for backwards-compat; when present, powers the post-trade
+   * AFW-headroom guardrail (checkAfwHeadroom). Without it the gate is
+   * skipped silently — the margin_cap check is the only line of defense.
+   */
+  afwDollars?:   number;
   positions:     EnrichedPosition[];
   pillarSummary: PillarSummary[];
   targets:       Targets;
@@ -174,7 +181,7 @@ async function handlePost(req: Request) {
   if (!apiKey)
     return NextResponse.json({ error: 'ANTHROPIC_API_KEY not configured' }, { status: 503 });
 
-  const { totalValue, equity, positions, pillarSummary, targets, preview = false } = body;
+  const { totalValue, equity, afwDollars, positions, pillarSummary, targets, preview = false } = body;
 
   if (!totalValue || !positions?.length || !pillarSummary?.length || !targets)
     return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
@@ -520,6 +527,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
           totalValue,
           equity,
           marginBalance: Math.max(0, totalValue - equity),
+          afwDollars,
           positions: equityPositions.map((p) => ({
             symbol: p.instrument.symbol,
             pillar: p.pillar,
