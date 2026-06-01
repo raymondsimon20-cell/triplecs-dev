@@ -22,14 +22,19 @@ import { ShieldAlert, CheckCircle2, AlertTriangle, RefreshCw } from 'lucide-reac
 
 // ─── Types — shape returned by /api/options/close-recs ────────────────────────
 
+type MarginSource = 'schwab' | 'cash-secured-estimate' | 'long-no-lock';
+
 interface OptionPositionReport {
   symbol:           string;
   underlying:       string;
   description?:     string;
   side:             'long' | 'short';
   contracts:        number;
+  kind:             'put' | 'call' | null;
+  strike:           number | null;
   marketValue:      number;
   marginLocked:     number;
+  marginSource:     MarginSource;
   unrealizedPL:     number;
   closeInstruction: 'BUY_TO_CLOSE' | 'SELL_TO_CLOSE';
 }
@@ -236,6 +241,7 @@ export function OptionsCloseRecsPanel({ accountHash, floor }: Props) {
 // ─── Sub-renders ─────────────────────────────────────────────────────────────
 
 function renderTable(rows: OptionPositionReport[], title: string) {
+  const hasEstimates = rows.some((r) => r.marginSource === 'cash-secured-estimate');
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 overflow-hidden">
       <div className="border-b border-zinc-800 px-4 py-2 text-xs font-medium text-zinc-300">
@@ -264,7 +270,17 @@ function renderTable(rows: OptionPositionReport[], title: string) {
                   </span>
                 </td>
                 <td className="px-3 py-2 text-right font-mono text-zinc-300">{r.contracts}</td>
-                <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmt$(r.marginLocked)}</td>
+                <td className="px-3 py-2 text-right font-mono text-zinc-300">
+                  {fmt$(r.marginLocked)}
+                  {r.marginSource === 'cash-secured-estimate' && (
+                    <span
+                      title="Schwab reports $0 maintenance on cash-secured shorts. Estimated as strike × 100 × contracts (the cash collateral freed when you close)."
+                      className="ml-1 cursor-help text-amber-400/80"
+                    >
+                      *
+                    </span>
+                  )}
+                </td>
                 <td className={`px-3 py-2 text-right font-mono ${r.unrealizedPL >= 0 ? 'text-emerald-300' : 'text-red-300'}`}>
                   {fmtPL(r.unrealizedPL)}
                 </td>
@@ -275,6 +291,13 @@ function renderTable(rows: OptionPositionReport[], title: string) {
           </tbody>
         </table>
       </div>
+      {hasEstimates && (
+        <div className="border-t border-zinc-800 px-4 py-2 text-[10px] text-zinc-500">
+          <span className="text-amber-400/80">*</span> Cash-secured estimate.
+          Schwab reports $0 maintenance on cash-secured shorts because the
+          collateral is cash, not margin. Closing still frees strike × 100 × contracts of AFW.
+        </div>
+      )}
     </div>
   );
 }

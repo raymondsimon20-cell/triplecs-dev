@@ -164,69 +164,59 @@ function tradeNotional(t: ProposedTrade): number {
 }
 
 /**
- * Project the dollar margin requirement a trade will consume from AFW
- * headroom once it fills. Used by both checkMargin (utilization ratio) and
- * checkAfwHeadroom (post-trade absolute floor), so both gates see the same
- * impact.
+ * Project the trade's reduction of AFW (Available For Withdrawal) headroom.
+ *
+ * AFW impact is what gets you closer to Schwab's 50% wall — it captures the
+ * "money set aside" effect regardless of WHETHER it's set aside as cash
+ * collateral or as margin requirement. Used by checkAfwHeadroom.
+ *
+ * Important: AFW impact and margin-balance increase are DIFFERENT numbers
+ * for some trade types. A cash-secured short put reserves $strike×100×N in
+ * CASH — that reduces AFW by the full amount, but does NOT increase margin
+ * balance (it's cash-secured, not margin-secured). Use `projectMarginIncrease`
+ * for the utilization-ratio check.
  *
  * Equity:
- *   - BUY:               max(0, notional − availableCash)
- *   - SELL:              0 (releases collateral; no NEW margin draw)
+ *   - BUY:               max(0, notional − availableCash)   (margin draw above cash)
+ *   - SELL:              0 (releases collateral)
  *
  * Options (one contract = 100 shares of underlying):
- *   - BUY_TO_OPEN  long: full debit (premium × 100 × contracts) — cash, not margin draw,
- *                       but it reduces buying power 1:1 from cash → conservative to count as draw.
- *   - BUY_TO_CLOSE:      premium debit — same conservative treatment.
- *   - SELL_TO_CLOSE:     0 (credit; releases margin, not a draw).
+ *   - BUY_TO_OPEN  long: full debit (premium × 100 × contracts) — cash leaves the account
+ *   - BUY_TO_CLOSE:      0 (small debit, conservative)
+ *   - SELL_TO_CLOSE:     0 (credit; releases AFW, not a reduction)
  *   - SELL_TO_OPEN put:
- *     - cash-secured:    strike × 100 × contracts (full strike collateral set aside)
- *     - naked (Reg-T):   max(0.20 × U − OTM, 0.10 × strike) × 100 × contracts
- *                       — where OTM = max(0, U − strike) for puts
+ *     - cash-secured:    strike × 100 × contracts (cash collateral reserved)
+ *     - naked (Reg-T):   Reg-T short-option formula
+ *     - covered:         (calls only) 0 — backed by equity
  *   - SELL_TO_OPEN call:
- *     - covered:         0 (backed by long equity already held)
- *     - naked (Reg-T):   max(0.20 × U − OTM, 0.10 × strike) × 100 × contracts
- *                       — where OTM = max(0, strike − U) for calls
+ *     - covered:         0
+ *     - naked (Reg-T):   Reg-T short-option formula
  *
- * Missing option metadata on an option trade returns the conservative
- * cash-secured estimate using `strike = price × 100` if no strike given —
- * i.e. assume worst case rather than skip the check.
+ * Missing option metadata on a SELL_TO_OPEN returns ctx.equity as a worst-case
+ * estimate so the guardrail trips loudly rather than silently under-estimating.
  */
-export function projectMarginDraw(t: ProposedTrade, ctx: GuardrailContext): number {
+export function projectAfwImpact(t: ProposedTrade, ctx: GuardrailContext): number {
   const contracts = t.shares;
 
-  // Closing short options releases margin — conservative: 0 (not negative).
   if (t.instruction === 'SELL_TO_CLOSE') return 0;
-  // Closing long options is a debit, but small — conservative: 0.
   if (t.instruction === 'BUY_TO_CLOSE')  return 0;
 
   if (isOption(t.instruction)) {
     if (t.instruction === 'BUY_TO_OPEN') {
-      // Long option debit. The full premium is paid out of cash; treat as draw
-      // to be conservative (option-plan callers pass `price` as premium).
+      // Premium leaves cash → reduces AFW dollar-for-dollar.
       return contracts * t.price * 100;
     }
-    // SELL_TO_OPEN — short option, real margin lock.
+    // SELL_TO_OPEN.
     const opt = t.option;
-    if (!opt) {
-      // Defensive: missing option metadata is a caller bug. Use a conservative
-      // estimate so the AFW guardrail trips and surfaces the problem rather
-      // than letting an under-estimated trade slip through. Treat the entire
-      // equity slice as locked — caller will see the AFW violation and fix.
-      return Math.max(0, ctx.equity);
-    }
+    if (!opt) return Math.max(0, ctx.equity);    // defensive — see header
     const strike = opt.strike;
-    const U      = opt.underlyingPrice ?? strike;   // fall back to strike if missing
+    const U      = opt.underlyingPrice ?? strike;
     const otm    = opt.kind === 'put'
       ? Math.max(0, U - strike)
       : Math.max(0, strike - U);
 
-    if (opt.style === 'cash-secured') {
-      return contracts * strike * 100;
-    }
-    if (opt.style === 'covered') {
-      return 0;   // already collateralized by the long equity position
-    }
-    // Naked — Reg-T short-option formula.
+    if (opt.style === 'cash-secured') return contracts * strike * 100;
+    if (opt.style === 'covered')      return 0;
     const regt = Math.max(0.20 * U - otm, 0.10 * strike);
     return contracts * regt * 100;
   }
@@ -236,9 +226,68 @@ export function projectMarginDraw(t: ProposedTrade, ctx: GuardrailContext): numb
     const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
     return Math.max(0, tradeNotional(t) - availableCash);
   }
-  // Equity SELL — releases collateral, no new draw.
+  return 0;   // equity SELL releases collateral
+}
+
+/**
+ * Project the trade's increase in margin balance (debt). Used by checkMargin
+ * to evaluate the post-trade utilization ratio against the 50% cap.
+ *
+ * Differs from `projectAfwImpact` for CASH-funded trade types:
+ *   - Cash-secured short put: AFW down by strike×100×N, margin balance UNCHANGED → returns 0
+ *   - Long option BUY_TO_OPEN: premium paid from cash, margin balance UNCHANGED → returns 0
+ *   - Equity BUY fully covered by cash: same → returns 0 (matches AFW impact in this case)
+ *
+ * Trade types where AFW impact == margin balance increase:
+ *   - Equity BUY beyond cash: same number for both
+ *   - Naked short option: same Reg-T number for both
+ *
+ * The pattern: "is this trade cash-funded or margin-funded?" If cash-funded,
+ * margin balance doesn't change even though AFW does.
+ */
+export function projectMarginIncrease(t: ProposedTrade, ctx: GuardrailContext): number {
+  const contracts = t.shares;
+
+  if (t.instruction === 'SELL_TO_CLOSE') return 0;
+  if (t.instruction === 'BUY_TO_CLOSE')  return 0;
+  // Long option BUY_TO_OPEN: cash-funded premium debit. No margin balance bump.
+  if (t.instruction === 'BUY_TO_OPEN')   return 0;
+
+  if (isOption(t.instruction)) {
+    // SELL_TO_OPEN.
+    const opt = t.option;
+    if (!opt) return Math.max(0, ctx.equity);    // defensive
+    const strike = opt.strike;
+    const U      = opt.underlyingPrice ?? strike;
+    const otm    = opt.kind === 'put'
+      ? Math.max(0, U - strike)
+      : Math.max(0, strike - U);
+
+    // Cash-secured shorts reserve CASH, not margin. Schwab reports
+    // maintenanceRequirement = $0 for these (the bug the user hit on the
+    // close-recs report). They don't bump margin utilization.
+    if (opt.style === 'cash-secured') return 0;
+    if (opt.style === 'covered')      return 0;
+    // Naked — real margin lock.
+    const regt = Math.max(0.20 * U - otm, 0.10 * strike);
+    return contracts * regt * 100;
+  }
+
+  // Equity.
+  if (isBuy(t.instruction)) {
+    const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
+    return Math.max(0, tradeNotional(t) - availableCash);
+  }
   return 0;
 }
+
+/**
+ * @deprecated Use `projectAfwImpact` (AFW gate) or `projectMarginIncrease`
+ * (utilization gate). This alias kept for backwards-compat with callers that
+ * weren't using it for a specific gate — both old call sites are internal
+ * to this module so the deprecation is informational only.
+ */
+export const projectMarginDraw = projectAfwImpact;
 
 function withinDays(timestampISO: string, days: number, now = Date.now()): boolean {
   const t = new Date(timestampISO).getTime();
@@ -325,14 +374,14 @@ function checkPillarOverdrift(t: ProposedTrade, ctx: GuardrailContext, limits: G
 function checkMargin(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailLimits): GuardrailViolation | null {
   if (ctx.totalValue <= 0) return null;
 
-  // Use the shared projectMarginDraw so short options are no longer invisible
-  // to this check (previously: isBuy() returned false for SELL_TO_OPEN and
-  // the whole check was skipped, even though short puts lock real margin).
-  const newMarginDraw = projectMarginDraw(t, ctx);
-  if (newMarginDraw <= 0) return null;
+  // Margin BALANCE increase — not AFW impact. Cash-secured shorts and long
+  // option opens reduce AFW but don't bump margin debt, so they should NOT
+  // trip the utilization cap. See projectMarginIncrease docstring.
+  const marginIncrease = projectMarginIncrease(t, ctx);
+  if (marginIncrease <= 0) return null;
 
-  const projectedMargin = ctx.marginBalance + newMarginDraw;
-  const projectedTotal  = ctx.totalValue + newMarginDraw;
+  const projectedMargin = ctx.marginBalance + marginIncrease;
+  const projectedTotal  = ctx.totalValue + marginIncrease;
   const pct = projectedTotal > 0 ? (projectedMargin / projectedTotal) * 100 : 0;
 
   if (pct > limits.maxMarginUtilizationPct) {
@@ -360,7 +409,9 @@ function checkMargin(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailL
 function checkAfwHeadroom(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailLimits): GuardrailViolation | null {
   if (typeof ctx.afwDollars !== 'number') return null;
 
-  const draw  = projectMarginDraw(t, ctx);
+  // AFW impact — includes cash-secured collateral and long-option debits
+  // that DON'T appear as margin balance increases. See projectAfwImpact.
+  const draw  = projectAfwImpact(t, ctx);
   if (draw <= 0) return null;
 
   const postAfw = ctx.afwDollars - draw;

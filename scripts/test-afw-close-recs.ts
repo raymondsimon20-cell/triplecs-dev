@@ -8,7 +8,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { buildAfwCloseRecs } from '../lib/options/afw-close-recs';
+import { buildAfwCloseRecs, parseOccSymbol } from '../lib/options/afw-close-recs';
 import type { SchwabPosition } from '../lib/schwab/types';
 
 let pass = 0;
@@ -246,6 +246,113 @@ test('handles empty positions array gracefully', () => {
   assert.equal(r.allOpenOptions.length, 0);
   assert.equal(r.recommendedCloses.length, 0);
   assert.equal(r.afwAfter, 5_000);    // unchanged — nothing to close
+});
+
+// ─── parseOccSymbol ──────────────────────────────────────────────────────────
+
+console.log('\nparseOccSymbol');
+
+test('parses TQQQ short put — exact bug-report case', () => {
+  const r = parseOccSymbol('TQQQ  260717P00078000');
+  assert.ok(r, 'expected parse to succeed');
+  assert.equal(r!.underlying, 'TQQQ');
+  assert.equal(r!.expiration, '2026-07-17');
+  assert.equal(r!.kind, 'put');
+  assert.equal(r!.strike, 78);
+});
+
+test('parses XDTE short put — exact bug-report case', () => {
+  const r = parseOccSymbol('XDTE  260618P00037000');
+  assert.ok(r);
+  assert.equal(r!.underlying, 'XDTE');
+  assert.equal(r!.strike, 37);
+});
+
+test('parses fractional strikes (SPY $500.50 call)', () => {
+  const r = parseOccSymbol('SPY   240621C00500500');
+  assert.ok(r);
+  assert.equal(r!.kind, 'call');
+  assert.equal(r!.strike, 500.5);
+});
+
+test('returns null for malformed symbols', () => {
+  assert.equal(parseOccSymbol(''), null);
+  assert.equal(parseOccSymbol('NOTANOPTION'), null);
+  assert.equal(parseOccSymbol('TQQQ 260717X00078000'), null);   // bad P|C glyph
+  assert.equal(parseOccSymbol('TQQQ_260717P00078000'), null);   // bad separator pattern
+});
+
+// ─── Cash-secured fallback for marginLocked ──────────────────────────────────
+
+console.log('\ncash-secured fallback');
+
+test('reproduces the TQQQ bug: maintReq=0 → fallback to strike × 100 × N', () => {
+  // Exact reproduction of the user's report row. With the fix:
+  // - parsed strike from OCC = 78
+  // - 1 contract → marginLocked = 78 × 100 × 1 = $7,800
+  // - marginSource = 'cash-secured-estimate'
+  const tqqq = shortPut({
+    underlying: 'TQQQ', strike: 78, contracts: 1,
+    currentMid: 0.2, openCredit: 1.80, maintReq: 0,
+  });
+  const r = buildAfwCloseRecs([tqqq], 5_000, 10_000);
+  const opt = r.allOpenOptions[0];
+  assert.equal(opt.marginLocked, 7_800, `expected $7,800; got $${opt.marginLocked}`);
+  assert.equal(opt.marginSource, 'cash-secured-estimate');
+  assert.equal(opt.strike, 78);
+  assert.equal(opt.kind, 'put');
+});
+
+test('reproduces the XDTE bug: maintReq=0 → strike $37 → $3,700 fallback', () => {
+  const xdte = shortPut({
+    underlying: 'XDTE', strike: 37, contracts: 1,
+    currentMid: 1.0, openCredit: 1.0, maintReq: 0,
+  });
+  const r = buildAfwCloseRecs([xdte], 5_000, 10_000);
+  const opt = r.allOpenOptions[0];
+  assert.equal(opt.marginLocked, 3_700);
+  assert.equal(opt.marginSource, 'cash-secured-estimate');
+});
+
+test('does NOT fall back when Schwab reports a non-zero maintReq', () => {
+  // Naked or partially-margined: Schwab's number is authoritative; trust it.
+  const naked = shortPut({
+    underlying: 'UPRO', strike: 50, contracts: 1,
+    currentMid: 1.5, openCredit: 3, maintReq: 1_200,    // Schwab gave us 1200
+  });
+  const r = buildAfwCloseRecs([naked], 0, 10_000);
+  const opt = r.allOpenOptions[0];
+  assert.equal(opt.marginLocked, 1_200, 'should use Schwab value, not estimate');
+  assert.equal(opt.marginSource, 'schwab');
+});
+
+test('long options always show marginLocked=0 with marginSource=long-no-lock', () => {
+  const long = longPut({
+    underlying: 'SPY', strike: 500, contracts: 1,
+    currentMid: 4, openDebit: 1, maintReq: 9_999,     // ignored for longs
+  });
+  const r = buildAfwCloseRecs([long], 20_000, 10_000);
+  const opt = r.allOpenOptions[0];
+  assert.equal(opt.marginLocked, 0);
+  assert.equal(opt.marginSource, 'long-no-lock');
+});
+
+test('with cash-secured fallback, greedy now correctly recommends fewer closes', () => {
+  // Both short puts have maintReq=0 from Schwab; without the fix they'd
+  // both be recommended (because neither frees anything). With the fix,
+  // closing just the TQQQ alone frees $7,800.
+  // AFW=$3k, floor=$10k, need $7k. TQQQ alone frees $7,800 → enough.
+  const positions = [
+    shortPut({ underlying: 'TQQQ', strike: 78, contracts: 1, currentMid: 0.2, openCredit: 1.80, maintReq: 0 }),
+    shortPut({ underlying: 'XDTE', strike: 37, contracts: 1, currentMid: 1.0, openCredit: 1.0,  maintReq: 0 }),
+  ];
+  const r = buildAfwCloseRecs(positions, 3_000, 10_000);
+  // TQQQ P&L: (1.80 - 0.2) × 100 = 160 (matches user report)
+  // XDTE P&L: (1.0 - 1.0) × 100 = 0  (matches "−$0" rounding)
+  // TQQQ wins on P&L → recommended first.
+  assert.equal(r.recommendedCloses.length, 1, `expected 1 close; got ${r.recommendedCloses.length}: ${r.recommendedCloses.map(c => c.underlying).join(',')}`);
+  assert.equal(r.recommendedCloses[0].underlying, 'TQQQ');
+  assert.equal(r.afwAfter, 10_800);   // 3k + 7,800
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────────

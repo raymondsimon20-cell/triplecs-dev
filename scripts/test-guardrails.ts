@@ -18,7 +18,9 @@
 import assert from 'node:assert/strict';
 import {
   validateProposedTrade,
-  projectMarginDraw,
+  projectAfwImpact,
+  projectMarginIncrease,
+  projectMarginDraw,    // deprecated alias for projectAfwImpact
   DEFAULT_LIMITS,
   type GuardrailContext,
   type ProposedTrade,
@@ -246,28 +248,123 @@ test('default floor is $10k (sanity check on DEFAULT_LIMITS)', () => {
   assert.equal(DEFAULT_LIMITS.minAfwHeadroomAfterTrade, 10_000);
 });
 
-// ─── checkMargin (short options newly visible) ───────────────────────────────
+// ─── checkMargin: AFW impact ≠ margin increase ───────────────────────────────
+// The two are different numbers for cash-secured shorts and long opens.
+// checkMargin uses projectMarginIncrease, which returns 0 for cash-funded
+// trades (no margin debt bump). checkAfwHeadroom uses projectAfwImpact, which
+// catches them via the AFW gate instead.
 
-console.log('\ncheckMargin (short options)');
+console.log('\ncheckMargin (split AFW vs margin)');
 
-test('short option margin counts toward 50% utilization cap', () => {
-  // Build a scenario where the short put pushes utilization above 50%.
-  // totalValue 100k, marginBalance 45k = 45% util. Short put adds $10k draw.
-  // Post: margin 55k, total 110k → 50%. Right at the boundary. Bump strike to push over.
+test('cash-secured short put does NOT trip utilization cap (cash-funded)', () => {
+  // 4 short puts strike $50 = $20k AFW reduction but $0 margin balance increase.
+  // Pre-trade utilization 45%; post-trade should be unchanged (45/100 = 45%).
+  // Previously this test asserted margin_cap WOULD fire; now we assert it doesn't.
   const ctx = baseCtx({
     totalValue:    100_000,
     equity:        55_000,
     marginBalance: 45_000,
-    afwDollars:    50_000,      // make sure AFW gate doesn't intercept
+    afwDollars:    50_000,
   });
-  // 4 contracts × strike $50 × 100 = $20k draw → util 45+20=65 / 120 ≈ 54%.
   const t: ProposedTrade = {
     symbol: 'UPRO', instruction: 'SELL_TO_OPEN', shares: 4, price: 1.50, pillar: 'triples',
     option: { kind: 'put', style: 'cash-secured', strike: 50, underlyingPrice: 55 },
   };
   const result = validateProposedTrade(t, ctx);
   const marginCap = result.violations.find((v) => v.code === 'margin_cap');
-  assert.ok(marginCap, `expected margin_cap on short option; got violations: ${result.violations.map((v) => v.code).join(',')}`);
+  assert.ok(!marginCap, `cash-secured shouldn't trip margin cap; got: ${JSON.stringify(marginCap)}`);
+  // AFW gate may or may not fire here depending on numbers — not what this test asserts.
+});
+
+test('naked short put DOES trip utilization cap (real margin)', () => {
+  // Same scenario, but naked. Reg-T: max(0.20×55 − 5, 0.10×50) = max(6, 5) = 6.
+  // 4 contracts × 6 × 100 = $2,400 margin increase. 45% + small bump ≈ 46.1%.
+  // Doesn't trip the 50% cap at this size. Need a bigger position to test that.
+  // Use 50 contracts naked: $30,000 increase. (45 + 30) / 130 = 57.7%. Trips.
+  const ctx = baseCtx({
+    totalValue:    100_000,
+    equity:        55_000,
+    marginBalance: 45_000,
+    afwDollars:    100_000,    // make sure AFW gate doesn't intercept
+  });
+  const t: ProposedTrade = {
+    symbol: 'UPRO', instruction: 'SELL_TO_OPEN', shares: 50, price: 1.50, pillar: 'triples',
+    option: { kind: 'put', style: 'naked', strike: 50, underlyingPrice: 55 },
+  };
+  const result = validateProposedTrade(t, ctx);
+  const marginCap = result.violations.find((v) => v.code === 'margin_cap');
+  assert.ok(marginCap, `naked short should trip margin cap; got violations: ${result.violations.map((v) => v.code).join(',')}`);
+});
+
+test('long-option BUY_TO_OPEN does NOT trip utilization cap (cash-funded)', () => {
+  // Big long-put premium $30k debit. Reduces AFW dollar-for-dollar but
+  // doesn't increase margin balance. Should NOT trip the utilization cap.
+  const ctx = baseCtx({
+    totalValue:    100_000,
+    equity:        55_000,
+    marginBalance: 45_000,
+    afwDollars:    100_000,
+  });
+  // 100 contracts × $3 premium × 100 = $30,000 debit.
+  const t: ProposedTrade = {
+    symbol: 'SPY', instruction: 'BUY_TO_OPEN', shares: 100, price: 3.00, pillar: 'hedge',
+    option: { kind: 'put', style: 'naked', strike: 500, underlyingPrice: 520 },
+  };
+  const result = validateProposedTrade(t, ctx);
+  const marginCap = result.violations.find((v) => v.code === 'margin_cap');
+  assert.ok(!marginCap, `long-open shouldn't trip margin cap; got: ${JSON.stringify(marginCap)}`);
+});
+
+// ─── projectMarginIncrease vs projectAfwImpact ───────────────────────────────
+
+console.log('\nprojectMarginIncrease vs projectAfwImpact');
+
+test('cash-secured short: AFW impact = strike collateral, margin increase = 0', () => {
+  const t: ProposedTrade = {
+    symbol: 'UPRO', instruction: 'SELL_TO_OPEN', shares: 2, price: 1.50, pillar: 'triples',
+    option: { kind: 'put', style: 'cash-secured', strike: 50, underlyingPrice: 55 },
+  };
+  assert.equal(projectAfwImpact(t, baseCtx()),      10_000);
+  assert.equal(projectMarginIncrease(t, baseCtx()), 0);
+});
+
+test('long open: AFW impact = premium debit, margin increase = 0', () => {
+  const t: ProposedTrade = {
+    symbol: 'SPY', instruction: 'BUY_TO_OPEN', shares: 2, price: 3.50, pillar: 'hedge',
+    option: { kind: 'put', style: 'naked', strike: 500, underlyingPrice: 520 },
+  };
+  assert.equal(projectAfwImpact(t, baseCtx()),      700);
+  assert.equal(projectMarginIncrease(t, baseCtx()), 0);
+});
+
+test('naked short: AFW impact = margin increase (same Reg-T number)', () => {
+  const t: ProposedTrade = {
+    symbol: 'UPRO', instruction: 'SELL_TO_OPEN', shares: 2, price: 1.50, pillar: 'triples',
+    option: { kind: 'put', style: 'naked', strike: 50, underlyingPrice: 55 },
+  };
+  const ai = projectAfwImpact(t, baseCtx());
+  const mi = projectMarginIncrease(t, baseCtx());
+  assert.equal(ai, 1_200);
+  assert.equal(ai, mi, 'naked shorts should match AFW and margin numbers');
+});
+
+test('equity BUY above cash: AFW impact = margin increase (same number)', () => {
+  const t: ProposedTrade = {
+    symbol: 'SCHD', instruction: 'BUY', shares: 625, price: 80, pillar: 'income',
+  };
+  const ai = projectAfwImpact(t, baseCtx());
+  const mi = projectMarginIncrease(t, baseCtx());
+  assert.equal(ai, mi);
+});
+
+test('deprecated projectMarginDraw alias still returns AFW impact', () => {
+  const t: ProposedTrade = {
+    symbol: 'UPRO', instruction: 'SELL_TO_OPEN', shares: 2, price: 1.50, pillar: 'triples',
+    option: { kind: 'put', style: 'cash-secured', strike: 50, underlyingPrice: 55 },
+  };
+  // Existing callers of projectMarginDraw were really measuring AFW impact;
+  // the alias preserves that semantic.
+  assert.equal(projectMarginDraw(t, baseCtx()), projectAfwImpact(t, baseCtx()));
 });
 
 // ─── Summary ─────────────────────────────────────────────────────────────────
