@@ -79,7 +79,11 @@ export function defaultAutoConfig(): AutoConfig {
     schemaVersion: SCHEMA_VERSION,
     mode:          'manual',
     dailyCaps: {
-      maxTrades:              3,
+      // Raised 3 → 10 alongside the tier-2 auto promotion. With more rules
+      // eligible to fire unattended (PILLAR_FILL, MAINTENANCE_RANKED_TRIM,
+      // TRIPLES_DIP_LADDER), 3 was too tight — a single laddered dip day
+      // could exhaust the budget before the other rules ran.
+      maxTrades:              10,
       maxDollarsPerTrade:     5000,
       maxNetExposureShiftPct: 10,
     },
