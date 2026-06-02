@@ -23,6 +23,7 @@
  */
 
 import { useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { Settings, RotateCcw, Check, Trash2 } from 'lucide-react';
 import { DEFAULT_TARGETS, type StrategyTargets } from '@/lib/utils';
 import { AutoConfigSection } from './AutoConfigSection';
@@ -307,7 +308,13 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
 
   const set = useCallback(<K extends keyof StrategyTargets>(key: K, value: StrategyTargets[K]) => {
     setDraft((prev) => ({ ...prev, [key]: value }));
-  }, []);
+    // Any edit on a per-account scope implies opting INTO an override.
+    // Previously only setPillar did this; editing non-pillar sliders (margin
+    // thresholds, family cap, FIRE target) left overrideActive=false, so the
+    // save flow's "checkbox-off = clear override" branch silently discarded
+    // edits on next save. See handleSave below.
+    if (scope && !overrideActive) setOverrideActive(true);
+  }, [scope, overrideActive]);
 
   type PillarKey = 'triplesPct' | 'cornerstonePct' | 'incomePct' | 'hedgePct';
   const PILLAR_KEYS: PillarKey[] = ['triplesPct', 'cornerstonePct', 'incomePct', 'hedgePct'];
@@ -335,18 +342,15 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
   function handleSave() {
     if (isGlobalScope) {
       broadcast(draft);  // global
-    } else if (overrideActive) {
-      broadcast(draft, scope);  // per-account override
     } else {
-      // Toggle was off and user hit Save — treat as a "use global" intent.
-      // Clear the override locally and on the server so the engine falls back
-      // to global on next run, then refresh listeners.
-      if (scope) {
-        clearOverride(scope);
-        void clearOverrideOnServer(scope);
-      }
-      const g = loadGlobal();
-      _listeners.forEach((l) => l(scope, g));
+      // Per-account scope: always save as an override. The "Reset / Use global"
+      // button is the explicit path to fall back. Previously this branch
+      // diverged on `overrideActive` and silently discarded edits when the
+      // checkbox was off — see the `set` callback fix above. Treating any
+      // Save as an explicit override-write is less surprising; the user can
+      // always click Reset to opt back into global.
+      broadcast(draft, scope);
+      if (!overrideActive) setOverrideActive(true);
     }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
@@ -390,12 +394,18 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
         <span className="hidden sm:inline">Settings</span>
       </button>
 
-      {open && (
+      {open && typeof document !== 'undefined' && createPortal(
         // Outer wrapper is scrollable so tall content can never clip the top
         // of the modal — overflow lives here, NOT on the modal box itself.
         // The inner min-h-full + flex centers the modal vertically when its
         // content fits in viewport, and falls through to natural scrolling
         // when it doesn't.
+        //
+        // Portaled to document.body to escape the dashboard header's stacking
+        // context (header has sticky + backdrop-blur, both create stacking
+        // contexts that trapped this modal's z-50 inside them). With the
+        // portal, z-50 here is relative to <body>'s direct children — no
+        // ambient page content can paint over it.
         <div
           className="fixed inset-0 z-50 bg-black/60 overflow-y-auto"
           onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
@@ -520,7 +530,8 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
             </div>
           </div>
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </>
   );
