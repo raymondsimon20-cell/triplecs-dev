@@ -391,11 +391,20 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
       </button>
 
       {open && (
+        // Outer wrapper is scrollable so tall content can never clip the top
+        // of the modal — overflow lives here, NOT on the modal box itself.
+        // The inner min-h-full + flex centers the modal vertically when its
+        // content fits in viewport, and falls through to natural scrolling
+        // when it doesn't.
         <div
-          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/60 overflow-y-auto"
           onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
         >
-          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl">
+          <div
+            className="min-h-full flex items-center justify-center p-4"
+            onClick={(e) => { if (e.target === e.currentTarget) setOpen(false); }}
+          >
+          <div className="bg-[#1a1d27] border border-[#2d3248] rounded-2xl w-full max-w-lg shadow-2xl my-4">
             <div className="flex items-center justify-between px-6 py-4 border-b border-[#2d3248]">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-blue-400" />
@@ -509,6 +518,7 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
                 {saved ? 'Saved!' : 'Save Settings'}
               </button>
             </div>
+          </div>
           </div>
         </div>
       )}
