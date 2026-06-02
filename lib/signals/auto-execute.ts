@@ -43,6 +43,12 @@ import {
   type AutoConfig,
   type AutoMode,
 } from './auto-config';
+import {
+  validateBatch,
+  type GuardrailContext,
+  type ProposedTrade,
+} from '../guardrails';
+import { fetchAccountState } from '../portfolio/fetch';
 
 // ─── Trade history shape (mirrors app/api/orders/route.ts TradeHistoryEntry) ──
 
@@ -466,8 +472,79 @@ async function executeAccountBucket(args: {
     }
     return true;
   });
-  const { allowed, rejected: capRejected } = applyCaps(eligible, config, portfolioValue, todays);
-  const rejectedRaw = [...tierGateRejected, ...capRejected];
+  const { allowed: capAllowed, rejected: capRejected } = applyCaps(eligible, config, portfolioValue, todays);
+
+  // ── Guardrail validation ──────────────────────────────────────────────────
+  // Critical safety net before placeOrders: catches AFW under-runs, margin
+  // cap breaches, concentration violations, etc. Previously this path went
+  // straight to Schwab without consulting validateProposedTrade — same bug
+  // class that bit the user on options. With tier-2 rules now promoted to
+  // auto (MAINTENANCE_RANKED_TRIM, PILLAR_FILL, TRIPLES_DIP_LADDER), the
+  // dollar sizes are big enough that we MUST run guardrails before firing.
+  //
+  // Fail-open on Schwab fetch failure: log + skip the guard rather than
+  // block the whole batch. The 50% Schwab margin cap is still enforced at
+  // the broker level, so failing open here doesn't lose the hard backstop.
+  const guardrailRejected: Array<{ item: InboxItem; reason: string }> = [];
+  let allowed = capAllowed;
+  try {
+    const state = await fetchAccountState(accountHash);
+    const ctx: GuardrailContext = {
+      totalValue:    state.totalValue,
+      equity:        state.equity,
+      marginBalance: state.marginBalance,
+      afwDollars:    state.afwDollars,
+      positions: state.positions.map((p) => ({
+        symbol:      p.instrument.symbol,
+        pillar:      p.pillar,
+        marketValue: p.marketValue,
+        shares:      p.longQuantity,
+      })),
+      pillars:      [],
+      // recentTrades omitted — wash-sale isn't relevant for engine-sized
+      // auto trades and the daily-count cap already runs upstream in applyCaps.
+      recentTrades: [],
+    };
+    const proposed: ProposedTrade[] = capAllowed.map((it) => ({
+      symbol:      it.symbol,
+      instruction: it.instruction as ProposedTrade['instruction'],
+      shares:      it.quantity,
+      // Engine signals stage equity orders with price set; fall back to 0 if
+      // somehow missing — checkOrderSize and concentration use price, so a 0
+      // would skip those checks. Acceptable: AFW/margin gates still fire on
+      // the equity BUY since their math uses ctx.equity − marginBalance.
+      price:       it.price ?? 0,
+      pillar:      it.pillar ?? 'other',
+      // Engine signals are equity-only at the moment — options always tier='approval'.
+      // If/when an option signal reaches here, the caller must populate `option`.
+    }));
+    const { allowed: vAllowed, blocked: vBlocked } = validateBatch(proposed, ctx);
+    const allowedKey = new Set(vAllowed.map((t) => `${t.symbol}|${t.instruction}`));
+    allowed = capAllowed.filter((it) =>
+      allowedKey.has(`${it.symbol}|${it.instruction}`),
+    );
+    for (const b of vBlocked) {
+      const item = capAllowed.find(
+        (it) => it.symbol === b.symbol && it.instruction === b.instruction,
+      );
+      if (!item) continue;
+      const reasons = b.violations
+        .filter((v) => v.severity === 'block')
+        .map((v) => `${v.code}: ${v.message}`)
+        .join(' · ');
+      guardrailRejected.push({
+        item,
+        reason: `Guardrail blocked — ${reasons || 'unspecified violation'}`,
+      });
+    }
+  } catch (err) {
+    console.warn(
+      `[auto-execute] guardrail validation failed (fail-open) for ${accountHash.slice(0, 6)}:`,
+      err,
+    );
+  }
+
+  const rejectedRaw = [...tierGateRejected, ...capRejected, ...guardrailRejected];
   const rejected = rejectedRaw.map((r) => ({
     symbol: r.item.symbol, instruction: r.item.instruction, reason: r.reason,
   }));

@@ -87,23 +87,38 @@ export interface DailyPlan {
 }
 
 /**
- * Tier-1 ("auto") qualifying rules. Conservative whitelist — anything not on
- * this list defaults to tier 2 (requires approval) when a BUY/SELL, or tier 3
- * (alert) when ALERT/INFO. This is intentional: easy to expand the auto list
- * once a rule has been observed in supervised mode for a while.
+ * Tier-1 ("auto") qualifying rules. Anything not on this list defaults to
+ * tier 2 (requires approval) when a BUY/SELL, or tier 3 (alert) when ALERT/INFO.
  *
  * Graduation history:
  *   - CLM_CRF_TRIM, AIRBAG_SCALE: initial set (well-bounded by hard caps)
  *   - AFW_TRIGGER:               promoted after observation; sizes are fixed
  *                                  in CONFIG.AFW_DEPLOY ($500/$1000 splits).
- *   - MAINTENANCE_RANKED_TRIM:   stays tier 2 until observed; can sell up to
- *                                  half of a position which is more material.
- *   - PILLAR_FILL:               stays tier 2; opens NEW positions.
+ *   - MAINTENANCE_RANKED_TRIM:   promoted after the AFW post-trade guardrail
+ *                                  shipped (lib/guardrails.ts:checkAfwHeadroom).
+ *                                  Sells up to half a position to relieve margin
+ *                                  — substantial, but bounded by MARGIN_TRIM_*
+ *                                  CONFIG and now the AFW floor.
+ *   - PILLAR_FILL:               promoted with MAINTENANCE_RANKED_TRIM. Opens
+ *                                  NEW positions but each candidate is capped at
+ *                                  $5K by PILLAR_FILL_MAX_DOLLARS, matching the
+ *                                  per-trade auto-config ceiling.
+ *   - TRIPLES_DIP_LADDER:        promoted with the others. $500–$1K per fresh
+ *                                  5% step (CONFIG.TRIPLES_DIP_PER_STEP_DOLLARS)
+ *                                  with the combined-weight + AFW headroom gates.
+ *
+ * SAFETY PREREQ: auto-execute now runs validateProposedTrade (AFW post-trade
+ * floor, margin cap, concentration, wash-sale) BEFORE placeOrders. Without
+ * that guard, tier-2 rules at unattended scale would re-create the AFW
+ * incident on equity trades. See lib/signals/auto-execute.ts.
  */
 const AUTO_TIER_RULES: ReadonlySet<string> = new Set([
-  'CLM_CRF_TRIM',         // pillar trim above a hard cap — well-bounded
-  'AIRBAG_SCALE',         // VIX-reactive hedge sizing — bounded by AIRBAG % targets
-  'AFW_TRIGGER',          // $500/$500 splits or $1000 single ticker — hard-coded sizes
+  'CLM_CRF_TRIM',             // pillar trim above hard cap — well-bounded
+  'AIRBAG_SCALE',             // VIX-reactive hedge sizing — bounded by AIRBAG % targets
+  'AFW_TRIGGER',              // $500/$500 splits or $1000 single ticker — hard-coded sizes
+  'MAINTENANCE_RANKED_TRIM',  // margin-relief SELL; sized to MARGIN_TRIM_TARGET; ≤ half position
+  'PILLAR_FILL',              // income-pillar new-position BUY; PILLAR_FILL_MAX_DOLLARS = $5K
+  'TRIPLES_DIP_LADDER',       // per-ticker dip BUY; TRIPLES_DIP_PER_STEP_DOLLARS = $1K; combined-weight gated
 ]);
 
 /**
@@ -119,8 +134,17 @@ const ALERT_ONLY_RULES: ReadonlySet<string> = new Set([
   'CLM_CRF_PREMIUM_CHECK',
 ]);
 
-/** Per-trade ceiling above which tier-1 candidates get pushed to tier 2. */
-const AUTO_TIER_MAX_DOLLARS = 2_000;
+/**
+ * Per-trade ceiling above which tier-1 candidates get pushed to tier 2.
+ * Aligned with DEFAULT auto-config.maxDollarsPerTrade ($5K) so the two caps
+ * don't fight each other. Trades above this still flow to the inbox for
+ * manual approval; they just don't auto-fire.
+ *
+ * History: raised from $2K → $5K alongside the tier-2 promotion. PILLAR_FILL
+ * has its own $5K hard cap baked into the engine (PILLAR_FILL_MAX_DOLLARS),
+ * so $5K is the natural ceiling.
+ */
+const AUTO_TIER_MAX_DOLLARS = 5_000;
 
 /**
  * Pure classifier — exported so `lib/signals/run.ts` can tag inbox items with
