@@ -84,8 +84,15 @@ export function defaultAutoConfig(): AutoConfig {
       // TRIPLES_DIP_LADDER), 3 was too tight — a single laddered dip day
       // could exhaust the budget before the other rules ran.
       maxTrades:              10,
+      // Held at $5K alongside AUTO_TIER_MAX_DOLLARS and PILLAR_FILL_MAX_DOLLARS
+      // — raising past $5K is a coordinated change across three files. $5K
+      // also keeps single-trade AFW impact well below the $10K floor.
       maxDollarsPerTrade:     5000,
-      maxNetExposureShiftPct: 10,
+      // Raised 10 → 15 for smaller portfolios (<$250K) where the 10% cap
+      // bound too early on busy auto days. At $200K: 15% = $30K daily, which
+      // accommodates one substantial trim + a full ladder day without binding,
+      // while still providing a cumulative governor beyond per-trade caps.
+      maxNetExposureShiftPct: 15,
     },
     circuitBreaker: {
       dailyLossPct:    -2,
