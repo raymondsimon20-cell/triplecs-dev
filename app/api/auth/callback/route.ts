@@ -1,11 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens } from '@/lib/schwab/auth';
 import { saveTokens, getTokens } from '@/lib/storage';
-import { createSession, getSession } from '@/lib/session';
-import {
-  hasValidDeviceLinkCookie,
-  DEVICE_LINK_COOKIE,
-} from '@/lib/device-link';
+import { createSession } from '@/lib/session';
+import { DEVICE_LINK_COOKIE } from '@/lib/device-link';
 
 export const dynamic = 'force-dynamic';
 
@@ -36,29 +33,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.redirect(appUrl('/?error=state_mismatch'));
   }
 
-  // Identity gate. This app is single-user — there's exactly one Schwab
-  // token blob (`schwab-tokens/current-user`). Before this gate, anyone
-  // who completed the OAuth dance (knowing the deployed redirect URL +
-  // forging or stealing the `oauth_state` cookie) could overwrite the
-  // stored tokens with their own and silently take over the session.
+  // Identity gate — TEMPORARILY DISABLED.
+  // Re-enable when a better multi-device auth flow is in place.
+  // See lib/device-link.ts for the original implementation.
   //
-  // Rule: if tokens already exist, the caller MUST present proof that
-  // they're the legitimate owner. Either:
-  //   (a) a valid `triple_c_session` cookie — re-auth from a known device, or
-  //   (b) a valid `device_link` cookie — a new device authorized by the owner
-  //       via /api/auth/link-device (see lib/device-link.ts).
-  // A fresh install with no tokens stored is the only case where an
-  // unauthenticated OAuth completion succeeds.
-  const existingTokens = await getTokens().catch(() => null);
-  const existingSession = await getSession();
-  const validDeviceLink = await hasValidDeviceLinkCookie();
-
-  if (existingTokens && !existingSession?.authenticated && !validDeviceLink) {
-    console.warn(
-      '[oauth] callback rejected — tokens exist but caller has no valid session or device-link',
-    );
-    return NextResponse.redirect(appUrl('/?error=oauth_not_permitted'));
-  }
+  // const existingTokens = await getTokens().catch(() => null);
+  // const existingSession = await getSession();
+  // const validDeviceLink = await hasValidDeviceLinkCookie();
+  // if (existingTokens && !existingSession?.authenticated && !validDeviceLink) {
+  //   console.warn('[oauth] callback rejected — tokens exist but caller has no valid session or device-link');
+  //   return NextResponse.redirect(appUrl('/?error=oauth_not_permitted'));
+  // }
 
   try {
     // Exchange code for tokens
