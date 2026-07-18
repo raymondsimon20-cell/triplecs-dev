@@ -7,6 +7,7 @@ import { TradeInbox } from '@/components/TradeInbox';
 import { AIPanel } from '@/components/AIPanel';
 import { FireProgress } from '@/components/FireProgress';
 import { Toasts, type ToastMsg } from '@/components/Toast';
+import { classify } from '@/lib/classify';
 
 interface AccountData {
   accountNumber: string;
@@ -113,7 +114,7 @@ export default function Dashboard() {
 
   const positions: PositionRow[] = (account?.positions ?? []).map((p) => ({
     symbol: p.instrument.symbol,
-    pillar: 'unknown',
+    pillar: classify(p.instrument.symbol, p.instrument.putCall),
     quantity: p.longQuantity - p.shortQuantity,
     marketValue: p.marketValue,
     dayPL: p.currentDayProfitLoss,
