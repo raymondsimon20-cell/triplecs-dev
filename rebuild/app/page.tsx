@@ -64,6 +64,10 @@ export default function Dashboard() {
         fetch('/api/signals'),
         fetch('/api/strategy'),
       ]);
+      if (accRes.status === 401) {
+        setAuthed(false);
+        return;
+      }
       if (accRes.status === 500) {
         const body = await accRes.json();
         if (String(body.error).includes('Not authenticated')) {
