@@ -154,7 +154,91 @@ export const FUND_METADATA: Record<string, FundMeta> = {
   SGOV: I('bond'),
   USFR: I('bond'),
 
+  // ---- Additional leveraged longs (triples pillar) ----
+  URTY: T('proshares', { index: 'RUT' }),
+  UMDD: T('proshares', { index: 'OTHER' }), // 3x MidCap 400 — not a major-index triple
+  CURE: T('direxion', { sectorTriple: true }), // 3x healthcare — decay warning applies
+  HIBL: T('direxion', { sectorTriple: true }), // 3x S&P high beta
+  NVDL: T('other', { sectorTriple: true }), // leveraged single-stock (NVDA) — decay warning
+  TSLL: T('direxion', { sectorTriple: true }), // leveraged single-stock (TSLA)
+
+  // ---- Yieldmax additions ----
+  MRNY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  XOMO: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  TSMY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  SNOY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  AIYY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  GDXY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  PLTY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  CVNY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  AMDY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  MSTY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  FBY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  BIOY: I('yieldmax', { behavior: 'bounce-then-decay' }),
+  QDTY: I('yieldmax', { behavior: 'sells-calls', index: 'NDX' }), // Target 12 0DTE
+  SDTY: I('yieldmax', { behavior: 'sells-calls', index: 'SPX' }),
+  FIAT: I('yieldmax', { behavior: 'inverse-income' }), // short COIN
+
+  // ---- Covered-call index ETFs (Global X et al.) ----
+  QYLD: I('other', { behavior: 'sells-calls', index: 'NDX' }),
+  XYLD: I('other', { behavior: 'sells-calls', index: 'SPX' }),
+  RYLD: I('other', { behavior: 'sells-calls', index: 'RUT' }),
+  DJIA: I('other', { behavior: 'sells-calls', index: 'DJI' }), // Global X Dow 30 covered call
+
+  // ---- NEOS additions ----
+  BTCI: I('neos'),
+  IWMI: I('neos', { index: 'RUT' }),
+
+  // ---- Income CEFs ----
+  PCN: I('other'),
+  PDI: I('other'),
+  PDO: I('other'),
+  PFN: I('other'),
+  PFL: I('other'),
+  PHK: I('other'),
+  OPP: I('other'),
+  GAB: I('other'),
+  GGT: I('other'),
+  EVT: I('other'),
+  ETB: I('other'),
+  EOI: I('other'),
+  BUI: I('other'),
+  BGY: I('other'),
+  BCAT: I('other'),
+  ECAT: I('other'),
+
+  // ---- BDCs / other income ----
+  OXSQ: I('other'),
+  TPVG: I('other'),
+  O: I('other'),
+  QDVO: I('other'),
+  COWS: I('other'),
+  VYM: I('other'),
+  BRKW: I('other'), // weekly payer (owner-confirmed)
+  NIHI: I('other'), // income (owner-confirmed)
+  TOPW: I('other'), // weekly payer (owner-confirmed)
+
+  // ---- Commodity / stabilizers (income pillar) ----
+  GLD: I('other'),
+  IAU: I('other'),
+  AAAU: I('other'),
+  IAUI: I('other'), // gold-linked income (owner-confirmed)
+  KSLV: I('other'), // VERIFY: silver-linked, pending confirmation
+  KMLM: I('other'), // managed futures stabilizer
+
   // ---- Growth anchors (income/core pillar) ----
+  SCHG: I('growth'),
+  SCHB: I('growth'),
+  RSP: I('growth'),
+  IWM: I('growth'),
+  QQQM: I('growth'),
+  VXUS: I('growth'),
+  MCD: I('growth'),
+  COST: I('growth'),
+  MSTR: I('growth'),
+  KGC: I('growth'),
+  ITA: I('growth'),
+  BLOK: I('growth'),
   QQQ: I('growth'),
   SPYG: I('growth'),
   NVDA: I('growth'),
