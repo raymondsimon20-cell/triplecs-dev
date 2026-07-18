@@ -1,0 +1,15 @@
+[build]
+  command = "npm run build"
+
+[[plugins]]
+  package = "@netlify/plugin-nextjs"
+
+# Cron: daily signal engine run (weekdays, after market open checks pre-market state)
+[functions."daily-signals"]
+  schedule = "30 13 * * 1-5" # 9:30 ET in UTC (adjust for DST as needed)
+
+[functions."daily-rebalance"]
+  schedule = "0 18 * * 1-5" # 2:00 ET
+
+[functions."daily-digest"]
+  schedule = "30 21 * * 1-5" # 5:30 ET, after close
