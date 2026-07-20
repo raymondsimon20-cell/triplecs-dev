@@ -277,6 +277,15 @@ export const CONFIG = {
   /** Penalize candidates whose family is already above this % of portfolio. */
   PILLAR_FILL_FAMILY_PENALTY_PCT: 10,
   /**
+   * Positions below this market value are 1-share "seeds" — deliberate
+   * universe bookmarks staged by the seed-universe tool. PILLAR_FILL treats
+   * them as preferred scale-up candidates rather than excluding them as
+   * already-held.
+   */
+  SEED_MAX_DOLLARS: 500,
+  /** Score bonus for scaling an existing seed vs introducing an unheld ticker. */
+  PILLAR_FILL_SEED_BONUS: 0.5,
+  /**
    * Absolute margin-utilization ceiling for ANY new-buy rule. Above this,
    * PILLAR_FILL is skipped entirely — MAINTENANCE_RANKED_TRIM is what should
    * be firing first to relieve margin pressure, not new buys that add to it.
@@ -1240,9 +1249,39 @@ function evalPillarFill(
 
   const marginUtilPct = valuation.marginDebt / totalForPct;
 
-  // Score candidates from the AI-curated income subset.
-  const scored = listAiCurated('income')
+  // Candidate pool: existing 1-share SEEDS in the income pillar first — the
+  // user deliberately stages ~1 share of every approved fund as a universe
+  // bookmark (seed-universe tool), and scaling a pre-vetted seed beats
+  // introducing a brand-new ticker. Curated non-held tickers fill out the
+  // rest of the pool. Seeds get a score bonus so they win ties.
+  interface FillCandidate {
+    symbol:               string;
+    family:               FundFamily;
+    maintenancePct:       number;
+    maintenancePctSource: 'explicit' | 'default';
+    isSeed:               boolean;
+  }
+  const seedCandidates: FillCandidate[] = positions
+    .filter((p) => p.pillar === 'income')
+    .filter((p) => p.marketValue > 0 && p.marketValue < CONFIG.SEED_MAX_DOLLARS)
+    .map((p) => ({
+      symbol:               p.symbol,
+      family:               p.family ?? 'Other',
+      maintenancePct:       p.maintenancePct ?? 50,
+      maintenancePctSource: p.maintenancePctSource ?? 'default',
+      isSeed:               true,
+    }));
+  const curatedCandidates: FillCandidate[] = listAiCurated('income')
     .filter((c) => !heldSymbols.has(c.symbol))
+    .map((c) => ({
+      symbol:               c.symbol,
+      family:               c.family,
+      maintenancePct:       c.maintenancePct,
+      maintenancePctSource: c.maintenancePctSource,
+      isSeed:               false,
+    }));
+
+  const scored = [...seedCandidates, ...curatedCandidates]
     .filter((c) => !washSaleSkip.has(c.symbol))
     .filter((c) => {
       if (marginUtilPct > 0.30 && c.maintenancePct > CONFIG.PILLAR_FILL_HIGH_MARGIN_MAINT_CEILING) {
@@ -1257,7 +1296,8 @@ function evalPillarFill(
       // Maintenance gets a mild penalty: prefer lower-maint candidates when ranking
       // is otherwise tied, but don't override the family-diversification preference.
       const maintPenalty = c.maintenancePct / 100;
-      const score = -familyPenalty - maintPenalty;
+      const seedBonus    = c.isSeed ? CONFIG.PILLAR_FILL_SEED_BONUS : 0;
+      const score = seedBonus - familyPenalty - maintPenalty;
       return { c, familyPct, score };
     })
     .sort((a, b) => b.score - a.score);
@@ -1296,7 +1336,10 @@ function evalPillarFill(
       sizePerSignal,
       priority,
       `Income pillar at ${incomePct.toFixed(1)}% vs target ${targetPct}% (gap ${gapPp.toFixed(1)}pp). ` +
-        `${c.symbol} (${c.family}) fills the gap; you don't already hold it` +
+        `${c.symbol} (${c.family}) fills the gap; ` +
+        (c.isSeed
+          ? `you hold it as a 1-share seed — scale it up`
+          : `you don't already hold it`) +
         (familyPct > 0 ? `, and current ${c.family} exposure is ${familyPct.toFixed(1)}%.` : '.'),
       {
         pillar:                 'income',
@@ -1307,6 +1350,7 @@ function evalPillarFill(
         familyExposurePct:      Math.round(familyPct * 100) / 100,
         candidateMaintPct:      c.maintenancePct,
         candidateMaintSource:   c.maintenancePctSource,
+        candidateIsSeed:        c.isSeed,
       },
     ));
   }
