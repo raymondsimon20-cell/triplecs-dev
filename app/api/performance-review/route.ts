@@ -134,17 +134,28 @@ You are reviewing your own 90-day track record. Based on the feedback context ab
 5. Be conservative with marginLimitPct changes — that's leverage policy, not a tactical lever
 6. If the data doesn't support changes (e.g., not enough decided recs, regime was extreme), return an empty {proposed: {}} and say so in the rationale
 
+STYLE — PLAIN ENGLISH, MANDATORY:
+Write findings and rationale for a smart person with no finance background.
+Each finding: one plain sentence saying what happened and what it means, with
+the supporting number woven in naturally — "The buy-the-dip trades worked: 4 of
+5 made money, averaging +6% each" — never "AFW_TRIGGER win rate 80%, avg pnl
++6.2%". Explain any jargon in the sentence itself (AFW = your cash cushion;
+maintenance = collateral the broker demands). The rationale should read like a
+friend explaining why the settings change makes sense: what the data showed, what
+the change does, and what you'd expect to improve. No internal variable names in
+prose — say "the triples allocation target" not "triplesPct".
+
 Respond with ONLY a JSON object wrapped in <json></json> tags:
 <json>
 {
   "keyFindings": [
-    "<one finding per item, concrete and grounded in the numbers above>"
+    "<one plain-English finding per item, grounded in the numbers above>"
   ],
   "proposed": {
     "triplesPct": 12,
     "incomePct": 63
   },
-  "rationale": "<2-3 sentences explaining the why, citing the specific stats from the feedback block>"
+  "rationale": "<3-5 plain-English sentences: what the data showed, what the change does, what should improve>"
 }
 </json>
 `.trim();
