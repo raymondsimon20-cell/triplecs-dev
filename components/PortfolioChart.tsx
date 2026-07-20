@@ -7,16 +7,19 @@ import { TrendingUp, TrendingDown, BarChart2 } from 'lucide-react';
 interface SnapshotPoint {
   savedAt: number;
   totalValue: number;
-  equity: number;
-  marginBalance: number;
-  marginUtilizationPct: number;
+  equity: number | null;
+  marginBalance: number | null;
+  marginUtilizationPct: number | null;
+  /** True when reconstructed by backfill (gross value only — no cash/margin data). */
+  synthetic?: boolean;
 }
 
 interface ChartPoint {
   date: string;
   portfolioValue: number;
-  equity: number;
-  marginPct: number;
+  equity: number | null;
+  marginPct: number | null;
+  synthetic: boolean;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -67,8 +70,12 @@ export function PortfolioChart({ accountHash }: PortfolioChartProps = {}) {
           .map((s) => ({
             date:           new Date(s.savedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
             portfolioValue: s.totalValue,
-            equity:         s.equity,
-            marginPct:      s.marginUtilizationPct,
+            // Legacy synthetic snapshots (written before the null fix) faked
+            // equity=totalValue and margin=0 — treat those as unknown too so
+            // old backfilled data stops distorting the equity/margin lines.
+            equity:         s.synthetic ? null : s.equity,
+            marginPct:      s.synthetic ? null : s.marginUtilizationPct,
+            synthetic:      !!s.synthetic,
           }));
         setData(points);
       })
@@ -95,20 +102,27 @@ export function PortfolioChart({ accountHash }: PortfolioChartProps = {}) {
     );
   }
 
-  const first = data[0];
-  const last  = data[data.length - 1];
-
-  const valueChange = last.portfolioValue - first.portfolioValue;
-  const valuePct    = first.portfolioValue > 0 ? (valueChange / first.portfolioValue) * 100 : 0;
-  const isUp        = valueChange >= 0;
-
   const VIEW_CONFIG = {
-    value:  { key: 'portfolioValue', label: 'Portfolio Value', color: '#3b82f6', gradFrom: '#3b82f620', gradTo: '#3b82f605' },
-    equity: { key: 'equity',         label: 'Equity',          color: '#10b981', gradFrom: '#10b98120', gradTo: '#10b98105' },
-    margin: { key: 'marginPct',      label: 'Margin %',        color: '#f59e0b', gradFrom: '#f59e0b20', gradTo: '#f59e0b05' },
+    value:  { key: 'portfolioValue' as const, label: 'Portfolio Value', color: '#3b82f6' },
+    equity: { key: 'equity'         as const, label: 'Equity',          color: '#10b981' },
+    margin: { key: 'marginPct'      as const, label: 'Borrowing %',     color: '#f59e0b' },
   };
-
   const cfg = VIEW_CONFIG[view];
+
+  // Header change stats follow the ACTIVE series (not always portfolio value),
+  // computed between the first and last days that actually have data for it —
+  // synthetic (reconstructed) days have no equity/margin numbers.
+  const series     = data.filter((p) => p[cfg.key] != null);
+  const first      = series[0];
+  const last       = series[series.length - 1];
+  const firstVal   = (first?.[cfg.key] ?? 0) as number;
+  const lastVal    = (last?.[cfg.key] ?? 0) as number;
+  const change     = lastVal - firstVal;
+  const isUp       = view === 'margin' ? change <= 0 : change >= 0; // falling borrowing is good
+  const headline   = view === 'margin'
+    ? `${change >= 0 ? '+' : ''}${change.toFixed(1)}pp`
+    : `${change >= 0 ? '+' : ''}${firstVal > 0 ? ((change / firstVal) * 100).toFixed(1) : '0.0'}%`;
+  const syntheticCount = data.filter((p) => p.synthetic).length;
 
   return (
     <div className="space-y-3">
@@ -120,9 +134,11 @@ export function PortfolioChart({ accountHash }: PortfolioChartProps = {}) {
             : <TrendingDown className="w-4 h-4 text-red-400" />
           }
           <span className={`text-sm font-semibold ${isUp ? 'text-emerald-400' : 'text-red-400'}`}>
-            {isUp ? '+' : ''}{valuePct.toFixed(1)}%
+            {headline}
           </span>
-          <span className="text-xs text-[#7c82a0]">over {data.length}d</span>
+          <span className="text-xs text-[#7c82a0]">
+            {cfg.label} over {series.length} day{series.length === 1 ? '' : 's'}
+          </span>
         </div>
         {/* View toggle */}
         <div className="flex gap-1">
@@ -136,7 +152,7 @@ export function PortfolioChart({ accountHash }: PortfolioChartProps = {}) {
                   : 'text-[#4a5070] hover:text-white border border-transparent'
               }`}
             >
-              {v === 'value' ? 'Value' : v === 'equity' ? 'Equity' : 'Margin %'}
+              {v === 'value' ? 'Value' : v === 'equity' ? 'Equity' : 'Borrowing %'}
             </button>
           ))}
         </div>
@@ -182,11 +198,21 @@ export function PortfolioChart({ accountHash }: PortfolioChartProps = {}) {
               strokeWidth={1.5}
               fill="url(#chartGrad)"
               dot={false}
+              connectNulls={false}
               activeDot={{ r: 3, fill: cfg.color }}
             />
           </AreaChart>
         </ResponsiveContainer>
       </div>
+
+      {/* Reconstructed-history footnote */}
+      {syntheticCount > 0 && (
+        <p className="text-[10px] text-[#4a5070] leading-relaxed">
+          {view === 'value'
+            ? `The first ${syntheticCount} day${syntheticCount === 1 ? '' : 's'} are reconstructed from your trade log and closing prices — position value only (options, cash, and borrowing aren't in the reconstruction).`
+            : `Equity and borrowing aren't known for the ${syntheticCount} reconstructed day${syntheticCount === 1 ? '' : 's'} — those lines start where live tracking began.`}
+        </p>
+      )}
     </div>
   );
 }

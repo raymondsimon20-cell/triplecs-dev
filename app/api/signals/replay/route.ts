@@ -154,7 +154,8 @@ export async function GET(req: Request) {
       // Cash isn't stored on snapshots — derive: cash ≈ equity − Σ(marketValue) + marginDebt
       // (since equity = positions + cash − marginDebt). Conservative: clamp ≥ 0.
       const holdingsTotal = (snap.positions ?? []).reduce((s, p) => s + (p.marketValue || 0), 0);
-      const cash = Math.max(0, snap.equity - holdingsTotal + marginDebt);
+      // Synthetic snapshots carry null equity — assume fully invested (cash 0).
+      const cash = Math.max(0, (snap.equity ?? holdingsTotal) - holdingsTotal + marginDebt);
 
       const inputs: EngineInputs = {
         positions,
@@ -197,7 +198,7 @@ export async function GET(req: Request) {
       days.push({
         date:                 dateIso,
         totalValue:           snap.totalValue,
-        marginUtilizationPct: snap.marginUtilizationPct,
+        marginUtilizationPct: snap.marginUtilizationPct ?? 0,
         signalsFired:         fired,
       });
     }

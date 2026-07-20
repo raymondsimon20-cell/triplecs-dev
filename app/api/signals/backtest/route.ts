@@ -115,8 +115,10 @@ export async function POST(req: Request) {
     const holdingsAtStart = (first.positions ?? []).reduce(
       (s, p) => s + (p.marketValue || 0), 0,
     );
-    // cash = equity - positions + marginDebt (rearrange equity = pos + cash − margin)
-    let simCash       = Math.max(0, first.equity - holdingsAtStart + Math.abs(first.marginBalance ?? 0));
+    // cash = equity - positions + marginDebt (rearrange equity = pos + cash − margin).
+    // Synthetic snapshots have null equity (not reconstructible) — treat as
+    // fully-invested with zero cash, the least-wrong assumption for a backtest.
+    let simCash       = Math.max(0, (first.equity ?? holdingsAtStart) - holdingsAtStart + Math.abs(first.marginBalance ?? 0));
     let simMarginDebt = Math.abs(first.marginBalance ?? 0);
 
     // Build SPY history once so the engine sees realistic context.

@@ -179,7 +179,8 @@ export async function POST(req: Request) {
       if (typeof snap.spyClose === 'number') prices['SPY'] = snap.spyClose;
       const marginDebt    = Math.abs(snap.marginBalance ?? 0);
       const holdingsTotal = (snap.positions ?? []).reduce((s, p) => s + (p.marketValue || 0), 0);
-      const cash          = Math.max(0, snap.equity - holdingsTotal + marginDebt);
+      // Synthetic snapshots carry null equity — assume fully invested (cash 0).
+      const cash          = Math.max(0, (snap.equity ?? holdingsTotal) - holdingsTotal + marginDebt);
       return {
         positions, cash, marginDebt, prices, spyHistory,
         vix:   20, state,

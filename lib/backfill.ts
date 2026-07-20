@@ -90,9 +90,13 @@ function buildSnapshotFromPositions(
     // savedAt = end-of-day UTC for the target date so date-keying lines up
     savedAt: new Date(`${dateStr}T20:00:00.000Z`).getTime(),
     totalValue,
-    equity: totalValue,                  // synthetic: cash + margin not reconstructed
-    marginBalance: 0,
-    marginUtilizationPct: 0,
+    // Cash + borrowing can't be reconstructed from the trade log. NULL is
+    // honest; the old `equity = totalValue, margin = 0` fabrication made
+    // history overstate equity by the full margin debt and show a fake 0%
+    // borrowing line, then cliff to reality when live snapshots began.
+    equity: null,
+    marginBalance: null,
+    marginUtilizationPct: null,
     pillarSummary,
     positions,
     synthetic: true,

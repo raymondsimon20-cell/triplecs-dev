@@ -84,9 +84,15 @@ export async function listAnalyses(accountHash: string): Promise<AnalysisRecord[
 export interface PortfolioSnapshot {
   savedAt: number;
   totalValue: number;
-  equity: number;
-  marginBalance: number;
-  marginUtilizationPct: number;
+  /**
+   * Equity / margin are NULL on synthetic (backfilled) snapshots — cash and
+   * borrowing can't be reconstructed from the trade log, and fabricating
+   * `equity = totalValue, margin = 0` made historical charts overstate
+   * equity by the full margin debt. Consumers must handle null.
+   */
+  equity: number | null;
+  marginBalance: number | null;
+  marginUtilizationPct: number | null;
   pillarSummary: Array<{
     pillar: string;
     portfolioPercent: number;
@@ -235,7 +241,17 @@ export async function getSnapshotHistory(limit = 90, accountHash?: string): Prom
   const records = await Promise.all(
     sorted.map((key) => store.get(key, { type: 'json' }) as Promise<PortfolioSnapshot | null>)
   );
-  return records.filter((r): r is PortfolioSnapshot => r !== null);
+  return records
+    .filter((r): r is PortfolioSnapshot => r !== null)
+    // Normalize legacy synthetic snapshots written before the null-equity fix:
+    // they fabricated equity=totalValue and margin=0, which overstated equity
+    // by the full margin debt in charts and return calcs. Null them on read so
+    // every consumer sees "unknown" instead of fiction.
+    .map((r) =>
+      r.synthetic
+        ? { ...r, equity: null, marginBalance: null, marginUtilizationPct: null }
+        : r,
+    );
 }
 
 // ─── Cash-flow events (for TWR calculation) ──────────────────────────────────

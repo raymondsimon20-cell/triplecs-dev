@@ -126,7 +126,9 @@ export function computeTWR(snapshots: PortfolioSnapshot[], cashFlows: CashFlowEv
   for (let i = 1; i < sorted.length; i++) {
     const A = sorted[i - 1];
     const B = sorted[i];
-    if (!A.equity || A.equity <= 0) { hasGaps = true; continue; }
+    // Null equity = synthetic (reconstructed) snapshot — no real equity data.
+    // Skip these periods rather than compute returns off fabricated numbers.
+    if (!A.equity || A.equity <= 0 || B.equity == null || B.equity <= 0) { hasGaps = true; continue; }
 
     const startDate = toDayKey(A.savedAt);
     const endDate   = toDayKey(B.savedAt);
