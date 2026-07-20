@@ -211,6 +211,57 @@ test('respects PILLAR_FILL_MAX_CANDIDATES cap (≤ 2 proposals per pillar)', () 
   assert.ok(fires.length <= 2, `expected ≤2 candidates, got ${fires.length}`);
 });
 
+test('prefers scaling an existing 1-share seed over unheld curated tickers', () => {
+  // Underweight income (50% vs 65% target). XDTE is held as a $30 seed
+  // (< SEED_MAX_DOLLARS) — the seed bonus should put it at the top of the
+  // candidate ranking despite it being "already held".
+  const result = runSignalEngine(baseInputs({
+    positions: [
+      enrichedPosition('SCHD', 625, 50_000),
+      enrichedPosition('XDTE', 1, 30), // 1-share universe seed
+    ],
+    cash: 50_000,
+  }));
+  const fires   = findSignals(result.signals, 'PILLAR_FILL');
+  const tickers = fires.map((s) => s.ticker);
+  assert.ok(tickers.includes('XDTE'), `expected seed XDTE to be proposed; got ${tickers.join(',')}`);
+  const seedFire = fires.find((s) => s.ticker === 'XDTE')!;
+  assert.ok(/seed/i.test(seedFire.reason), `expected reason to mention the seed; got: ${seedFire.reason}`);
+  assert.equal(seedFire.direction, 'BUY');
+  assert.ok(seedFire.sizeDollars > 0);
+});
+
+test('seed threshold: real-size held positions are still never proposed', () => {
+  // JEPI at $5,000 is a real allocation (≥ $500), not a seed — held tickers
+  // above the seed threshold must stay excluded from PILLAR_FILL proposals.
+  const result = runSignalEngine(baseInputs({
+    positions: [
+      enrichedPosition('SCHD', 500, 40_000),
+      enrichedPosition('JEPI', 83, 5_000),
+      enrichedPosition('XDTE', 1, 30), // seed — eligible
+    ],
+    cash: 55_000,
+  }));
+  const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
+  assert.ok(!tickers.includes('JEPI'), `JEPI ($5k, real size) must not be proposed; got ${tickers.join(',')}`);
+  assert.ok(!tickers.includes('SCHD'), `SCHD must not be proposed; got ${tickers.join(',')}`);
+});
+
+test('seeds respect the wash-sale skip like any other candidate', () => {
+  const result = runSignalEngine(baseInputs({
+    positions: [
+      enrichedPosition('SCHD', 625, 50_000),
+      enrichedPosition('XDTE', 1, 30),
+    ],
+    cash: 50_000,
+    recentSells30d: [
+      { symbol: 'XDTE', soldDate: new Date().toISOString(), isLoss: true },
+    ],
+  }));
+  const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
+  assert.ok(!tickers.includes('XDTE'), `wash-sale seed XDTE must be skipped; got ${tickers.join(',')}`);
+});
+
 test('runtime marginThresholds override CONFIG defaults', () => {
   // At 35% utilization, default CONFIG would fire MAINTENANCE_RANKED_TRIM
   // (threshold 30%). With runtime marginThresholds.trimAbovePct = 47, the
