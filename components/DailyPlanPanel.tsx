@@ -20,6 +20,7 @@ import {
   CircuitBoard,
 } from 'lucide-react';
 import { useAccountNicknames } from '@/components/AccountSwitcher';
+import { ruleName, ruleDescription, consequenceOf } from '@/lib/friendly';
 
 type Tier      = 'auto' | 'approval' | 'alert';
 type Direction = 'BUY' | 'SELL' | 'REBALANCE' | 'ALERT' | 'INFO';
@@ -130,7 +131,7 @@ function ActionRow({
         <div className="flex-1 min-w-0">
           <p className="text-sm font-semibold text-white leading-snug">
             {title}
-            <span className="font-normal text-[#4a5070] text-xs ml-2">· {action.rule.replace(/_/g, ' ').toLowerCase()}</span>
+            <span className="font-normal text-[#4a5070] text-xs ml-2" title={ruleDescription(action.rule)}>· {ruleName(action.rule)}</span>
             {(action.priority === 'CRITICAL' || action.priority === 'HIGH') && (
               <span className={`text-[10px] font-normal px-1.5 py-0.5 rounded border ml-2 ${priorityColor(action.priority)}`}>
                 {action.priority === 'CRITICAL' ? 'urgent' : 'high priority'}
@@ -138,6 +139,12 @@ function ActionRow({
             )}
           </p>
           <p className="text-xs text-[#a0a4c0] leading-relaxed mt-1">{action.reason}</p>
+          {canAct && (() => {
+            const consequence = consequenceOf(action.rule, action.direction as 'BUY' | 'SELL' | 'ALERT');
+            return consequence
+              ? <p className="text-[11px] text-[#7c82a0] italic leading-relaxed mt-1">{consequence}</p>
+              : null;
+          })()}
           {(accountChip.text || action.blockedByGuardrails || (action.status && action.status !== 'pending')) && (
             <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
               {accountChip.text && (
@@ -252,6 +259,7 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
   const [loading, setLoading] = useState(true);
   const [error,   setError]   = useState<string | null>(null);
   const [busy,    setBusy]    = useState<string | null>(null);
+  const [notice,  setNotice]  = useState<string | null>(null);
   const [cachedAt, setCachedAt] = useState<number | null>(null);
   const nicknames = useAccountNicknames();
 
@@ -325,6 +333,11 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
           // generic message when it didn't.
           setError((prev) => prev ?? `Order placement failed for ${action.ticker} — see browser console.`);
         } else {
+          // Plain-English confirmation: what just happened, in dollars.
+          const verb = action.direction === 'BUY' ? 'Bought' : 'Sold';
+          const qty  = action.quantity ? `${action.quantity.toLocaleString()} share${action.quantity === 1 ? '' : 's'} of ` : '';
+          const amt  = action.sizeDollars > 0 ? ` for about ${fmt$(action.sizeDollars)}` : '';
+          setNotice(`${verb} ${qty}${action.ticker}${amt}. The order is on its way to Schwab — it'll show under Pending orders until it fills.`);
           onChanged?.();
         }
       } else {
@@ -754,6 +767,21 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
       {/* Transient error banner — set by bulkAct / executeAction / patchInbox.
           Shown above the panel content so users don't lose sight of the rows
           they were trying to act on. Dismissible. */}
+      {notice && (
+        <div className="flex items-start justify-between gap-3 text-xs p-2.5 rounded border bg-emerald-500/10 border-emerald-500/30 text-emerald-200">
+          <div className="flex items-start gap-2">
+            <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
+            <span>{notice}</span>
+          </div>
+          <button
+            onClick={() => setNotice(null)}
+            className="text-[10px] px-1.5 py-0.5 rounded border border-emerald-500/40 text-emerald-200 hover:bg-emerald-500/15 transition-colors shrink-0"
+            title="Dismiss"
+          >
+            ✕
+          </button>
+        </div>
+      )}
       {error && (
         <div className="flex items-start justify-between gap-3 text-xs p-2.5 rounded border bg-amber-500/10 border-amber-500/30 text-amber-200">
           <div className="flex items-start gap-2">

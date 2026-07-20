@@ -46,6 +46,10 @@ import { AutomationToggle } from '@/components/AutomationToggle';
 import { PerformancePanel } from '@/components/PerformancePanel';
 import { TodayPanel } from '@/components/TodayPanel';
 import { DailyPlanPanel } from '@/components/DailyPlanPanel';
+import { MorningVerdict } from '@/components/MorningVerdict';
+import { PlaybookCard } from '@/components/PlaybookCard';
+import { PillarTour } from '@/components/PillarTour';
+import { Term } from '@/components/Term';
 import { SeedUniverseButton } from '@/components/SeedUniverseButton';
 import { ReplayPanel } from '@/components/ReplayPanel';
 import { PlanArchivePanel } from '@/components/PlanArchivePanel';
@@ -86,10 +90,11 @@ type PortfolioSub = 'positions' | 'income' | 'trades' | 'market' | 'strategy';
 // ─── Slim metric card ─────────────────────────────────────────────────────────
 // Pre-redesign every card had a gradient text fill + colored hover glow. Now
 // one neutral surface, optional colorClass for the value only (used for P&L).
+// label accepts ReactNode so metric titles can embed <Term> glossary tooltips.
 function MetricCard({
   label, value, rawValue, colorClass = 'text-white', sub, trend,
 }: {
-  label: string;
+  label: React.ReactNode;
   value: string;
   rawValue?: number;
   colorClass?: string;
@@ -957,6 +962,31 @@ export default function DashboardPage() {
   const dangerAlerts = account.marginAlerts.filter((a) => a.level === 'danger');
   const warnAlerts   = account.marginAlerts.filter((a) => a.level === 'warn');
 
+  // ── Health-score inputs (MorningVerdict) — seeds (<$500) excluded from
+  //    the concentration check per the seed-universe convention. ─────────────
+  const pillarPct = (pillar: string) =>
+    account.pillarSummary.find((p) => p.pillar === pillar)?.portfolioPercent ?? 0;
+  const healthInputs = {
+    marginUtilPct:  marginUsedPct,
+    marginWarnPct:  strategyTargets.marginWarnPct,
+    marginLimitPct: strategyTargets.marginLimitPct,
+    pillarDriftPp: {
+      triples:     pillarPct('triples')     - strategyTargets.triplesPct,
+      cornerstone: pillarPct('cornerstone') - strategyTargets.cornerstonePct,
+      income:      pillarPct('income')      - strategyTargets.incomePct,
+      hedge:       pillarPct('hedge')       - strategyTargets.hedgePct,
+    },
+    maxConcentrationPct: account.totalValue > 0
+      ? Math.max(
+          0,
+          ...account.positions
+            .filter((p) => Math.abs(p.marketValue) >= 500)
+            .map((p) => (Math.abs(p.marketValue) / account.totalValue) * 100),
+        )
+      : 0,
+    hedgePct: pillarPct('hedge'),
+  };
+
   // ── Daily pulse handler — switches to History and triggers AI deep-dive ───
   const fireDailyPulse = () => {
     setView('history');
@@ -1135,6 +1165,21 @@ export default function DashboardPage() {
             ═══════════════════════════════════════════════════════════════════ */}
         {view === 'today' && (
           <>
+            {/* First-run pillar tour (collapses to a "What's the strategy?" link) */}
+            <PillarTour />
+
+            {/* One-sentence morning verdict + portfolio health score */}
+            <MorningVerdict
+              dayGainLoss={dayGL}
+              marginUtilPct={marginUsedPct}
+              marginWarnPct={strategyTargets.marginWarnPct}
+              marginLimitPct={strategyTargets.marginLimitPct}
+              health={healthInputs}
+            />
+
+            {/* Downturn playbook — what happens if the market drops */}
+            <PlaybookCard />
+
             {/* 4-metric strip — Equity is the headline (what's actually yours
                 after margin debt). Gross market value sits in the sub for
                 leverage context. Buying Power dropped (AFW carries that role). */}
@@ -1154,11 +1199,11 @@ export default function DashboardPage() {
                 sub={account.equity > 0 ? `${((dayGL / account.equity) * 100).toFixed(2)}% on equity` : undefined}
               />
               <MetricCard
-                label="AFW"
+                label={<Term k="AFW">Cash cushion (AFW)</Term>}
                 value={fmt$(availableForWithdrawal)}
                 rawValue={availableForWithdrawal}
                 colorClass="text-blue-400"
-                sub={`Margin ${marginUsedPct.toFixed(0)}% / 50 cap`}
+                sub={`Borrowing ${marginUsedPct.toFixed(0)}% of the 50% broker cap`}
               />
               <MetricCard
                 label="Max drift"

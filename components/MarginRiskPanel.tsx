@@ -36,18 +36,23 @@ function MarginMeter3({ equity, marginBalance }: { equity: number; marginBalance
   const total = equity + margin;
   const pct = total > 0 ? (margin / total) * 100 : 0;
 
-  const { color, bgColor, label, zone } =
-    pct > 50 ? { color: '#ef4444', bgColor: 'bg-red-500/20', label: 'EMERGENCY — Reduce Now', zone: 'emergency' } :
-    pct > 30 ? { color: '#ef4444', bgColor: 'bg-red-500/10', label: 'CRITICAL — Above 30% Target', zone: 'critical' } :
-    pct > 20 ? { color: '#f97316', bgColor: 'bg-orange-500/10', label: 'WARNING — Approaching Limit', zone: 'warn' } :
-               { color: '#22c55e', bgColor: 'bg-emerald-500/10', label: 'Healthy — Below 20%', zone: 'ok' };
+  const { color, bgColor, label, advice, zone } =
+    pct > 50 ? { color: '#ef4444', bgColor: 'bg-red-500/20',     label: 'Broker limit',  advice: "Schwab blocks new borrowing here — reduce immediately.", zone: 'emergency' } :
+    pct > 30 ? { color: '#ef4444', bgColor: 'bg-red-500/10',     label: 'Reduce now',    advice: 'Above your limit — the app is suggesting sells to bring this down.', zone: 'critical' } :
+    pct > 20 ? { color: '#f97316', bgColor: 'bg-orange-500/10',  label: 'Caution',       advice: 'Getting elevated — watch it, avoid big new buys on margin.', zone: 'warn' } :
+               { color: '#22c55e', bgColor: 'bg-emerald-500/10', label: 'Comfortable',   advice: 'Borrowing is well inside plan.', zone: 'ok' };
+
+  // How much more you could borrow before the NEXT zone starts.
+  const nextZonePct  = pct <= 20 ? 20 : pct <= 30 ? 30 : 50;
+  const headroom     = Math.max(0, (nextZonePct / 100) * total - margin);
+  const nextZoneWord = pct <= 20 ? 'the caution zone' : pct <= 30 ? '"reduce now"' : "Schwab's 50% hard stop";
 
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium text-white">Margin Usage</span>
+        <span className="text-sm font-medium text-white">Borrowing health</span>
         <span className="text-sm font-bold" style={{ color }}>
-          {pct.toFixed(1)}%
+          {pct.toFixed(1)}% · {label}
         </span>
       </div>
 
@@ -58,25 +63,25 @@ function MarginMeter3({ equity, marginBalance }: { equity: number; marginBalance
           style={{ width: `${Math.min(pct, 100)}%`, backgroundColor: color }}
         />
         {/* Zone markers */}
-        <div className="absolute top-0 bottom-0 w-0.5 bg-orange-400/70" style={{ left: '20%' }} title="20% warning" />
-        <div className="absolute top-0 bottom-0 w-0.5 bg-red-400/70" style={{ left: '30%' }} title="30% critical" />
-        <div className="absolute top-0 bottom-0 w-0.5 bg-red-600/70" style={{ left: '50%' }} title="50% emergency max" />
+        <div className="absolute top-0 bottom-0 w-0.5 bg-orange-400/70" style={{ left: '20%' }} title="20% — caution starts" />
+        <div className="absolute top-0 bottom-0 w-0.5 bg-red-400/70" style={{ left: '30%' }} title="30% — reduce now" />
+        <div className="absolute top-0 bottom-0 w-0.5 bg-red-600/70" style={{ left: '50%' }} title="50% — Schwab's broker hard stop" />
       </div>
 
-      {/* Zone labels */}
+      {/* Zone labels — words, not thresholds */}
       <div className="flex justify-between text-xs text-[#4a5070]">
-        <span className="text-emerald-600">Safe</span>
-        <span className="text-orange-500">20% warn</span>
-        <span className="text-red-400">30% critical</span>
-        <span className="text-red-600">50% MAX</span>
+        <span className="text-emerald-600">Comfortable</span>
+        <span className="text-orange-500">Caution (20%)</span>
+        <span className="text-red-400">Reduce now (30%)</span>
+        <span className="text-red-600">Broker limit (50%)</span>
       </div>
 
-      {/* Status badge */}
+      {/* Status badge + practical consequence */}
       <div className={`rounded-lg px-3 py-2 text-xs font-medium ${bgColor}`} style={{ color }}>
-        {label}
-        {pct > 20 && pct <= 50 && (
-          <span className="ml-2 font-normal opacity-80">
-            — target is below 30%, use less than half your purchasing power (Vol 3)
+        {advice}
+        {pct < 50 && headroom > 0 && (
+          <span className="ml-1 font-normal opacity-80">
+            You could borrow about {fmt$(headroom)} more before hitting {nextZoneWord}.
           </span>
         )}
       </div>

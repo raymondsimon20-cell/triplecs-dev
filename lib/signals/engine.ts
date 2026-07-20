@@ -1095,9 +1095,11 @@ function evalMaintenanceRankedTrim(
     'SELL',
     trimDollars,
     priority,
-    `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(trimAbove * 100).toFixed(0)}%. ` +
-      `${top.pos.symbol} has highest maintenance (${top.maint}%) among holdings — selling $${Math.round(trimDollars)} ` +
-      `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(trimTarget * 100).toFixed(0)}%).`,
+    `Borrowing is at ${(marginUtilPct * 100).toFixed(1)}% — above your ${(trimAbove * 100).toFixed(0)}% limit. ` +
+      `Selling ~$${Math.round(trimDollars).toLocaleString()} of ${top.pos.symbol} frees about ` +
+      `$${Math.round(trimDollars * top.maint / 100).toLocaleString()} of breathing room — ` +
+      `the most of any holding ($${Math.round((top.maint / 100) * 1000)} freed per $1,000 sold). ` +
+      `Goal: borrowing back under ${(trimTarget * 100).toFixed(0)}%.`,
     {
       marginUtilPct,
       trimAboveThresholdPct:  trimAbove,
@@ -1129,8 +1131,8 @@ function evalMaintenanceRankedTrim(
       'BUY',
       rotationDollars,
       priority,
-      `Vol-7 1/3 rotation: ~$${Math.round(rotationDollars)} of ${top.pos.symbol} proceeds rotates into ${target} ` +
-        `(currently ${(uproW + tqqqW > 0 ? (target === 'UPRO' ? uproW : tqqqW) : 0).toFixed(1)}%).`,
+      `One-third of the ${top.pos.symbol} sale (~$${Math.round(rotationDollars).toLocaleString()}) goes back into ${target} — ` +
+        `the strategy's 1/3 rule keeps you invested for the recovery while lowering borrowing (Vol 7).`,
       {
         rotationFromSymbol: top.pos.symbol,
         rotationFraction:   CONFIG.ROTATION_INTO_TRIPLES_PCT,

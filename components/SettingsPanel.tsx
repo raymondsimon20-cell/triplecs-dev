@@ -485,16 +485,16 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
                 <div className="text-[10px] text-[#4a5070]">
                   Schwab caps utilization at 50% — values above 50 are clamped server-side.
                 </div>
-                <SliderRow label="Interest rate"      description="Your Schwab margin rate"                            value={draft.marginRatePct}          min={0}  max={15} step={0.25} suffix="%" onChange={(v) => set('marginRatePct', v)} />
-                <SliderRow label="Warn at"            description="UI warning level (informational only)"               value={draft.marginWarnPct}          min={10} max={50}              onChange={(v) => set('marginWarnPct', v)} />
-                <SliderRow label="Trim fires above"   description="MAINTENANCE_RANKED_TRIM fires past this"             value={draft.marginLimitPct}         min={20} max={50}              onChange={(v) => set('marginLimitPct', v)} />
-                <SliderRow label="Trim target"        description="Trim aims to bring margin back here"                 value={draft.marginTrimTargetPct}    min={15} max={50}              onChange={(v) => set('marginTrimTargetPct', v)} />
-                <SliderRow label="New-buy ceiling"    description="PILLAR_FILL stops proposing new positions above this" value={draft.marginNewBuyCeilingPct} min={20} max={50}              onChange={(v) => set('marginNewBuyCeilingPct', v)} />
+                <SliderRow label="Interest rate"      description="What Schwab charges you to borrow — used to estimate your monthly interest cost"        value={draft.marginRatePct}          min={0}  max={15} step={0.25} suffix="%" onChange={(v) => set('marginRatePct', v)} />
+                <SliderRow label="Warn at"            description="Borrowing above this shows a caution flag — nothing changes, you're just told"           value={draft.marginWarnPct}          min={10} max={50}              onChange={(v) => set('marginWarnPct', v)} />
+                <SliderRow label="Trim fires above"   description="If borrowing rises above this, the app starts suggesting sells to bring it down"        value={draft.marginLimitPct}         min={20} max={50}              onChange={(v) => set('marginLimitPct', v)} />
+                <SliderRow label="Trim target"        description="When it suggests sells, it sizes them to bring borrowing back to this level"            value={draft.marginTrimTargetPct}    min={15} max={50}              onChange={(v) => set('marginTrimTargetPct', v)} />
+                <SliderRow label="New-buy ceiling"    description="Above this borrowing level, the app stops suggesting any new purchases"                 value={draft.marginNewBuyCeilingPct} min={20} max={50}              onChange={(v) => set('marginNewBuyCeilingPct', v)} />
               </section>
 
               <section className="space-y-4">
                 <h3 className="text-xs font-semibold text-[#7c82a0] uppercase tracking-wider">Concentration Limits</h3>
-                <SliderRow label="Fund family cap" description="Max % in any single fund family" value={draft.familyCapPct} min={5} max={50} onChange={(v) => set('familyCapPct', v)} />
+                <SliderRow label="Fund family cap" description="Max % of your portfolio in any one fund company — so no single family can take you down" value={draft.familyCapPct} min={5} max={50} onChange={(v) => set('familyCapPct', v)} />
               </section>
 
               <section className="space-y-4">

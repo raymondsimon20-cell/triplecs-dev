@@ -123,10 +123,32 @@ function buildSubject(
 }
 
 function actionLine(prefix: string, ticker: string, dir: string, size: number, rule: string): string {
+  const verb  = dir === 'BUY' ? 'Buy' : dir === 'SELL' ? 'Sell' : dir;
+  const label = friendlyRuleName(rule);
   if (size > 0) {
-    return `${prefix} ${dir} ${ticker} ${fmt$(size)} — ${rule}`;
+    return `${prefix} ${verb} ${fmt$(size)} of ${ticker} (${label})`;
   }
-  return `${prefix} ${dir} ${ticker} — ${rule}`;
+  return `${prefix} ${verb} ${ticker} (${label})`;
+}
+
+/** Friendly rule name — mirrors lib/friendly.ts RULE_LABELS (kept dependency-free
+ *  so the digest builder stays importable from Netlify functions). */
+function friendlyRuleName(ruleId: string): string {
+  const map: Record<string, string> = {
+    AFW_TRIGGER:              'dip buying',
+    TRIPLES_DIP_LADDER:       'dip buying',
+    MAINTENANCE_RANKED_TRIM:  'margin relief',
+    PILLAR_FILL:              'rebalance',
+    DEFENSE_MODE:             'defense mode',
+    KILL_SWITCH:              'crash brake',
+    AIRBAG_SCALE:             'auto-hedging',
+    LEVERAGE_REDUCTION_ALERT: 'trim triples',
+    CLM_CRF_TRIM:             'cornerstone trim',
+  };
+  for (const [id, label] of Object.entries(map)) {
+    if (ruleId.startsWith(id)) return label;
+  }
+  return ruleId.replace(/_/g, ' ').toLowerCase();
 }
 
 /**
@@ -164,11 +186,11 @@ export function buildDigest(input: DigestInput): FormattedDigest {
   const afwSuffix = typeof plan.afwDollars === 'number'
     ? ` · AFW ${fmt$(plan.afwDollars)}`
     : '';
-  lines.push(`Portfolio: ${fmt$(plan.totalValue)} · Margin ${plan.marginUtilizationPct.toFixed(1)}%${afwSuffix}`);
-  lines.push(`Mode: ${plan.autoExecuteMode}`);
-  if (cronHealth?.isStale)   lines.push(`⚠ Engine health: ${cronHealth.reason}`);
-  if (plan.inDefenseMode)    lines.push('⚠ Defense mode is active — new buys suppressed.');
-  if (plan.killSwitchActive) lines.push('⚠ Margin kill switch is tripped — all new purchases paused.');
+  lines.push(`Portfolio: ${fmt$(plan.totalValue)} · Borrowing ${plan.marginUtilizationPct.toFixed(1)}%${afwSuffix}`);
+  lines.push(`Automation: ${plan.autoExecuteMode === 'auto' ? 'on — low-risk trades run themselves' : plan.autoExecuteMode === 'dry-run' ? 'dry run — nothing actually trades' : 'manual — everything waits for your approval'}`);
+  if (cronHealth?.isStale)   lines.push(`⚠ Heads up: the engine hasn't run on schedule. ${cronHealth.reason}`);
+  if (plan.inDefenseMode)    lines.push('⚠ Defense mode is on — your equity ratio is low, so no new buying until the account recovers.');
+  if (plan.killSwitchActive) lines.push('⚠ The crash brake is on — borrowing grew too fast, so all new purchases are paused until you reset it.');
   lines.push('');
 
   if (autoExecute) {
@@ -208,7 +230,7 @@ export function buildDigest(input: DigestInput): FormattedDigest {
   // for. With one account (single-account user, or all items unbucketed)
   // the header is omitted to keep the digest compact.
   if (plan.actions.auto.length > 0) {
-    lines.push(`TIER 1 — Auto-eligible (${plan.actions.auto.length}):`);
+    lines.push(`RUNS AUTOMATICALLY (${plan.actions.auto.length}):`);
     const groups = groupByAccount(plan.actions.auto);
     const multi  = groups.length > 1;
     for (const g of groups) {
@@ -221,7 +243,7 @@ export function buildDigest(input: DigestInput): FormattedDigest {
   }
 
   if (plan.actions.approval.length > 0) {
-    lines.push(`TIER 2 — Needs approval (${plan.actions.approval.length}):`);
+    lines.push(`WAITING FOR YOU (${plan.actions.approval.length}):`);
     const groups = groupByAccount(plan.actions.approval);
     const multi  = groups.length > 1;
     for (const g of groups) {
@@ -238,13 +260,13 @@ export function buildDigest(input: DigestInput): FormattedDigest {
     // Alerts don't always carry an accountHash (some are household-level
     // gates like DEFENSE_MODE). Group anyway so per-account alerts surface
     // clearly when present.
-    lines.push(`TIER 3 — Alerts (${plan.actions.alert.length}):`);
+    lines.push(`WORTH KNOWING — no trade needed (${plan.actions.alert.length}):`);
     const groups = groupByAccount(plan.actions.alert);
     const multi  = groups.length > 1;
     for (const g of groups) {
       if (multi) lines.push(`  [${shortHash(g.hash)}]`);
       for (const a of g.items) {
-        lines.push(`  • ${a.rule}: ${a.reason}`);
+        lines.push(`  • ${friendlyRuleName(a.rule)}: ${a.reason}`);
       }
     }
     lines.push('');
@@ -342,9 +364,9 @@ function renderHtml(
     `;
   };
 
-  const tier1 = section('#10b981', 'Tier 1 — Auto-eligible', plan.actions.auto.map(actionRowHtml));
-  const tier2 = section('#f59e0b', 'Tier 2 — Needs approval', plan.actions.approval.map(actionRowHtml));
-  const tier3 = section('#06b6d4', 'Tier 3 — Alerts',         plan.actions.alert.map(actionRowHtml));
+  const tier1 = section('#10b981', 'Runs automatically',            plan.actions.auto.map(actionRowHtml));
+  const tier2 = section('#f59e0b', 'Waiting for you',               plan.actions.approval.map(actionRowHtml));
+  const tier3 = section('#06b6d4', 'Worth knowing — no trade needed', plan.actions.alert.map(actionRowHtml));
 
   // Morning alert rows
   const morningRows = (morningAlerts ?? [])

@@ -632,10 +632,10 @@ function FireTab({ projectedMonthly, marginBalance }: { projectedMonthly: number
         }
         <div>
           <div className={`font-semibold text-sm ${isFire ? 'text-emerald-300' : 'text-orange-300'}`}>
-            {isFire ? '🎉 Financially Free!' : `${fmt$(gap, true)}/mo gap to FIRE`}
+            {isFire ? '🎉 Financially free — your portfolio covers the bills' : `${fmt$(gap, true)}/mo short of your target salary`}
           </div>
           <div className="text-xs text-[#7c82a0] mt-0.5">
-            Projected monthly income {fmt$Dec(monthlyAvg)} vs target {fmt$Dec(totalTarget)}/mo
+            Your portfolio pays you about {fmt$Dec(monthlyAvg)}/mo. Target paycheck: {fmt$Dec(totalTarget)}/mo.
           </div>
         </div>
       </div>
