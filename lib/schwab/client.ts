@@ -210,6 +210,51 @@ export function missingQuoteSymbols(quotes: SchwabQuotesResponse): string[] {
   return Array.isArray(m) ? m : [];
 }
 
+// ─── Price history endpoint ───────────────────────────────────────────────────
+
+export interface PriceHistoryCandle {
+  datetime: number; // epoch ms
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+}
+
+interface PriceHistoryResponse {
+  symbol: string;
+  empty: boolean;
+  candles: PriceHistoryCandle[];
+}
+
+/**
+ * Daily candles for a symbol over a date band (inclusive), straight from
+ * Schwab — first-party, authenticated, no third-party rate limits.
+ * Index symbols use Schwab notation ($VIX.X, $SPX.X).
+ */
+export async function getPriceHistory(
+  tokens: SchwabTokens,
+  symbol: string,
+  fromDate: string, // YYYY-MM-DD
+  toDate: string
+): Promise<PriceHistoryCandle[]> {
+  const startDate = new Date(`${fromDate}T00:00:00.000Z`).getTime();
+  const endDate   = new Date(`${toDate}T23:59:59.000Z`).getTime();
+  const tail = new URLSearchParams({
+    periodType: 'month',
+    frequencyType: 'daily',
+    frequency: '1',
+    startDate: String(startDate),
+    endDate: String(endDate),
+    needExtendedHoursData: 'false',
+  }).toString();
+  // Manual symbol interpolation — URLSearchParams encodes '$' which Schwab
+  // rejects for index symbols (same constraint as getQuotes).
+  const url = `${MARKET_BASE}/pricehistory?symbol=${symbol}&${tail}`;
+  const json = await schwabFetch<PriceHistoryResponse>(url, tokens);
+  return json.candles ?? [];
+}
+
 // ─── Options chain endpoint ───────────────────────────────────────────────────
 
 export interface OptionsChainParams {

@@ -272,21 +272,60 @@ export function PerformanceReviewPanel({ currentTargets, accountHash }: Props) {
         </div>
       )}
 
-      {/* ── Top-line metrics ──────────────────────────────────────────────── */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
-        <Metric label="Hit rate" value={`${recap.totals.overallHitRatePct.toFixed(0)}%`} positive={recap.totals.overallHitRatePct >= 50} />
-        <Metric label="Expectancy" value={fmtPct(recap.totals.overallExpectancyPct, 2)} positive={recap.totals.overallExpectancyPct >= 0} />
-        <Metric label="P&L" value={fmtUSD(recap.totals.totalPnlDollars)} positive={recap.totals.totalPnlDollars >= 0} />
-        <Metric
-          label="SPY (window)"
-          value={recap.regime.spyReturnPct != null ? fmtPct(recap.regime.spyReturnPct, 1) : '—'}
-          positive={(recap.regime.spyReturnPct ?? 0) >= 0}
-        />
-      </div>
+      {/* ── Scorecard — plain-English top line ────────────────────────────── */}
+      {(() => {
+        const wins    = recap.byMode.reduce((s, m) => s + m.wins, 0);
+        const losses  = recap.byMode.reduce((s, m) => s + m.losses, 0);
+        const decided = wins + losses;
+        return (
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+            <Metric
+              label="Calls that made money"
+              value={decided > 0 ? `${wins} of ${decided}` : '—'}
+              positive={decided > 0 && wins >= losses}
+            />
+            <Metric label="Average result" value={fmtPct(recap.totals.overallExpectancyPct, 2)} positive={recap.totals.overallExpectancyPct >= 0} />
+            <Metric label="Profit / loss" value={fmtUSD(recap.totals.totalPnlDollars)} positive={recap.totals.totalPnlDollars >= 0} />
+            <Metric
+              label="Market (SPY), same window"
+              value={recap.regime.spyReturnPct != null ? fmtPct(recap.regime.spyReturnPct, 1) : '—'}
+              positive={(recap.regime.spyReturnPct ?? 0) >= 0}
+            />
+          </div>
+        );
+      })()}
+
+      {/* ── What worked / what didn't ─────────────────────────────────────── */}
+      {(() => {
+        const scored = recap.byMode.filter((m) => m.wins + m.losses > 0);
+        if (scored.length === 0) return null;
+        const best  = [...scored].sort((a, b) => b.expectancyPct - a.expectancyPct)[0];
+        const worst = [...scored].sort((a, b) => a.expectancyPct - b.expectancyPct)[0];
+        const sentence = (m: ModeSummary) =>
+          `${MODE_LABELS[m.aiMode] ?? m.aiMode} calls: ${m.wins} of ${m.wins + m.losses} made money, averaging ${fmtPct(m.expectancyPct, 1)} each (${fmtUSD(m.totalPnlDollars)} total).`;
+        return (
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+            <div className="border border-emerald-500/30 rounded-lg px-3.5 py-3">
+              <div className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 mb-1.5">
+                <TrendingUp className="w-3.5 h-3.5" /> What worked
+              </div>
+              <p className="text-xs text-[#a8aec8] leading-relaxed">{sentence(best)}</p>
+            </div>
+            {worst.aiMode !== best.aiMode && (
+              <div className="border border-red-500/30 rounded-lg px-3.5 py-3">
+                <div className="flex items-center gap-1.5 text-xs font-semibold text-red-400 mb-1.5">
+                  <TrendingDown className="w-3.5 h-3.5" /> What didn&apos;t
+                </div>
+                <p className="text-xs text-[#a8aec8] leading-relaxed">{sentence(worst)}</p>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* ── Per-mode breakdown ────────────────────────────────────────────── */}
       <div className="card-glass border border-[#252840] rounded-lg p-4">
-        <div className="text-[11px] uppercase tracking-wider text-[#7c82a0] mb-3">By AI Mode</div>
+        <div className="text-[11px] uppercase tracking-wider text-[#7c82a0] mb-3">Details by mode</div>
         <div className="space-y-1.5">
           <div className="grid grid-cols-12 text-[10px] uppercase tracking-wider text-[#4a5070] pb-1 border-b border-[#252840]">
             <div className="col-span-3">Mode</div>
@@ -320,8 +359,8 @@ export function PerformanceReviewPanel({ currentTargets, accountHash }: Props) {
           ))}
         </div>
         <div className="text-[10px] text-[#4a5070] mt-3">
-          Win = pnl ≥ +1% · loss ≤ −1% · n=count includes all decided + dismissed counterfactuals.
-          Mark-to-market for open positions; avg-cost for closed (approximate).
+          A call counts as a win if it gained at least 1%, a loss if it dropped at least 1%.
+          Counts include calls you dismissed (tracked as what-ifs). Numbers are approximate for closed positions.
         </div>
       </div>
 
@@ -363,7 +402,7 @@ export function PerformanceReviewPanel({ currentTargets, accountHash }: Props) {
 
           {hasProposal ? (
             <div>
-              <div className="text-[10px] uppercase tracking-wider text-[#7c82a0] mb-1.5">Proposed target changes</div>
+              <div className="text-[10px] uppercase tracking-wider text-[#7c82a0] mb-1.5">Suggested settings change</div>
               <div className="space-y-1.5">
                 {proposedKeys.map((k) => {
                   const cur = currentTargets[k];
@@ -425,17 +464,17 @@ function Metric({ label, value, positive }: { label: string; value: string; posi
 
 function labelFor(k: keyof StrategyTargets): string {
   const map: Record<keyof StrategyTargets, string> = {
-    triplesPct:             'Triples %',
-    cornerstonePct:         'Cornerstone %',
-    incomePct:              'Income %',
-    hedgePct:               'Hedge %',
-    marginLimitPct:         'Margin limit %',
-    marginWarnPct:          'Margin warn %',
-    marginTrimTargetPct:    'Margin trim target %',
-    marginNewBuyCeilingPct: 'Margin new-buy ceiling %',
-    familyCapPct:           'Family cap %',
+    triplesPct:             'Triples target %',
+    cornerstonePct:         'Cornerstone target %',
+    incomePct:              'Income target %',
+    hedgePct:               'Hedge target %',
+    marginLimitPct:         'Borrowing limit %',
+    marginWarnPct:          'Borrowing warning %',
+    marginTrimTargetPct:    'Trim-back-to borrowing %',
+    marginNewBuyCeilingPct: 'Stop-new-buys borrowing %',
+    familyCapPct:           'Fund-family cap %',
     fireNumber:             'FIRE target $',
-    marginRatePct:          'Margin rate %',
+    marginRatePct:          'Margin interest rate %',
   };
   return map[k];
 }

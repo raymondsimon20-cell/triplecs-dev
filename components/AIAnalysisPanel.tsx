@@ -108,12 +108,40 @@ interface AIAnalysisPanelProps {
 // ─── Constants ──────────────────────────────────────────────────────────────────
 
 const MODES = [
-  { id: 'daily_pulse'   as AnalysisMode, label: 'Daily Pulse',  icon: <Zap       className="w-4 h-4" />, description: 'Quick compliance snapshot + top alerts',              fast: true  },
-  { id: 'trade_plan'    as AnalysisMode, label: 'Trade Plan',   icon: <BarChart2  className="w-4 h-4" />, description: 'Full buy/sell/trim plan with 1/3 rule applied'                },
-  { id: 'rule_audit'    as AnalysisMode, label: 'Rule Audit',   icon: <Shield     className="w-4 h-4" />, description: 'Compliance check against every Triple C rule'               },
-  { id: 'what_to_sell'  as AnalysisMode, label: 'What to Sell', icon: <TrendingDown className="w-4 h-4" />, description: 'Margin relief via pressure valve hierarchy',         fast: true  },
-  { id: 'open_question' as AnalysisMode, label: 'Ask Anything', icon: <MessageCircle className="w-4 h-4" />, description: 'Free-form question answered against the rules'             },
+  { id: 'daily_pulse'   as AnalysisMode, label: 'Daily check',  icon: <Zap       className="w-4 h-4" />, description: 'Quick health check + top alerts',              fast: true  },
+  { id: 'trade_plan'    as AnalysisMode, label: 'Trade plan',   icon: <BarChart2  className="w-4 h-4" />, description: 'Full buy/sell plan you can act on today'                },
+  { id: 'rule_audit'    as AnalysisMode, label: 'Rule audit',   icon: <Shield     className="w-4 h-4" />, description: 'Check every strategy rule against your book'               },
+  { id: 'what_to_sell'  as AnalysisMode, label: 'What to sell', icon: <TrendingDown className="w-4 h-4" />, description: 'Best sells to lower your borrowing',         fast: true  },
+  { id: 'open_question' as AnalysisMode, label: 'Ask anything', icon: <MessageCircle className="w-4 h-4" />, description: 'Free-form question answered against the rules'             },
 ];
+
+/** Plain-English one-line title for a recommendation row. */
+function recTitle(rec: Recommendation): string {
+  const t = rec.ticker;
+  const dollars = rec.dollar_amount ? `about $${Math.round(rec.dollar_amount).toLocaleString()}` : '';
+  switch (rec.action) {
+    case 'BUY':   return dollars ? `Buy ${dollars} of ${t}` : `Buy ${t}`;
+    case 'SELL':
+      if (rec.sell_pct)    return rec.sell_pct >= 100 ? `Sell all of your ${t}` : `Sell ${rec.sell_pct}% of your ${t}`;
+      if (rec.sell_shares) return `Sell ${rec.sell_shares.toLocaleString()} shares of ${t}`;
+      return `Sell ${t}`;
+    case 'TRIM':
+      if (rec.sell_pct) return `Trim ${t} by ${rec.sell_pct}%`;
+      if (dollars)      return `Trim ${dollars} of ${t}`;
+      return `Trim ${t}`;
+    case 'HOLD':  return `Hold ${t} — no action needed`;
+    case 'ROLL':  return `Roll your ${t} option forward`;
+    case 'BOX':   return `Box ${t} (hold long and short at once)`;
+    case 'CLOSE': return `Close your ${t} position`;
+    default:      return `${rec.action} ${t}`;
+  }
+}
+
+const URGENCY_LABEL: Record<string, string> = {
+  immediate: 'act today',
+  this_week: 'this week',
+  monitor:   'keep an eye on it',
+};
 
 // Actions that can be turned into real Schwab orders
 const EXECUTABLE_ACTIONS = new Set(['BUY', 'SELL', 'TRIM']);
@@ -788,29 +816,23 @@ export function AIAnalysisPanel({
 
         {open && (
           <div className="px-5 pb-5 space-y-5 border-t border-[#2d3248] pt-5">
-            {/* Mode selector */}
-            <div>
-              <p className="text-xs text-[#7c82a0] mb-2">Analysis Mode</p>
-              <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-                {MODES.map((m) => (
-                  <button
-                    key={m.id}
-                    onClick={() => { setMode(m.id); setAnalysis(null); setError(null); setSelectedRecs(new Set()); }}
-                    className={`flex flex-col items-start gap-1 p-3 rounded-lg border text-left transition-all ${
-                      mode === m.id
-                        ? 'border-violet-500/60 bg-violet-500/10 text-white'
-                        : 'border-[#2d3248] text-[#7c82a0] hover:border-[#4a5070] hover:text-white'
-                    }`}
-                  >
-                    <div className="flex items-center gap-1.5">
-                      {m.icon}
-                      <span className="text-xs font-medium">{m.label}</span>
-                      {m.fast && <span className="text-[10px] text-violet-400/70 bg-violet-500/10 px-1 rounded">fast</span>}
-                    </div>
-                    <span className="text-[10px] text-[#4a5070] leading-tight">{m.description}</span>
-                  </button>
-                ))}
-              </div>
+            {/* Mode selector — compact pills */}
+            <div className="flex flex-wrap gap-2">
+              {MODES.map((m) => (
+                <button
+                  key={m.id}
+                  title={m.description}
+                  onClick={() => { setMode(m.id); setAnalysis(null); setError(null); setSelectedRecs(new Set()); }}
+                  className={`flex items-center gap-1.5 px-3.5 py-1.5 rounded-full border text-xs font-medium transition-all ${
+                    mode === m.id
+                      ? 'border-violet-500/60 bg-violet-500/15 text-violet-200'
+                      : 'border-[#2d3248] text-[#7c82a0] hover:border-[#4a5070] hover:text-white'
+                  }`}
+                >
+                  {m.icon}
+                  {m.label}
+                </button>
+              ))}
             </div>
 
             {/* Question input */}
@@ -879,12 +901,25 @@ export function AIAnalysisPanel({
             {/* Results */}
             {analysis && !analysis.parse_error && (
               <div className="space-y-5">
-                {/* Summary */}
-                {analysis.summary && (
-                  <div className="bg-violet-500/5 border border-violet-500/20 rounded-lg p-4">
-                    <p className="text-sm text-violet-200 leading-relaxed">{analysis.summary}</p>
-                  </div>
-                )}
+                {/* Verdict banner — one-glance answer derived from alert levels */}
+                {(() => {
+                  const levels = analysis.alerts?.map((a) => a.level) ?? [];
+                  const level  = levels.includes('danger') ? 'danger' : levels.includes('warn') ? 'warn' : 'ok';
+                  const cfg = {
+                    danger: { style: 'bg-red-500/10 border-red-500/30',       icon: <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />,     title: 'Needs attention now',                        titleColor: 'text-red-300' },
+                    warn:   { style: 'bg-orange-500/10 border-orange-500/30', icon: <AlertCircle   className="w-5 h-5 text-orange-400 flex-shrink-0 mt-0.5" />,  title: 'Mostly healthy — something needs attention', titleColor: 'text-orange-300' },
+                    ok:     { style: 'bg-emerald-500/10 border-emerald-500/25', icon: <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />, title: 'All clear',                                  titleColor: 'text-emerald-300' },
+                  }[level];
+                  return (
+                    <div className={`flex items-start gap-3 border rounded-lg p-4 ${cfg.style}`}>
+                      {cfg.icon}
+                      <div>
+                        <p className={`text-sm font-semibold ${cfg.titleColor}`}>{cfg.title}</p>
+                        {analysis.summary && <p className="text-sm text-[#c8cde0] leading-relaxed mt-0.5">{analysis.summary}</p>}
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Pillar Compliance */}
                 {analysis.pillar_compliance && (
@@ -896,35 +931,30 @@ export function AIAnalysisPanel({
                   </div>
                 )}
 
-                {/* Income Snapshot */}
+                {/* Key numbers — plain-English metric cards */}
                 {analysis.income_snapshot && (
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
                     {analysis.income_snapshot.estimated_monthly_income != null && (
-                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3">
-                        <div className="text-[10px] text-[#7c82a0] mb-1">Monthly Income Est.</div>
-                        <div className="text-sm font-bold text-emerald-400">${analysis.income_snapshot.estimated_monthly_income.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
-                      </div>
-                    )}
-                    {analysis.income_snapshot.fire_progress_pct != null && (
-                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3">
-                        <div className="text-[10px] text-[#7c82a0] mb-1">FIRE Progress</div>
-                        <div className="text-sm font-bold text-violet-400">{analysis.income_snapshot.fire_progress_pct.toFixed(0)}%</div>
+                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg px-3.5 py-3">
+                        <div className="text-xs text-[#7c82a0] mb-1">Est. monthly income</div>
+                        <div className="text-xl font-medium text-emerald-400">${analysis.income_snapshot.estimated_monthly_income.toLocaleString('en-US', { maximumFractionDigits: 0 })}</div>
                       </div>
                     )}
                     {analysis.income_snapshot.margin_utilization_pct != null && (
-                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3">
-                        <div className="text-[10px] text-[#7c82a0] mb-1">Margin Used</div>
-                        <div className={`text-sm font-bold ${analysis.income_snapshot.margin_status ? MARGIN_COLORS[analysis.income_snapshot.margin_status] : 'text-white'}`}>
+                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg px-3.5 py-3">
+                        <div className="text-xs text-[#7c82a0] mb-1">Borrowing used</div>
+                        <div className={`text-xl font-medium ${analysis.income_snapshot.margin_status ? MARGIN_COLORS[analysis.income_snapshot.margin_status] : 'text-white'}`}>
                           {analysis.income_snapshot.margin_utilization_pct.toFixed(1)}%
+                          {analysis.income_snapshot.margin_status && (
+                            <span className="text-xs ml-2 capitalize opacity-80">{analysis.income_snapshot.margin_status === 'safe' ? 'healthy' : analysis.income_snapshot.margin_status}</span>
+                          )}
                         </div>
                       </div>
                     )}
-                    {analysis.income_snapshot.margin_status && (
-                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg p-3">
-                        <div className="text-[10px] text-[#7c82a0] mb-1">Margin Status</div>
-                        <div className={`text-sm font-bold capitalize ${MARGIN_COLORS[analysis.income_snapshot.margin_status]}`}>
-                          {analysis.income_snapshot.margin_status}
-                        </div>
+                    {analysis.income_snapshot.fire_progress_pct != null && (
+                      <div className="bg-[#0f1117] border border-[#2d3248] rounded-lg px-3.5 py-3">
+                        <div className="text-xs text-[#7c82a0] mb-1">FIRE progress</div>
+                        <div className="text-xl font-medium text-violet-400">{analysis.income_snapshot.fire_progress_pct.toFixed(0)}%</div>
                       </div>
                     )}
                   </div>
@@ -960,67 +990,49 @@ export function AIAnalysisPanel({
                     {analysis.recommendations.map((rec, i) => {
                       const isExecutable = EXECUTABLE_ACTIONS.has(rec.action);
                       const isSelected   = selectedRecs.has(i);
+                      const shares       = isExecutable && !isPutRec(rec) ? estimateShares(rec, positions, extraPrices) : 0;
 
                       return (
                         <div
                           key={i}
-                          className={`bg-[#0f1117] border rounded-lg p-3 space-y-2 transition-colors ${
+                          className={`bg-[#0f1117] border rounded-lg px-3.5 py-3 transition-colors ${
                             isSelected ? 'border-emerald-500/40' : 'border-[#2d3248]'
                           }`}
                         >
-                          <div className="flex items-center gap-2 flex-wrap">
+                          <div className="flex items-start gap-3">
                             {/* Checkbox for executable actions */}
                             {isExecutable && accountHash && (
                               <input
                                 type="checkbox"
                                 checked={isSelected}
                                 onChange={() => toggleRec(i)}
-                                className="w-4 h-4 accent-emerald-500 cursor-pointer"
+                                className="w-4 h-4 accent-emerald-500 cursor-pointer mt-1 flex-shrink-0"
                               />
                             )}
-                            <span className={`text-xs font-bold px-2 py-0.5 rounded border ${ACTION_COLORS[rec.action] ?? 'bg-[#2d3248] text-white border-[#4a5070]'}`}>
-                              {rec.action}
+                            <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full border flex-shrink-0 mt-0.5 ${ACTION_COLORS[rec.action] ?? 'bg-[#2d3248] text-white border-[#4a5070]'}`}>
+                              {rec.action === 'TRIM' ? 'Sell' : rec.action.charAt(0) + rec.action.slice(1).toLowerCase()}
                             </span>
-                            <span className="text-sm font-semibold text-white">{rec.ticker}</span>
-                            <span className={`text-xs capitalize ml-auto ${URGENCY_COLORS[rec.urgency] ?? 'text-[#7c82a0]'}`}>
-                              {rec.urgency === 'immediate' ? '🔴' : rec.urgency === 'this_week' ? '🟡' : '🔵'}{' '}
-                              {rec.urgency.replace('_', ' ')}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-sm font-semibold text-white leading-snug">
+                                {recTitle(rec)}
+                                {shares > 0 && (
+                                  <span className="text-xs font-normal text-[#4a5070] ml-2 tabular-nums">
+                                    ≈ {shares.toLocaleString()} share{shares === 1 ? '' : 's'}
+                                  </span>
+                                )}
+                                {shares === 0 && isExecutable && !isPutRec(rec) && rec.action === 'BUY' && rec.dollar_amount && (
+                                  <span className="text-xs font-normal text-yellow-400/80 ml-2 italic">fetching price…</span>
+                                )}
+                                {isPutRec(rec) && (
+                                  <span className="text-xs font-normal text-purple-300 ml-2 italic">option trade — use the picker below</span>
+                                )}
+                              </p>
+                              <p className="text-xs text-[#7c82a0] leading-relaxed mt-1">{rec.rationale}</p>
+                            </div>
+                            <span className={`text-[11px] whitespace-nowrap flex-shrink-0 mt-0.5 ${URGENCY_COLORS[rec.urgency] ?? 'text-[#7c82a0]'}`}>
+                              {URGENCY_LABEL[rec.urgency] ?? rec.urgency.replace('_', ' ')}
                             </span>
                           </div>
-
-                          {rec.size_hint && (
-                            <div className="text-xs text-violet-300 bg-violet-500/10 px-2 py-1 rounded">
-                              Size: {rec.size_hint}
-                              {rec.dollar_amount && <span className="text-[#7c82a0] ml-2">(${rec.dollar_amount.toLocaleString()})</span>}
-                              {rec.sell_pct      && <span className="text-[#7c82a0] ml-2">({rec.sell_pct}% of position)</span>}
-                              {isExecutable && !isPutRec(rec) && (() => {
-                                const shares = estimateShares(rec, positions, extraPrices);
-                                if (shares > 0) {
-                                  return (
-                                    <span className="text-emerald-300 ml-2 font-semibold tabular-nums">
-                                      ≈ {shares.toLocaleString()} share{shares === 1 ? '' : 's'}
-                                    </span>
-                                  );
-                                }
-                                // BUY into a new position whose quote hasn't arrived yet — be honest.
-                                if (rec.action === 'BUY' && rec.dollar_amount) {
-                                  return (
-                                    <span className="text-yellow-400/80 ml-2 italic">
-                                      (fetching price…)
-                                    </span>
-                                  );
-                                }
-                                return null;
-                              })()}
-                              {isPutRec(rec) && (
-                                <span className="text-purple-300 ml-2 italic">
-                                  · option contract — use AI-pick below
-                                </span>
-                              )}
-                            </div>
-                          )}
-
-                          <p className="text-xs text-[#7c82a0] leading-relaxed">{rec.rationale}</p>
 
                           {/* Mark executed / skipped */}
                           {(() => {

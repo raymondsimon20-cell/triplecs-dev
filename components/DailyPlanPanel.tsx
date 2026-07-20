@@ -17,8 +17,6 @@ import {
   AlertTriangle,
   ShieldAlert,
   RefreshCw,
-  TrendingUp,
-  TrendingDown,
   CircuitBoard,
 } from 'lucide-react';
 import { useAccountNicknames } from '@/components/AccountSwitcher';
@@ -80,12 +78,6 @@ function priorityColor(p: Priority): string {
   }
 }
 
-function directionIcon(d: Direction) {
-  if (d === 'BUY')  return <TrendingUp   className="w-3.5 h-3.5 text-emerald-400" />;
-  if (d === 'SELL') return <TrendingDown className="w-3.5 h-3.5 text-red-400" />;
-  return <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />;
-}
-
 function ActionRow({
   action,
   accountChip,
@@ -116,75 +108,66 @@ function ActionRow({
     !action.blockedByGuardrails &&
     (action.direction === 'BUY' || action.direction === 'SELL');
 
+  const chipStyle =
+    action.direction === 'BUY'  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' :
+    action.direction === 'SELL' ? 'bg-red-500/15 text-red-300 border-red-500/30' :
+                                  'bg-amber-500/15 text-amber-300 border-amber-500/30';
+  const chipLabel =
+    action.direction === 'BUY' ? 'Buy' : action.direction === 'SELL' ? 'Sell' : 'Alert';
+  const title =
+    action.direction === 'BUY' || action.direction === 'SELL'
+      ? action.sizeDollars > 0
+        ? `${fmt$(action.sizeDollars)} of ${action.ticker}`
+        : action.ticker
+      : action.ticker;
+
   return (
-    <div className="border border-[#2d3248] rounded-lg p-3 bg-[#1a1d27] hover:bg-[#1d2030] transition-colors">
-      <div className="flex items-start justify-between gap-3 mb-1.5">
-        <div className="flex items-center gap-2 flex-wrap">
-          {directionIcon(action.direction)}
-          <span className="font-mono font-semibold text-white text-sm">{action.ticker}</span>
-          <span className="text-xs text-[#7c82a0]">{action.direction}</span>
-          {action.sizeDollars > 0 && (
-            <span className="text-xs font-mono text-[#e8eaf0]">{fmt$(action.sizeDollars)}</span>
-          )}
-          {/* Account chip — which Schwab account this trade is suggested for.
-              Tagged actions show the nickname / ···last4; untagged ones show
-              `→ selected` so the routing intent is never invisible. */}
-          {accountChip.text && (
-            <span
-              className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${
-                accountChip.isFallback
-                  ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
-                  : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
-              }`}
-              title={
-                accountChip.isFallback
-                  ? 'No account tagged on this signal — order will route to the currently selected account on approve.'
-                  : 'Account this trade is suggested for'
-              }
-            >
-              {accountChip.text}
-            </span>
-          )}
-          <span className={`text-[10px] px-1.5 py-0.5 rounded border ${priorityColor(action.priority)}`}>
-            {action.priority}
-          </span>
-          <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#4a5070] border border-[#2d3248]">
-            {action.rule}
-          </span>
-          {action.blockedByGuardrails && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/30">
-              guardrail
-            </span>
-          )}
-          {/* Stage state pill — symmetric so the user always sees where the
-              row is in the pipeline.
-                - "staged" (green): row exists in the inbox; Approve fires the
-                  order immediately, no stage step.
-                - "not staged" (grey): no inbox row yet; Approve will stage and
-                  submit in one click via ensureStaged.
-              Guardrail-blocked rows skip this — they can't be acted on either
-              way and already have a red "guardrail" pill. */}
-          {!action.blockedByGuardrails && (action.direction === 'BUY' || action.direction === 'SELL') && (
-            isUnstaged ? (
-              <span
-                className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#7c82a0] border border-[#3d4468]"
-                title="No inbox row yet. Clicking Approve will stage one and submit it."
-              >
-                not staged
+    <div className="border border-[#2d3248] rounded-lg px-3.5 py-3 bg-[#1a1d27] hover:bg-[#1d2030] transition-colors">
+      <div className="flex items-start gap-3">
+        <span className={`text-xs font-bold px-2.5 py-0.5 rounded-full border flex-shrink-0 mt-0.5 ${chipStyle}`}>
+          {chipLabel}
+        </span>
+        <div className="flex-1 min-w-0">
+          <p className="text-sm font-semibold text-white leading-snug">
+            {title}
+            <span className="font-normal text-[#4a5070] text-xs ml-2">· {action.rule.replace(/_/g, ' ').toLowerCase()}</span>
+            {(action.priority === 'CRITICAL' || action.priority === 'HIGH') && (
+              <span className={`text-[10px] font-normal px-1.5 py-0.5 rounded border ml-2 ${priorityColor(action.priority)}`}>
+                {action.priority === 'CRITICAL' ? 'urgent' : 'high priority'}
               </span>
-            ) : (
-              <span
-                className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/10 text-emerald-300 border border-emerald-500/30"
-                title="Row is staged in the inbox. Approve will submit it to Schwab immediately."
-              >
-                staged
-              </span>
-            )
-          )}
-          {action.status && action.status !== 'pending' && (
-            <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#4a5070] border border-[#2d3248]">
-              {action.status}
-            </span>
+            )}
+          </p>
+          <p className="text-xs text-[#a0a4c0] leading-relaxed mt-1">{action.reason}</p>
+          {(accountChip.text || action.blockedByGuardrails || (action.status && action.status !== 'pending')) && (
+            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+              {accountChip.text && (
+                <span
+                  className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border ${
+                    accountChip.isFallback
+                      ? 'bg-amber-500/10 text-amber-300 border-amber-500/30'
+                      : 'bg-cyan-500/10 text-cyan-300 border-cyan-500/30'
+                  }`}
+                  title={
+                    accountChip.isFallback
+                      ? 'No account tagged on this signal — order will route to the currently selected account on approve.'
+                      : 'Account this trade is suggested for'
+                  }
+                >
+                  {accountChip.text}
+                </span>
+              )}
+              {action.blockedByGuardrails && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-red-500/10 text-red-400 border border-red-500/30"
+                  title="A safety check blocked this trade — it can't be approved.">
+                  blocked by safety check
+                </span>
+              )}
+              {action.status && action.status !== 'pending' && (
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-[#0f1117] text-[#4a5070] border border-[#2d3248]">
+                  {action.status}
+                </span>
+              )}
+            </div>
           )}
         </div>
         {canAct && (
@@ -192,7 +175,7 @@ function ActionRow({
             <button
               onClick={() => onApprove(action.signalId)}
               disabled={isBusy}
-              className="text-xs px-2 py-1 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50 flex items-center gap-1"
+              className="text-xs px-3 py-1.5 rounded bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/25 transition-colors disabled:opacity-50 flex items-center gap-1"
               title={isUnstaged ? 'Stage in the inbox + submit to Schwab' : 'Submit this order to Schwab'}
             >
               {isBusy ? <RefreshCw className="w-3 h-3 animate-spin" /> : <CheckCircle2 className="w-3 h-3" />}
@@ -201,15 +184,15 @@ function ActionRow({
             <button
               onClick={() => onDismiss(action.signalId)}
               disabled={isBusy}
-              className="text-xs px-2 py-1 rounded bg-white/[0.04] border border-[#3d4468] text-[#7c82a0] hover:bg-white/[0.08] transition-colors disabled:opacity-50"
+              className="text-xs px-2 py-1.5 rounded bg-white/[0.04] border border-[#3d4468] text-[#7c82a0] hover:bg-white/[0.08] transition-colors disabled:opacity-50"
               title="Dismiss this proposal"
+              aria-label="Dismiss"
             >
-              Dismiss
+              ✕
             </button>
           </div>
         )}
       </div>
-      <div className="text-xs text-[#a0a4c0] leading-relaxed">{action.reason}</div>
     </div>
   );
 }
@@ -833,10 +816,9 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
             </span>
           )}
           <span className="text-[10px] text-[#4a5070]">
-            Margin {data.marginUtilizationPct.toFixed(1)}%
-            {typeof data.afwDollars === 'number' && ` · AFW ${fmt$(data.afwDollars)}`}
-            {' · '}{data.counts.total} action{data.counts.total === 1 ? '' : 's'}
-            {cachedAgo !== null && ` · cached ${cachedAgo}m ago`}
+            Borrowing {data.marginUtilizationPct.toFixed(1)}%
+            {typeof data.afwDollars === 'number' && ` · cash cushion (AFW) ${fmt$(data.afwDollars)}`}
+            {cachedAgo !== null && ` · updated ${cachedAgo}m ago`}
           </span>
         </div>
         <button
@@ -847,6 +829,24 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
         </button>
       </div>
 
+      {/* At-a-glance counts */}
+      {data.counts.total > 0 && (
+        <div className="flex items-center gap-4 flex-wrap text-xs text-[#a0a4c0]">
+          <span className="flex items-center gap-1.5">
+            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+            {data.counts.auto} {data.autoExecuteMode === 'auto' ? 'running automatically' : 'auto-eligible'}
+          </span>
+          <span className="flex items-center gap-1.5">
+            <Clock className="w-3.5 h-3.5 text-cyan-400" />
+            {data.counts.approval} waiting for you
+          </span>
+          <span className="flex items-center gap-1.5">
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
+            {data.counts.alert} alert{data.counts.alert === 1 ? '' : 's'}
+          </span>
+        </div>
+      )}
+
       {readOnly && data.counts.total > 0 && (
         <div className="text-[11px] text-[#7c82a0] border border-dashed border-[#2d3248] rounded px-3 py-2">
           Read-only household summary — pick a single account to approve or dismiss items.
@@ -856,11 +856,11 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
       {/* Tier 1 — auto-eligible */}
       {data.actions.auto.length > 0 && (
         <Section
-          title="Tier 1 — Auto-eligible"
+          title="Runs automatically"
           subtitle={
             data.autoExecuteMode === 'auto'
-              ? 'These fire automatically on the next scheduled run unless dismissed.'
-              : 'These would fire automatically if auto-execute mode were on. Currently requires approval.'
+              ? 'These go through on the next scheduled run unless you dismiss them.'
+              : 'These would run on their own if auto-execute were on. For now they wait for your approval.'
           }
           color="emerald"
           onBulkApprove={readOnly ? undefined : () => bulkAct(data.actions.auto, 'executed')}
@@ -884,8 +884,8 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
       {/* Tier 2 — needs approval */}
       {data.actions.approval.length > 0 && (
         <Section
-          title="Tier 2 — Requires approval"
-          subtitle="New positions, large trades, or anything outside the auto whitelist. Review and approve each before it executes."
+          title="Waiting for you"
+          subtitle="New positions, larger trades, or anything outside the auto list. Nothing happens until you approve it."
           color="amber"
           onBulkApprove={readOnly ? undefined : () => bulkAct(data.actions.approval, 'executed')}
           onBulkDismiss={readOnly ? undefined : () => bulkAct(data.actions.approval, 'dismissed')}
@@ -908,8 +908,8 @@ export function DailyPlanPanel({ accountHash, accounts = [], positions = [], onC
       {/* Tier 3 — alerts */}
       {data.actions.alert.length > 0 && (
         <Section
-          title="Tier 3 — Alerts (no action)"
-          subtitle="Informational signals that need your judgment, not a trade."
+          title="Alerts — no trade needed"
+          subtitle="Things worth knowing about that call for your judgment, not an order."
           color="cyan"
           onBulkApprove={undefined}
           onBulkDismiss={readOnly ? undefined : () => bulkAct(data.actions.alert, 'dismissed')}

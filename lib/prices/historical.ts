@@ -62,12 +62,52 @@ async function yahooRange(symbol: string, from: string, to: string): Promise<Map
   return out;
 }
 
+/** Map common symbols to Schwab index notation. */
+function toSchwabSymbol(symbol: string): string {
+  const map: Record<string, string> = {
+    '^VIX': '$VIX.X',
+    'VIX': '$VIX.X',
+    '^SPX': '$SPX.X',
+    '^NDX': '$NDX.X',
+  };
+  return map[symbol.toUpperCase()] ?? symbol;
+}
+
+/**
+ * Schwab price history — PRIMARY source. First-party and authenticated, so it
+ * doesn't suffer the rate-limiting that makes Yahoo's public endpoint flaky
+ * from cloud IPs (the cause of SPY intermittently failing to load).
+ */
+async function schwabRange(symbol: string, from: string, to: string): Promise<Map<string, number>> {
+  const { getTokens } = await import('@/lib/storage');
+  const tokens = await getTokens();
+  if (!tokens) throw new Error('No Schwab tokens available');
+  const { getPriceHistory } = await import('@/lib/schwab/client');
+  const candles = await getPriceHistory(tokens, toSchwabSymbol(symbol), from, to);
+  const out = new Map<string, number>();
+  for (const c of candles) {
+    if (!Number.isFinite(c.close)) continue;
+    out.set(new Date(c.datetime).toISOString().slice(0, 10), c.close);
+  }
+  return out;
+}
+
 /**
  * Get a single symbol's daily close series across a date band.
  * Returns a `Map<YYYY-MM-DD, close>` containing only days with valid bars
  * (weekends and market holidays naturally absent).
+ *
+ * Source order: Schwab (first-party, reliable) → Polygon (if key) → Yahoo
+ * (public endpoint, rate-limited from cloud IPs — last resort).
  */
 export async function getDailyCloses(symbol: string, fromDate: string, toDate: string): Promise<Map<string, number>> {
+  try {
+    const schwab = await schwabRange(symbol, fromDate, toDate);
+    if (schwab.size > 0) return schwab;
+    console.warn(`[historical] Schwab returned no candles for ${symbol} — falling back`);
+  } catch (err) {
+    console.warn(`[historical] Schwab ${symbol} failed → fallback:`, err);
+  }
   if (process.env.POLYGON_API_KEY) {
     try { return await polygonRange(symbol, fromDate, toDate); }
     catch (err) { console.warn(`[historical] Polygon ${symbol} failed → Yahoo:`, err); }
