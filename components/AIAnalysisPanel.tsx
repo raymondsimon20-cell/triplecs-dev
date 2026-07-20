@@ -538,6 +538,9 @@ export function AIAnalysisPanel({
         day_pct: p.currentDayProfitLossPercentage,
         unrealized_gl: p.longOpenProfitLoss,
         pct_of_portfolio: totalValue > 0 ? +((p.marketValue / totalValue) * 100).toFixed(2) : 0,
+        // 1-share universe bookmarks staged by the seed-universe tool —
+        // the AI treats these as scale-up candidates, never sell candidates.
+        is_seed: p.marketValue < 500,
       })),
     };
 
