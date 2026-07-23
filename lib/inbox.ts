@@ -7,7 +7,7 @@
  * The TradeInbox component reads this store, lets the user approve in bulk, and
  * routes approved items through `/api/orders` for execution.
  *
- * Storage: `trade-inbox` Netlify Blob, key `log`. Items have a 24h TTL while in
+ * Storage: `trade-inbox` Netlify Blob, key `log`. Items have a 22h TTL while in
  * `pending` state — `listInbox()` lazily marks expired items on read so we
  * never serve stale recommendations.
  */
@@ -34,7 +34,7 @@ export type InboxInstruction =
 export interface InboxItem {
   id:           string;          // stable id, generated on append
   createdAt:    number;          // ms epoch
-  expiresAt:    number;          // ms epoch — 24h after createdAt for `pending`
+  expiresAt:    number;          // ms epoch — PENDING_TTL_MS after createdAt for `pending`
   source:       InboxSource;
   status:       InboxStatus;
   /** Set when status moves out of `pending`. */
@@ -83,7 +83,12 @@ export interface InboxItem {
 
 const STORE_NAME = 'trade-inbox';
 const STORE_KEY  = 'log';
-const PENDING_TTL_MS = 24 * 60 * 60 * 1000;   // 24h
+// 22h, deliberately UNDER the 24h daily cron cadence. At exactly 24h,
+// yesterday's pending item raced the next day's 21:15 UTC staging run at a
+// seconds-level boundary: when it hadn't expired yet, same-source dedup
+// dropped the re-emitted signal and auto-execute skipped a day. 22h
+// guarantees yesterday's item is expired before today's run stages.
+const PENDING_TTL_MS = 22 * 60 * 60 * 1000;   // 22h (see above — NOT 24h)
 const MAX_ITEMS  = 500;                        // cap to avoid unbounded growth
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -172,7 +177,7 @@ export interface AppendInput {
   tier?:       'auto' | 'approval' | 'alert';
   /** Schwab account hash — see InboxItem.accountHash. */
   accountHash?: string;
-  /** Override default 24h TTL for this item (rare). */
+  /** Override default 22h TTL for this item (rare). */
   ttlMs?:      number;
 }
 

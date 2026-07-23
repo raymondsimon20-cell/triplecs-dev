@@ -723,8 +723,43 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
   // Auto-execute pass — no-op in 'manual' mode. In 'dry-run' it writes paper
   // trades; in 'auto' it places real Schwab orders. Always non-fatal — a
   // failure here doesn't poison the rest of the result.
+  //
+  // 2026-07 fix: the batch is freshItems PLUS any still-pending tier-'auto'
+  // signal-engine items that match a signal the engine re-emitted today but
+  // that same-source dedup dropped. Previously autoExecute only ever saw
+  // freshly-staged items, so when yesterday's identical item was still
+  // pending at staging time (24h TTL vs 24h cron cadence — a seconds-level
+  // boundary race), the new signal deduped to nothing and NO execution
+  // happened that day. The pending item then expired, the day after restaged
+  // fresh, and only then executed — a consistent one-day slip unless the
+  // user approved manually. Re-emission today is the retry signal: the
+  // engine still wants this trade, so the pending copy is fair game.
+  let autoBatch = freshItems;
+  if (stageInputs.length > freshItems.length) {
+    try {
+      const wanted = new Set(stageInputs.map((s) =>
+        `${s.symbol}|${s.instruction}|${s.accountHash ?? ''}`));
+      const freshIds = new Set(freshItems.map((it) => it.id));
+      const pending = await listInbox({ status: 'pending', source: 'signal-engine' });
+      const dedupedPending = pending.filter((it) =>
+        !freshIds.has(it.id) &&
+        it.tier === 'auto' &&
+        wanted.has(`${it.symbol}|${it.instruction}|${it.accountHash ?? ''}`),
+      );
+      if (dedupedPending.length > 0) {
+        console.log(
+          `[signals/run] picking up ${dedupedPending.length} deduped-but-still-wanted ` +
+          `pending item(s) for auto-execute: ` +
+          dedupedPending.map((it) => `${it.instruction} ${it.symbol}`).join(', '),
+        );
+        autoBatch = [...freshItems, ...dedupedPending];
+      }
+    } catch (err) {
+      console.warn('[signals/run] deduped-pending pickup failed:', err);
+    }
+  }
   let autoExecuteResult: AutoExecuteResult | undefined;
-  if (freshItems.length > 0) {
+  if (autoBatch.length > 0) {
     try {
       // Per-account totals let autoExecute's per-account caps + circuit
       // breaker work against THAT account's value, not the household pool.
@@ -732,7 +767,7 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
         perAccount.map((pa) => [pa.accountHash, pa.result.valuation.totalValue]),
       );
       autoExecuteResult = await autoExecute(
-        freshItems,
+        autoBatch,
         result.valuation.totalValue,
         perAccountValues,
       );
