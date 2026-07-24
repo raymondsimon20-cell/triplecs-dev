@@ -9,7 +9,8 @@
  */
 
 import React, { useMemo } from 'react';
-import { ArrowRight, Landmark, Gauge } from 'lucide-react';
+import { StatCard as Stat } from '@/components/StatCard';
+import { ArrowRight, Banknote, Clock, CreditCard, Gauge, Landmark, Layers, List, Percent, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { type NormalizedTransaction, parseOptionSymbol } from '@/components/TransactionsView';
 
@@ -29,17 +30,6 @@ function ago(d: Date | null): string {
   return `${Math.floor(h / 24)}d ago`;
 }
 
-function Stat({ label, value, sub, valueClass = 'text-white' }: {
-  label: string; value: string; sub?: string; valueClass?: string;
-}) {
-  return (
-    <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-      <div className="text-[11px] text-[#7c82a0] mb-1">{label}</div>
-      <div className={`text-lg font-bold tabular-nums ${valueClass}`}>{value}</div>
-      {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
-    </div>
-  );
-}
 
 interface Props {
   accountLabel:    string;
@@ -106,34 +96,36 @@ export function DashboardOverview({
 
       {/* Stat grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Gross Portfolio Value" value={fmt$(totalValue)} />
-        <Stat label="Net Portfolio Value"   value={fmt$(equity)} />
-        <Stat label="Margin Used"           value={fmt$(marginUsed)} valueClass={marginUsed > 0 ? 'text-orange-300' : 'text-white'} />
-        <Stat label="Equity %"              value={`${equityPct.toFixed(1)}%`} />
-        <Stat label="Unique Positions"      value={String(positions.length)} />
-        <Stat label="Available Cash (incl. unsettled)" value={fmt$(availableCash)} />
-        <Stat label="Last Sync"             value={ago(lastUpdated)} />
+        <Stat icon={Layers} label="Gross Portfolio Value" value={fmt$(totalValue)} />
+        <Stat icon={Wallet} label="Net Portfolio Value"   value={fmt$(equity)} />
+        <Stat icon={CreditCard} label="Margin Used"           value={fmt$(marginUsed)} valueClass={marginUsed > 0 ? 'text-orange-300' : 'text-white'} />
+        <Stat icon={Percent} label="Equity %"              value={`${equityPct.toFixed(1)}%`} />
+        <Stat icon={List} label="Unique Positions"      value={String(positions.length)} />
+        <Stat icon={Banknote} label="Available Cash (incl. unsettled)" value={fmt$(availableCash)} />
+        <Stat icon={Clock} label="Last Sync"             value={ago(lastUpdated)} />
         <div className="hidden md:block" />
       </div>
 
       {/* Performance cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Day Change</div>
-          <div className={`text-lg font-bold tabular-nums ${plColor(dayGL)}`}>{signed$(dayGL)}</div>
-          <div className={`text-xs tabular-nums ${plColor(dayGL)}`}>{signedPct(dayPct)}</div>
-        </div>
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Total Gain</div>
-          <div className={`text-lg font-bold tabular-nums ${plColor(totalGain)}`}>{signed$(totalGain)}</div>
-          <div className={`text-xs tabular-nums ${plColor(totalGain)}`}>{signedPct(gainPct)}</div>
-        </div>
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Total Return</div>
-          <div className={`text-lg font-bold tabular-nums ${plColor(totalReturn)}`}>{signed$(totalReturn)}</div>
-          <div className={`text-xs tabular-nums ${plColor(totalReturn)}`}>{signedPct(returnPct)}</div>
-          <div className="text-[10px] text-[#4a5070] mt-0.5">incl. dividends (12mo)</div>
-        </div>
+        {([
+          { label: 'Day Change',   v: dayGL,       pct: dayPct,    sub: undefined },
+          { label: 'Total Gain',   v: totalGain,   pct: gainPct,   sub: undefined },
+          { label: 'Total Return', v: totalReturn, pct: returnPct, sub: 'incl. dividends (12mo)' },
+        ]).map(({ label, v, pct, sub }) => {
+          const Trend = v >= 0 ? TrendingUp : TrendingDown;
+          return (
+            <div key={label} className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+              <div className="flex items-start justify-between gap-2 mb-1">
+                <div className="text-[11px] text-[#7c82a0]">{label}</div>
+                <Trend className={`w-3.5 h-3.5 flex-shrink-0 ${plColor(v)}`} />
+              </div>
+              <div className={`text-lg font-bold tabular-nums ${plColor(v)}`}>{signed$(v)}</div>
+              <div className={`text-xs tabular-nums ${plColor(v)}`}>{signedPct(pct)}</div>
+              {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
+            </div>
+          );
+        })}
       </div>
 
       {/* Account card */}

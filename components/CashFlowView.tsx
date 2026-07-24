@@ -14,7 +14,8 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { Activity } from 'lucide-react';
+import { StatCard as Stat } from '@/components/StatCard';
+import { Activity, Banknote, CreditCard, PiggyBank, ShoppingCart, TrendingDown, TrendingUp } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -25,17 +26,6 @@ const INCOME_CATS   = new Set(['Dividend', 'Interest', 'Stock Sale']);
 const EXPENSE_CATS  = new Set(['Withdrawal', 'Margin Interest']);
 const DEPLOY_CATS   = new Set(['Stock Purchase', 'Option Trade']);
 
-function Stat({ label, value, sub, valueClass = 'text-white' }: {
-  label: string; value: string; sub?: string; valueClass?: string;
-}) {
-  return (
-    <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-      <div className="text-[11px] text-[#7c82a0] mb-1">{label}</div>
-      <div className={`text-lg font-bold tabular-nums ${valueClass}`}>{value}</div>
-      {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
-    </div>
-  );
-}
 
 interface Props {
   transactions: NormalizedTransaction[];
@@ -113,13 +103,13 @@ export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) 
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Total Income"     value={fmt$(agg.income)}        valueClass="text-emerald-400" />
-        <Stat label="Total Expenses"   value={fmt$(agg.expenses)}      valueClass="text-red-400" />
-        <Stat label="Margin Cost"      value={fmt$(agg.marginCost)}    sub="Included in Total Expenses" valueClass="text-orange-300" />
-        <Stat label="Contributions"    value={fmt$(agg.contributions)} />
-        <Stat label="Cash Withdrawals" value={fmt$(agg.withdrawals)}   sub="Included in Total Expenses" />
-        <Stat label="Capital Deployed" value={fmt$(agg.deployed)} />
-        <Stat label="Net Operating"    value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} />
+        <Stat icon={TrendingUp} label="Total Income"     value={fmt$(agg.income)}        valueClass="text-emerald-400" />
+        <Stat icon={TrendingDown} label="Total Expenses"   value={fmt$(agg.expenses)}      valueClass="text-red-400" />
+        <Stat icon={CreditCard} label="Margin Cost"      value={fmt$(agg.marginCost)}    sub="Included in Total Expenses" valueClass="text-orange-300" />
+        <Stat icon={PiggyBank} label="Contributions"    value={fmt$(agg.contributions)} />
+        <Stat icon={Banknote} label="Cash Withdrawals" value={fmt$(agg.withdrawals)}   sub="Included in Total Expenses" />
+        <Stat icon={ShoppingCart} label="Capital Deployed" value={fmt$(agg.deployed)} />
+        <Stat icon={Activity} label="Net Operating"    value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} />
       </div>
 
       {/* Daily net operating chart */}

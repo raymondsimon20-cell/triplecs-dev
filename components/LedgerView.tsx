@@ -7,7 +7,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { BookOpen } from 'lucide-react';
+import { Activity, BookOpen, ShoppingCart, TrendingDown, TrendingUp } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 import { useSort, SortTh } from '@/components/sortable';
 
@@ -86,22 +86,22 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Total Inflows</div>
+          <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Total Inflows</div><TrendingUp className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400/60" /></div>
           <div className="text-lg font-bold tabular-nums text-emerald-400">{signed$(stats.inflows)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{stats.inflowN} transactions</div>
         </div>
         <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Total Expenses</div>
+          <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Total Expenses</div><TrendingDown className="w-3.5 h-3.5 flex-shrink-0 text-red-400/60" /></div>
           <div className="text-lg font-bold tabular-nums text-red-400">{signed$(stats.expenses)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{stats.expenseN} transactions</div>
         </div>
         <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Capital Deployed</div>
+          <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Capital Deployed</div><ShoppingCart className="w-3.5 h-3.5 flex-shrink-0 text-violet-300/60" /></div>
           <div className="text-lg font-bold tabular-nums text-violet-300">{signed$(stats.deployed)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{stats.deployN} transactions</div>
         </div>
         <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-          <div className="text-[11px] text-[#7c82a0] mb-1">Net Cash Movement</div>
+          <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Net Cash Movement</div><Activity className="w-3.5 h-3.5 flex-shrink-0 text-[#4a5070]" /></div>
           <div className={`text-lg font-bold tabular-nums ${plColor(stats.net)}`}>{signed$(stats.net)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{filtered.length} transactions total</div>
         </div>

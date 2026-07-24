@@ -8,7 +8,8 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { BarChart2 } from 'lucide-react';
+import { StatCard as Stat } from '@/components/StatCard';
+import { BarChart2, Hash, List, Trophy, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { useSort, SortTh } from '@/components/sortable';
 
@@ -17,16 +18,6 @@ const fmt$ = (n: number, dec = 2) =>
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signedPct = (n: number) => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
 const plColor = (n: number) => (n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-[#9aa2c0]');
-
-function Stat({ label, value, sub }: { label: string; value: string; sub?: string }) {
-  return (
-    <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-      <div className="text-[11px] text-[#7c82a0] mb-1">{label}</div>
-      <div className="text-lg font-bold text-white tabular-nums">{value}</div>
-      {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
-    </div>
-  );
-}
 
 interface Props {
   positions:        EnrichedPosition[];
@@ -111,10 +102,10 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Total Value"    value={fmt$(totals.value)} />
-        <Stat label="Positions"      value={String(rows.length)} />
-        <Stat label="Unique Symbols" value={String(new Set(rows.map((r) => r.sym)).size)} />
-        <Stat label="Top Position"   value={top ? top.sym : '—'} sub={top ? fmt$(top.value) : undefined} />
+        <Stat icon={Wallet} label="Total Value"    value={fmt$(totals.value)} />
+        <Stat icon={List} label="Positions"      value={String(rows.length)} />
+        <Stat icon={Hash} label="Unique Symbols" value={String(new Set(rows.map((r) => r.sym)).size)} />
+        <Stat icon={Trophy} label="Top Position"   value={top ? top.sym : '—'} sub={top ? fmt$(top.value) : undefined} />
       </div>
 
       <div className="flex items-center gap-2 text-xs">

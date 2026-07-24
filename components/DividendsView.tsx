@@ -8,7 +8,8 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { DollarSign } from 'lucide-react';
+import { StatCard as Stat } from '@/components/StatCard';
+import { CalendarDays, Coins, DollarSign, Gauge, Hash, Percent, TrendingUp } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { estimateAnnualDividend, getFrequency, distributeToMonths } from '@/components/IncomeHub';
 import { useSort, SortTh } from '@/components/sortable';
@@ -27,17 +28,6 @@ const FREQ_LABEL: Record<string, string> = {
   weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', annual: 'Annual',
 };
 
-function Stat({ label, value, sub, valueClass = 'text-white' }: {
-  label: string; value: string; sub?: string; valueClass?: string;
-}) {
-  return (
-    <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-      <div className="text-[11px] text-[#7c82a0] mb-1">{label}</div>
-      <div className={`text-lg font-bold tabular-nums ${valueClass}`}>{value}</div>
-      {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
-    </div>
-  );
-}
 
 function BarChart({ labels, values, barClass }: { labels: string[]; values: number[]; barClass: string }) {
   const max = Math.max(...values, 1);
@@ -182,18 +172,18 @@ export function DividendsView({ dividends, loading, positions }: Props) {
       {loading && <div className="text-xs text-[#7c82a0]">Loading dividend history…</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Trailing 12M Income" value={fmt$(trailing.total)} sub={`${trailing.activeMonths}/12 months active`} valueClass="text-emerald-400" />
-        <Stat label="Monthly Average"     value={fmt$(trailing.total / 12)} />
-        <Stat label="Dividend Symbols"    value={String(trailing.bySymbol.size)} sub={`${trailing.payments} total payments`} />
-        <Stat label="12M Income (fetched window)" value={fmt$(trailing.total)} />
+        <Stat icon={DollarSign} label="Trailing 12M Income" value={fmt$(trailing.total)} sub={`${trailing.activeMonths}/12 months active`} valueClass="text-emerald-400" />
+        <Stat icon={CalendarDays} label="Monthly Average"     value={fmt$(trailing.total / 12)} />
+        <Stat icon={Hash} label="Dividend Symbols"    value={String(trailing.bySymbol.size)} sub={`${trailing.payments} total payments`} />
+        <Stat icon={Coins} label="12M Income (fetched window)" value={fmt$(trailing.total)} />
       </div>
 
       <div className="text-xs font-semibold text-[#9aa2c0] uppercase tracking-wider pt-1">Projections</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Est. Annual Income"  value={fmt$(projection.annual)} valueClass="text-violet-300" />
-        <Stat label="Est. Monthly Income" value={fmt$(projection.annual / 12)} valueClass="text-violet-300" />
-        <Stat label="Yield on Cost"       value={`${projection.yieldOnCost.toFixed(2)}%`} sub={`${projection.payerCount} of ${projection.totalSymbols} symbols`} />
-        <Stat label="Forward Yield"       value={`${projection.forwardYield.toFixed(2)}%`} />
+        <Stat icon={TrendingUp} label="Est. Annual Income"  value={fmt$(projection.annual)} valueClass="text-violet-300" />
+        <Stat icon={CalendarDays} label="Est. Monthly Income" value={fmt$(projection.annual / 12)} valueClass="text-violet-300" />
+        <Stat icon={Percent} label="Yield on Cost"       value={`${projection.yieldOnCost.toFixed(2)}%`} sub={`${projection.payerCount} of ${projection.totalSymbols} symbols`} />
+        <Stat icon={Gauge} label="Forward Yield"       value={`${projection.forwardYield.toFixed(2)}%`} />
       </div>
       <p className="text-[10px] text-[#4a5070]">
         Projected dividend income is an estimate based on current holdings, Schwab yields, and trailing history.

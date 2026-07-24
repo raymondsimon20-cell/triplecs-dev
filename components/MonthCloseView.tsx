@@ -7,7 +7,8 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
-import { CalendarCheck } from 'lucide-react';
+import { StatCard as Stat } from '@/components/StatCard';
+import { Activity, CalendarCheck, Percent, TrendingUp, Wallet } from 'lucide-react';
 import type { NormalizedTransaction } from '@/components/TransactionsView';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -23,17 +24,6 @@ function dayKey(savedAt: number | string): string {
   return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
 }
 
-function Stat({ label, value, sub, valueClass = 'text-white' }: {
-  label: string; value: string; sub?: string; valueClass?: string;
-}) {
-  return (
-    <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
-      <div className="text-[11px] text-[#7c82a0] mb-1">{label}</div>
-      <div className={`text-lg font-bold tabular-nums ${valueClass}`}>{value}</div>
-      {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
-    </div>
-  );
-}
 
 interface Props {
   totalValue:    number;
@@ -123,12 +113,12 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat label="Closing Equity" value={fmt$(equity)} />
-        <Stat label="Net Change"     value={openingEquity === null ? fmt$(equity) : signed$(netChange)}
+        <Stat icon={Wallet} label="Closing Equity" value={fmt$(equity)} />
+        <Stat icon={TrendingUp} label="Net Change"     value={openingEquity === null ? fmt$(equity) : signed$(netChange)}
               sub={openingEquity === null ? 'First month — no opening balance' : undefined}
               valueClass={openingEquity === null ? 'text-white' : plColor(netChange)} />
-        <Stat label="Equity %"       value={`${equityPct.toFixed(1)}%`} />
-        <Stat label="Market & Other" value={signed$(marketOther)} valueClass={plColor(marketOther)} />
+        <Stat icon={Percent} label="Equity %"       value={`${equityPct.toFixed(1)}%`} />
+        <Stat icon={Activity} label="Market & Other" value={signed$(marketOther)} valueClass={plColor(marketOther)} />
       </div>
 
       {/* Balance sheet */}
