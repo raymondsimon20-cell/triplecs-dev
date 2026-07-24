@@ -33,8 +33,11 @@ interface Props {
   windowDays?:  number;
 }
 
-export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) {
+const WINDOW_CHOICES = [30, 60, 90, 180, 365];
+
+export function CashFlowView({ transactions, loading, windowDays: initialWindow = 30 }: Props) {
   const [categoryFilter, setCategoryFilter] = useState('all');
+  const [windowDays, setWindowDays] = useState(initialWindow);
 
   const cutoff = useMemo(() => {
     const d = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
@@ -69,15 +72,30 @@ export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) 
     return { income, marginCost, contributions, withdrawals, deployed, expenses, netOperating: income - expenses, daily };
   }, [windowTxns]);
 
-  // Daily bar chart series (oldest → newest).
+  // Bar chart series (oldest → newest). Windows past 90 days bucket by week
+  // so the bars stay readable instead of collapsing into 1px slivers.
+  const weekly = windowDays > 90;
   const days = useMemo(() => {
     const out: { date: string; net: number }[] = [];
-    for (let i = windowDays; i >= 0; i -= 1) {
-      const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      out.push({ date: d, net: agg.daily.get(d) ?? 0 });
+    if (!weekly) {
+      for (let i = windowDays; i >= 0; i -= 1) {
+        const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        out.push({ date: d, net: agg.daily.get(d) ?? 0 });
+      }
+      return out;
+    }
+    const weeks = Math.ceil(windowDays / 7);
+    for (let w = weeks - 1; w >= 0; w -= 1) {
+      const start = new Date(Date.now() - (w * 7 + 6) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      let net = 0;
+      for (let i = 0; i < 7; i += 1) {
+        const d = new Date(Date.now() - (w * 7 + i) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+        net += agg.daily.get(d) ?? 0;
+      }
+      out.push({ date: start, net });
     }
     return out;
-  }, [agg.daily, windowDays]);
+  }, [agg.daily, windowDays, weekly]);
   const maxAbs = Math.max(...days.map((d) => Math.abs(d.net)), 1);
 
   const categories = useMemo(
@@ -100,6 +118,19 @@ export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) 
           <h1 className="text-xl font-bold text-white">{windowDays}-Day Cash Flow</h1>
           <p className="text-xs text-[#7c82a0] mt-0.5">Ledger-style breakdown of income, expenses, and contributions</p>
         </div>
+        <div className="ml-auto flex items-center gap-1">
+          {WINDOW_CHOICES.map((d) => (
+            <button
+              key={d}
+              onClick={() => setWindowDays(d)}
+              className={`px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                windowDays === d ? 'bg-emerald-600/20 text-emerald-300 border border-emerald-500/30' : 'text-[#7c82a0] hover:text-white border border-transparent'
+              }`}
+            >
+              {d}d
+            </button>
+          ))}
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -115,8 +146,10 @@ export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) 
       {/* Daily net operating chart */}
       <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-semibold text-white">Daily Net Operating ({windowDays}-Day View)</span>
-          <span className="text-[10px] text-[#4a5070]">{rangeLabel} ({days.length} days)</span>
+          <span className="text-sm font-semibold text-white">
+            {weekly ? 'Weekly' : 'Daily'} Net Operating ({windowDays}-Day View)
+          </span>
+          <span className="text-[10px] text-[#4a5070]">{rangeLabel} ({days.length} {weekly ? 'weeks' : 'days'})</span>
         </div>
         <div className="flex items-end gap-[2px] h-32">
           {days.map((d) => {
@@ -145,8 +178,8 @@ export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) 
           <span>{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
         </div>
         <div className="flex gap-4 mt-2 text-[10px] text-[#7c82a0]">
-          <span>{days.filter((d) => d.net > 0).length} days positive</span>
-          <span>{days.filter((d) => d.net < 0).length} days negative</span>
+          <span>{days.filter((d) => d.net > 0).length} {weekly ? 'weeks' : 'days'} positive</span>
+          <span>{days.filter((d) => d.net < 0).length} {weekly ? 'weeks' : 'days'} negative</span>
           <span className="ml-auto">Net: <span className={plColor(agg.netOperating)}>{signed$(agg.netOperating)}</span></span>
         </div>
       </div>
