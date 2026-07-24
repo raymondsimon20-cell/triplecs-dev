@@ -13,7 +13,14 @@ const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleStrin
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const plColor = (n: number) => (n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-[#9aa2c0]');
 
-interface SnapshotPoint { savedAt: string; totalValue: number; equity: number | null; synthetic?: boolean }
+/** `savedAt` is epoch milliseconds from lib/portfolio/fetch.ts (Date.now()). */
+interface SnapshotPoint { savedAt: number | string; totalValue: number; equity: number | null; synthetic?: boolean }
+
+/** YYYY-MM-DD day key from either epoch ms or an ISO string. */
+function dayKey(savedAt: number | string): string {
+  const d = new Date(savedAt);
+  return Number.isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+}
 
 function Stat({ label, value, sub, valueClass = 'text-white' }: {
   label: string; value: string; sub?: string; valueClass?: string;
@@ -52,7 +59,7 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
 
   // Opening equity = first real (non-synthetic) snapshot of this month.
   const openingEquity = useMemo(() => {
-    const monthSnaps = snapshots.filter((s) => s.savedAt.slice(0, 10) >= monthStartKey && s.equity !== null && !s.synthetic);
+    const monthSnaps = snapshots.filter((s) => dayKey(s.savedAt) >= monthStartKey && s.equity !== null && !s.synthetic);
     return monthSnaps.length > 0 ? (monthSnaps[0].equity as number) : null;
   }, [snapshots, monthStartKey]);
 
@@ -94,7 +101,10 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
 
   // Net equity trend from snapshots (all available real equity points).
   const trend = useMemo(
-    () => snapshots.filter((s) => s.equity !== null && !s.synthetic).map((s) => ({ date: s.savedAt.slice(0, 10), equity: s.equity as number })),
+    () => snapshots
+      .filter((s) => s.equity !== null && !s.synthetic)
+      .map((s) => ({ date: dayKey(s.savedAt), equity: s.equity as number }))
+      .filter((s) => s.date !== ''),
     [snapshots],
   );
   const trendMax = Math.max(...trend.map((t) => t.equity), equity, 1);

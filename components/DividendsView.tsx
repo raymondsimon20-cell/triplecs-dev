@@ -238,7 +238,12 @@ export function DividendsView({ dividends, loading, positions }: Props) {
                   <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{r.yieldOnCost > 0 ? `${r.yieldOnCost.toFixed(2)}%` : '—'}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{r.forwardYield > 0 ? `${r.forwardYield.toFixed(2)}%` : '—'}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0] whitespace-nowrap">
-                    {r.last ? new Date(r.last + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }) : '—'}
+                    {(() => {
+                      const d = r.last ? new Date(r.last + 'T12:00:00') : null;
+                      return d && !Number.isNaN(d.getTime())
+                        ? d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+                        : '—';
+                    })()}
                   </td>
                 </tr>
               ))}
