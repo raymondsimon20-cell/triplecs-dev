@@ -10,6 +10,7 @@ exports.getAllAccounts = getAllAccounts;
 exports.getAccount = getAccount;
 exports.getQuotes = getQuotes;
 exports.missingQuoteSymbols = missingQuoteSymbols;
+exports.getPriceHistory = getPriceHistory;
 exports.getOptionsChain = getOptionsChain;
 exports.getTransactions = getTransactions;
 exports.getUserPreference = getUserPreference;
@@ -173,6 +174,29 @@ async function getQuotes(tokens, symbols) {
 function missingQuoteSymbols(quotes) {
     const m = quotes.__missing;
     return Array.isArray(m) ? m : [];
+}
+/**
+ * Daily candles for a symbol over a date band (inclusive), straight from
+ * Schwab — first-party, authenticated, no third-party rate limits.
+ * Index symbols use Schwab notation ($VIX.X, $SPX.X).
+ */
+async function getPriceHistory(tokens, symbol, fromDate, // YYYY-MM-DD
+toDate) {
+    const startDate = new Date(`${fromDate}T00:00:00.000Z`).getTime();
+    const endDate = new Date(`${toDate}T23:59:59.000Z`).getTime();
+    const tail = new URLSearchParams({
+        periodType: 'month',
+        frequencyType: 'daily',
+        frequency: '1',
+        startDate: String(startDate),
+        endDate: String(endDate),
+        needExtendedHoursData: 'false',
+    }).toString();
+    // Manual symbol interpolation — URLSearchParams encodes '$' which Schwab
+    // rejects for index symbols (same constraint as getQuotes).
+    const url = `${MARKET_BASE}/pricehistory?symbol=${symbol}&${tail}`;
+    const json = await schwabFetch(url, tokens);
+    return json.candles ?? [];
 }
 async function getOptionsChain(tokens, symbol, opts = {}) {
     const params = new URLSearchParams({

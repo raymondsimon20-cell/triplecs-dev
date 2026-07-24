@@ -56,7 +56,7 @@ interface Props {
 }
 
 type Tab = 'historical' | 'projected' | 'fire' | 'expenses' | 'margin';
-type Frequency = 'weekly' | 'monthly' | 'quarterly' | 'annual';
+export type Frequency = 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
 // ─── Distribution calendar data ───────────────────────────────────────────────
 
@@ -187,7 +187,7 @@ const FALLBACK_YIELDS: Record<string, number> = {
 const QUARTERLY_MONTHS = [2, 5, 8, 11];
 const MONTH_LABELS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 
-function getFrequency(symbol: string): Frequency {
+export function getFrequency(symbol: string): Frequency {
   return FREQ_MAP[symbol.toUpperCase()] ?? 'quarterly';
 }
 
@@ -205,7 +205,7 @@ export function estimateAnnualDividend(pos: EnrichedPosition): number {
   return 0;
 }
 
-function distributeToMonths(annual: number, freq: Frequency): number[] {
+export function distributeToMonths(annual: number, freq: Frequency): number[] {
   const months = new Array(12).fill(0);
   if (annual <= 0) return months;
   switch (freq) {

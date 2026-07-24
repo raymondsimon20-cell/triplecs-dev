@@ -33,6 +33,14 @@ import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { IncomeHub, estimateAnnualDividend } from '@/components/IncomeHub';
 import { IncomeProjectionCard } from '@/components/IncomeProjectionCard';
+import { DashboardOverview } from '@/components/DashboardOverview';
+import { PositionsView } from '@/components/PositionsView';
+import { TransactionsView, type NormalizedTransaction } from '@/components/TransactionsView';
+import { CashFlowView } from '@/components/CashFlowView';
+import { DividendsView, type DividendRecord } from '@/components/DividendsView';
+import { MonthCloseView } from '@/components/MonthCloseView';
+import { LedgerView } from '@/components/LedgerView';
+import { ConnectionsView } from '@/components/ConnectionsView';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
@@ -85,7 +93,16 @@ interface AccountData {
   marginAlerts: RuleAlert[];
 }
 
-type View = 'today' | 'portfolio' | 'history';
+/**
+ * 2026-07 P2P-style redesign — the 8 reference pages plus 'Tools', which
+ * hosts the legacy Today / Portfolio / History views (autopilot queue,
+ * rebalance workflow, AI forensics) so no trading functionality is lost.
+ */
+type View =
+  | 'dashboard' | 'positions' | 'transactions' | 'cashflow' | 'dividends'
+  | 'monthclose' | 'ledgerview' | 'connections'
+  | 'today' | 'portfolio' | 'history';
+const LEGACY_VIEWS: View[] = ['today', 'portfolio', 'history'];
 type PortfolioSub = 'positions' | 'income' | 'trades' | 'market' | 'strategy';
 
 // ─── Slim metric card ─────────────────────────────────────────────────────────
@@ -170,32 +187,58 @@ function DataAge({ updated }: { updated: Date }) {
 
 // ─── Top tabs ─────────────────────────────────────────────────────────────────
 function TopTabs({ view, onChange }: { view: View; onChange: (v: View) => void }) {
-  const items: { id: View; label: string; icon: typeof BarChart2 }[] = [
-    { id: 'today',     label: 'Today',     icon: Zap     },
-    { id: 'portfolio', label: 'Portfolio', icon: Wallet  },
-    { id: 'history',   label: 'History',   icon: History },
+  const items: { id: View; label: string }[] = [
+    { id: 'dashboard',    label: 'Dashboard'    },
+    { id: 'positions',    label: 'Positions'    },
+    { id: 'transactions', label: 'Transactions' },
+    { id: 'cashflow',     label: 'Cash Flow'    },
+    { id: 'dividends',    label: 'Dividends'    },
+    { id: 'monthclose',   label: 'Month Close'  },
+    { id: 'ledgerview',   label: 'Ledger'       },
+    { id: 'connections',  label: 'Connections'  },
+    { id: 'today',        label: 'Tools'        },
   ];
+  const inTools = LEGACY_VIEWS.includes(view);
   return (
     <nav className="w-full border-b border-[#1a1e2e] bg-[rgba(18,21,31,0.6)] backdrop-blur sticky top-[57px] z-30">
-      <div className="max-w-7xl mx-auto px-4 flex gap-1">
-        {items.map(({ id, label, icon: Icon }) => {
-          const active = view === id;
+      <div className="max-w-7xl mx-auto px-4 flex gap-0.5 overflow-x-auto">
+        {items.map(({ id, label }) => {
+          const active = id === 'today' ? inTools : view === id;
           return (
             <button
               key={id}
               onClick={() => onChange(id)}
-              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors border-b-2 ${
+              className={`px-3 py-2.5 text-xs font-medium transition-colors border-b-2 whitespace-nowrap ${
                 active
                   ? 'text-white border-blue-500'
                   : 'text-[#7c82a0] border-transparent hover:text-white'
               }`}
             >
-              <Icon className="w-3.5 h-3.5" />
               {label}
             </button>
           );
         })}
       </div>
+      {inTools && (
+        <div className="max-w-7xl mx-auto px-4 flex gap-1 pb-1.5">
+          {([
+            { id: 'today' as View,     label: 'Today',     Icon: Zap     },
+            { id: 'portfolio' as View, label: 'Portfolio', Icon: Wallet  },
+            { id: 'history' as View,   label: 'History',   Icon: History },
+          ]).map(({ id, label, Icon }) => (
+            <button
+              key={id}
+              onClick={() => onChange(id)}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                view === id ? 'bg-[#1a1e2e] text-white' : 'text-[#7c82a0] hover:text-white'
+              }`}
+            >
+              <Icon className="w-3 h-3" />
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
     </nav>
   );
 }
@@ -577,8 +620,12 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
+  const [dividendRecords, setDividendRecords] = useState<DividendRecord[]>([]);
+  const [dividendsLoading, setDividendsLoading] = useState(true);
+  const [transactions, setTransactions]         = useState<NormalizedTransaction[]>([]);
+  const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
-  const [view, setView]                 = useState<View>('today');
+  const [view, setView]                 = useState<View>('dashboard');
   const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('positions');
 
   // Persist account selection across reloads. We store the accountHash (not
@@ -702,11 +749,16 @@ export default function DashboardPage() {
       const res = await fetch('/api/dividends');
       if (!res.ok) return;
       const data = await res.json() as {
-        dividends?: { amount: number; date: string; symbol: string }[];
+        dividends?: { amount: number; date: string; symbol: string; description?: string }[];
         total?: number;
       };
       const total = data.total ?? 0;
       setDividendsTotal(total);
+      setDividendRecords(
+        (data.dividends ?? []).map((d) => ({
+          date: d.date, amount: d.amount, symbol: d.symbol, description: d.description ?? '',
+        })),
+      );
       if (Array.isArray(data.dividends) && data.dividends.length > 0) {
         const now = Date.now();
         const thirtyDaysAgo = now - 30 * 24 * 60 * 60 * 1000;
@@ -718,7 +770,31 @@ export default function DashboardPage() {
         setMonthlyIncome(total / 12);
       }
     } catch { /* swallow */ }
+    finally { setDividendsLoading(false); }
   }, []);
+
+  // Normalized multi-type transaction ledger — powers the Transactions,
+  // Cash Flow, Month Close, and Ledger pages plus the dashboard's recent list.
+  const fetchTransactions = useCallback(async () => {
+    try {
+      setTransactionsLoading(true);
+      const res = await fetch('/api/transactions?days=365');
+      if (!res.ok) return;
+      const data = await res.json() as { transactions?: NormalizedTransaction[] };
+      setTransactions(data.transactions ?? []);
+    } catch { /* swallow */ }
+    finally { setTransactionsLoading(false); }
+  }, []);
+
+  // Per-symbol trailing-12-month dividend totals for the positions table.
+  const dividendsBySymbol = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const d of dividendRecords) {
+      if (!d.symbol || d.symbol === 'UNKNOWN') continue;
+      out[d.symbol] = (out[d.symbol] ?? 0) + d.amount;
+    }
+    return out;
+  }, [dividendRecords]);
 
   const fetchAccounts = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
@@ -744,9 +820,10 @@ export default function DashboardPage() {
   useEffect(() => {
     fetchAccounts();
     fetchDividends();
+    fetchTransactions();
     const interval = setInterval(() => fetchAccounts(true), 60_000);
     return () => clearInterval(interval);
-  }, [fetchAccounts, fetchDividends]);
+  }, [fetchAccounts, fetchDividends, fetchTransactions]);
 
   // ── Restore persisted account selection once accounts load ────────────────
   // Runs only when the accounts array changes; matches by hash so re-ordering
@@ -1029,7 +1106,7 @@ export default function DashboardPage() {
                 <TrendingUp className="w-3 h-3 text-blue-400" />
               </div>
               <div className="leading-none">
-                <div className="font-bold text-white text-sm tracking-tight">Triple C</div>
+                <div className="font-bold text-white text-sm tracking-tight whitespace-nowrap">Paycheck to Portfolio</div>
               </div>
             </div>
             <FireProgress
@@ -1180,6 +1257,131 @@ export default function DashboardPage() {
             <AlertCircle className="w-3.5 h-3.5" />
             <span>{warnAlerts.length} warning{warnAlerts.length > 1 ? 's' : ''} — see Margin & Risk on Portfolio › Strategy.</span>
           </div>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            P2P-style redesign pages
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'dashboard' && (
+          <>
+            <DashboardOverview
+              accountLabel={accountLabel}
+              accountNumber={account.accountNumber}
+              ownerName=""
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              availableCash={availableForWithdrawal}
+              positions={livePositions}
+              lastUpdated={lastUpdated}
+              dividends12mo={dividendsTotal}
+              recentTransactions={transactions}
+              transactionsLoading={transactionsLoading}
+              onViewPositions={() => setView('positions')}
+              onViewTransactions={() => setView('transactions')}
+            />
+            <IncomeProjectionCard
+              positions={livePositions}
+              actualMonthly={monthlyIncome}
+              fireTarget={fireTarget}
+              onOpenIncomeHub={() => setView('dividends')}
+            />
+          </>
+        )}
+
+        {view === 'positions' && (
+          <PositionsView
+            positions={livePositions}
+            totalValue={account.totalValue}
+            lastUpdated={lastUpdated}
+            dividendsBySymbol={dividendsBySymbol}
+          />
+        )}
+
+        {view === 'transactions' && (
+          <>
+            {/* Relocated from the old Today view: staged orders + autopilot
+                plan sit above the historical ledger — pending transactions
+                first, settled ones below. */}
+            <CollapsiblePanel
+              id="txn-pending"
+              title="Pending & staged orders"
+              icon={<Inbox className="w-4 h-4 text-blue-400" />}
+              iconContainerClass="bg-blue-500/10 border border-blue-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4">
+                <TodayPanel
+                  accountHash={isAll ? '' : account.accountHash}
+                  accounts={accounts}
+                  householdReadOnly={isAll}
+                  onChanged={() => fetchAccounts(true)}
+                />
+              </div>
+            </CollapsiblePanel>
+            <TransactionsView transactions={transactions} loading={transactionsLoading} />
+          </>
+        )}
+
+        {view === 'cashflow' && (
+          <CashFlowView transactions={transactions} loading={transactionsLoading} windowDays={30} />
+        )}
+
+        {view === 'dividends' && (
+          <>
+            <DividendsView
+              dividends={dividendRecords}
+              loading={dividendsLoading}
+              positions={livePositions}
+            />
+            <CollapsiblePanel
+              id="dividends-income-hub"
+              title="Income Hub (FIRE, expenses, margin coverage)"
+              icon={<DollarSign className="w-4 h-4 text-emerald-400" />}
+              iconContainerClass="bg-emerald-500/10 border border-emerald-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4">
+                <IncomeHub
+                  positions={account.positions}
+                  totalValue={account.totalValue}
+                  equity={account.equity}
+                  marginBalance={account.marginBalance}
+                  pillarSummary={account.pillarSummary}
+                  onProjectedMonthly={setMonthlyIncome}
+                  accountHash={isAll ? undefined : account.accountHash}
+                />
+              </div>
+            </CollapsiblePanel>
+          </>
+        )}
+
+        {view === 'monthclose' && (
+          <MonthCloseView
+            totalValue={account.totalValue}
+            equity={account.equity}
+            marginBalance={account.marginBalance}
+            transactions={transactions}
+            accountHash={isAll ? undefined : account.accountHash}
+          />
+        )}
+
+        {view === 'ledgerview' && (
+          <LedgerView
+            transactions={transactions}
+            loading={transactionsLoading}
+            accountLabel={accountLabel}
+            windowDays={365}
+          />
+        )}
+
+        {view === 'connections' && (
+          <ConnectionsView
+            accounts={accounts.map((a) => ({ accountNumber: a.accountNumber, accountHash: a.accountHash, type: a.type }))}
+            nicknames={nicknames}
+            lastUpdated={lastUpdated}
+            onRefresh={() => { fetchAccounts(true); fetchTransactions(); fetchDividends(); }}
+          />
         )}
 
         {/* ═══════════════════════════════════════════════════════════════════

@@ -191,6 +191,115 @@ test('respects PILLAR_FILL_MAX_CANDIDATES cap (≤ 2 proposals per pillar)', () 
     const fires = findSignals(result.signals, 'PILLAR_FILL');
     strict_1.default.ok(fires.length <= 2, `expected ≤2 candidates, got ${fires.length}`);
 });
+test('prefers scaling an existing 1-share seed over unheld curated tickers', () => {
+    // Underweight income (50% vs 65% target). XDTE is held as a $30 seed
+    // (< SEED_MAX_DOLLARS) — the seed bonus should put it at the top of the
+    // candidate ranking despite it being "already held".
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [
+            enrichedPosition('SCHD', 625, 50000),
+            enrichedPosition('XDTE', 1, 30), // 1-share universe seed
+        ],
+        cash: 50000,
+    }));
+    const fires = findSignals(result.signals, 'PILLAR_FILL');
+    const tickers = fires.map((s) => s.ticker);
+    strict_1.default.ok(tickers.includes('XDTE'), `expected seed XDTE to be proposed; got ${tickers.join(',')}`);
+    const seedFire = fires.find((s) => s.ticker === 'XDTE');
+    strict_1.default.ok(/seed/i.test(seedFire.reason), `expected reason to mention the seed; got: ${seedFire.reason}`);
+    strict_1.default.equal(seedFire.direction, 'BUY');
+    strict_1.default.ok(seedFire.sizeDollars > 0);
+});
+test('seed threshold: real-size held positions are still never proposed', () => {
+    // JEPI at $5,000 is a real allocation (≥ $500), not a seed — held tickers
+    // above the seed threshold must stay excluded from PILLAR_FILL proposals.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [
+            enrichedPosition('SCHD', 500, 40000),
+            enrichedPosition('JEPI', 83, 5000),
+            enrichedPosition('XDTE', 1, 30), // seed — eligible
+        ],
+        cash: 55000,
+    }));
+    const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
+    strict_1.default.ok(!tickers.includes('JEPI'), `JEPI ($5k, real size) must not be proposed; got ${tickers.join(',')}`);
+    strict_1.default.ok(!tickers.includes('SCHD'), `SCHD must not be proposed; got ${tickers.join(',')}`);
+});
+test('seeds respect the wash-sale skip like any other candidate', () => {
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [
+            enrichedPosition('SCHD', 625, 50000),
+            enrichedPosition('XDTE', 1, 30),
+        ],
+        cash: 50000,
+        recentSells30d: [
+            { symbol: 'XDTE', soldDate: new Date().toISOString(), isLoss: true },
+        ],
+    }));
+    const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
+    strict_1.default.ok(!tickers.includes('XDTE'), `wash-sale seed XDTE must be skipped; got ${tickers.join(',')}`);
+});
+test("objective 'income': high-yield candidates outrank low-yield safety picks", () => {
+    // 'as const' is compile-time only — runtime mutation works for the test.
+    const cfg = engine_1.CONFIG;
+    const prev = cfg.PILLAR_FILL_OBJECTIVE;
+    cfg.PILLAR_FILL_OBJECTIVE = 'income';
+    try {
+        const result = (0, engine_1.runSignalEngine)(baseInputs({
+            positions: [enrichedPosition('SCHD', 625, 50000)],
+            cash: 50000,
+        }));
+        const fires = findSignals(result.signals, 'PILLAR_FILL');
+        strict_1.default.ok(fires.length >= 1, `expected PILLAR_FILL signals, got ${fires.length}`);
+        for (const f of fires) {
+            const y = Number(f.data.candidateYieldPct ?? 0);
+            strict_1.default.ok(y >= 25, `income objective should pick high payers; ${f.ticker} yields ${y}%`);
+            strict_1.default.ok(/income objective/i.test(f.reason), `reason should note the objective: ${f.reason}`);
+            strict_1.default.equal(f.data.objective, 'income');
+        }
+        // JEPI (7.5%) and DIVO (4.5%) are the 'balanced' favorites — the yield
+        // credit must displace them from the top-2.
+        const tickers = fires.map((s) => s.ticker);
+        strict_1.default.ok(!tickers.includes('JEPI') && !tickers.includes('DIVO'), `low-yield safety picks should be displaced; got ${tickers.join(',')}`);
+    }
+    finally {
+        cfg.PILLAR_FILL_OBJECTIVE = prev;
+    }
+});
+test("objective 'income': live divYields override the static fallback table", () => {
+    const cfg = engine_1.CONFIG;
+    const prev = cfg.PILLAR_FILL_OBJECTIVE;
+    cfg.PILLAR_FILL_OBJECTIVE = 'income';
+    try {
+        // NVDY's fallback yield (50%) makes it a top income pick. A live Schwab
+        // divYield of 3% must demote it — live data wins over the stale table.
+        const result = (0, engine_1.runSignalEngine)(baseInputs({
+            positions: [enrichedPosition('SCHD', 625, 50000)],
+            cash: 50000,
+            divYields: { NVDY: 3 },
+        }));
+        const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
+        strict_1.default.ok(!tickers.includes('NVDY'), `NVDY with live 3% yield should be demoted; got ${tickers.join(',')}`);
+    }
+    finally {
+        cfg.PILLAR_FILL_OBJECTIVE = prev;
+    }
+});
+test("objective 'balanced' (default) ignores yield entirely — original ranking", () => {
+    strict_1.default.equal(engine_1.CONFIG.PILLAR_FILL_OBJECTIVE, 'balanced', 'default objective must be balanced');
+    // With identical inputs plus a huge live yield on a high-maint name, the
+    // balanced ranking must not change: yield carries zero weight.
+    const withYields = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('SCHD', 625, 50000)],
+        cash: 50000,
+        divYields: { CONY: 90, TSLY: 80 },
+    }));
+    const without = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('SCHD', 625, 50000)],
+        cash: 50000,
+    }));
+    strict_1.default.deepEqual(findSignals(withYields.signals, 'PILLAR_FILL').map((s) => s.ticker), findSignals(without.signals, 'PILLAR_FILL').map((s) => s.ticker), 'balanced ranking must be unaffected by divYields');
+});
 test('runtime marginThresholds override CONFIG defaults', () => {
     // At 35% utilization, default CONFIG would fire MAINTENANCE_RANKED_TRIM
     // (threshold 30%). With runtime marginThresholds.trimAbovePct = 47, the

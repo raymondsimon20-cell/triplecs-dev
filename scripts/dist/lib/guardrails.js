@@ -45,7 +45,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.DEFAULT_LIMITS = void 0;
+exports.projectMarginDraw = exports.DEFAULT_LIMITS = void 0;
+exports.projectAfwImpact = projectAfwImpact;
+exports.projectMarginIncrease = projectMarginIncrease;
 exports.validateProposedTrade = validateProposedTrade;
 exports.validateBatch = validateBatch;
 exports.isAutomationPaused = isAutomationPaused;
@@ -56,6 +58,7 @@ exports.DEFAULT_LIMITS = {
     maxConcentrationPct: 25,
     maxPillarOverdriftPp: 8,
     maxMarginUtilizationPct: 50,
+    minAfwHeadroomAfterTrade: 10000,
     maxOrdersPerDay: 8,
     washSaleWindowDays: 30,
     drawdownTriggerPct: 10,
@@ -65,9 +68,139 @@ exports.DEFAULT_LIMITS = {
 function isBuy(instr) {
     return instr === 'BUY' || instr === 'BUY_TO_OPEN' || instr === 'BUY_TO_CLOSE';
 }
+function isOption(instr) {
+    return instr === 'BUY_TO_OPEN' || instr === 'SELL_TO_OPEN'
+        || instr === 'BUY_TO_CLOSE' || instr === 'SELL_TO_CLOSE';
+}
 function tradeNotional(t) {
     return t.shares * t.price;
 }
+/**
+ * Project the trade's reduction of AFW (Available For Withdrawal) headroom.
+ *
+ * AFW impact is what gets you closer to Schwab's 50% wall — it captures the
+ * "money set aside" effect regardless of WHETHER it's set aside as cash
+ * collateral or as margin requirement. Used by checkAfwHeadroom.
+ *
+ * Important: AFW impact and margin-balance increase are DIFFERENT numbers
+ * for some trade types. A cash-secured short put reserves $strike×100×N in
+ * CASH — that reduces AFW by the full amount, but does NOT increase margin
+ * balance (it's cash-secured, not margin-secured). Use `projectMarginIncrease`
+ * for the utilization-ratio check.
+ *
+ * Equity:
+ *   - BUY:               max(0, notional − availableCash)   (margin draw above cash)
+ *   - SELL:              0 (releases collateral)
+ *
+ * Options (one contract = 100 shares of underlying):
+ *   - BUY_TO_OPEN  long: full debit (premium × 100 × contracts) — cash leaves the account
+ *   - BUY_TO_CLOSE:      0 (small debit, conservative)
+ *   - SELL_TO_CLOSE:     0 (credit; releases AFW, not a reduction)
+ *   - SELL_TO_OPEN put:
+ *     - cash-secured:    strike × 100 × contracts (cash collateral reserved)
+ *     - naked (Reg-T):   Reg-T short-option formula
+ *     - covered:         (calls only) 0 — backed by equity
+ *   - SELL_TO_OPEN call:
+ *     - covered:         0
+ *     - naked (Reg-T):   Reg-T short-option formula
+ *
+ * Missing option metadata on a SELL_TO_OPEN returns ctx.equity as a worst-case
+ * estimate so the guardrail trips loudly rather than silently under-estimating.
+ */
+function projectAfwImpact(t, ctx) {
+    const contracts = t.shares;
+    if (t.instruction === 'SELL_TO_CLOSE')
+        return 0;
+    if (t.instruction === 'BUY_TO_CLOSE')
+        return 0;
+    if (isOption(t.instruction)) {
+        if (t.instruction === 'BUY_TO_OPEN') {
+            // Premium leaves cash → reduces AFW dollar-for-dollar.
+            return contracts * t.price * 100;
+        }
+        // SELL_TO_OPEN.
+        const opt = t.option;
+        if (!opt)
+            return Math.max(0, ctx.equity); // defensive — see header
+        const strike = opt.strike;
+        const U = opt.underlyingPrice ?? strike;
+        const otm = opt.kind === 'put'
+            ? Math.max(0, U - strike)
+            : Math.max(0, strike - U);
+        if (opt.style === 'cash-secured')
+            return contracts * strike * 100;
+        if (opt.style === 'covered')
+            return 0;
+        const regt = Math.max(0.20 * U - otm, 0.10 * strike);
+        return contracts * regt * 100;
+    }
+    // Equity.
+    if (isBuy(t.instruction)) {
+        const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
+        return Math.max(0, tradeNotional(t) - availableCash);
+    }
+    return 0; // equity SELL releases collateral
+}
+/**
+ * Project the trade's increase in margin balance (debt). Used by checkMargin
+ * to evaluate the post-trade utilization ratio against the 50% cap.
+ *
+ * Differs from `projectAfwImpact` for CASH-funded trade types:
+ *   - Cash-secured short put: AFW down by strike×100×N, margin balance UNCHANGED → returns 0
+ *   - Long option BUY_TO_OPEN: premium paid from cash, margin balance UNCHANGED → returns 0
+ *   - Equity BUY fully covered by cash: same → returns 0 (matches AFW impact in this case)
+ *
+ * Trade types where AFW impact == margin balance increase:
+ *   - Equity BUY beyond cash: same number for both
+ *   - Naked short option: same Reg-T number for both
+ *
+ * The pattern: "is this trade cash-funded or margin-funded?" If cash-funded,
+ * margin balance doesn't change even though AFW does.
+ */
+function projectMarginIncrease(t, ctx) {
+    const contracts = t.shares;
+    if (t.instruction === 'SELL_TO_CLOSE')
+        return 0;
+    if (t.instruction === 'BUY_TO_CLOSE')
+        return 0;
+    // Long option BUY_TO_OPEN: cash-funded premium debit. No margin balance bump.
+    if (t.instruction === 'BUY_TO_OPEN')
+        return 0;
+    if (isOption(t.instruction)) {
+        // SELL_TO_OPEN.
+        const opt = t.option;
+        if (!opt)
+            return Math.max(0, ctx.equity); // defensive
+        const strike = opt.strike;
+        const U = opt.underlyingPrice ?? strike;
+        const otm = opt.kind === 'put'
+            ? Math.max(0, U - strike)
+            : Math.max(0, strike - U);
+        // Cash-secured shorts reserve CASH, not margin. Schwab reports
+        // maintenanceRequirement = $0 for these (the bug the user hit on the
+        // close-recs report). They don't bump margin utilization.
+        if (opt.style === 'cash-secured')
+            return 0;
+        if (opt.style === 'covered')
+            return 0;
+        // Naked — real margin lock.
+        const regt = Math.max(0.20 * U - otm, 0.10 * strike);
+        return contracts * regt * 100;
+    }
+    // Equity.
+    if (isBuy(t.instruction)) {
+        const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
+        return Math.max(0, tradeNotional(t) - availableCash);
+    }
+    return 0;
+}
+/**
+ * @deprecated Use `projectAfwImpact` (AFW gate) or `projectMarginIncrease`
+ * (utilization gate). This alias kept for backwards-compat with callers that
+ * weren't using it for a specific gate — both old call sites are internal
+ * to this module so the deprecation is informational only.
+ */
+exports.projectMarginDraw = projectAfwImpact;
 function withinDays(timestampISO, days, now = Date.now()) {
     const t = new Date(timestampISO).getTime();
     return now - t <= days * 24 * 60 * 60 * 1000;
@@ -97,9 +230,9 @@ function checkFullExit(t, ctx) {
     return {
         code: 'full_exit_blocked',
         severity: 'block',
-        message: `SELL ${t.shares} ${t.symbol} would close the entire position ` +
-            `(holding ${position.shares} share${position.shares === 1 ? '' : 's'}). ` +
-            'Keep-one-share rule active — reduce quantity to leave at least one share.',
+        message: `This would sell your entire ${t.symbol} position (all ${position.shares} share${position.shares === 1 ? '' : 's'}). ` +
+            `The app never fully exits a holding automatically — it keeps at least 1 share so the position, ` +
+            `its cost history, and its dividend record stay on the books. Lower the share count to proceed.`,
     };
 }
 function checkOrderSize(t, ctx, limits) {
@@ -111,7 +244,9 @@ function checkOrderSize(t, ctx, limits) {
         return {
             code: 'order_size_cap',
             severity: 'block',
-            message: `${t.instruction} ${t.shares} ${t.symbol} (~$${Math.round(notional).toLocaleString()}) is ${(pct * 100).toFixed(1)}% of portfolio — cap is ${(limits.maxOrderPctOfPortfolio * 100).toFixed(0)}%.`,
+            message: `This single order (~$${Math.round(notional).toLocaleString()} of ${t.symbol}) is ` +
+                `${(pct * 100).toFixed(1)}% of your whole portfolio — the safety cap for any one trade is ` +
+                `${(limits.maxOrderPctOfPortfolio * 100).toFixed(0)}%. Split it into smaller orders if it's intentional.`,
         };
     }
     return null;
@@ -126,7 +261,9 @@ function checkConcentration(t, ctx, limits) {
         return {
             code: 'concentration_cap',
             severity: 'block',
-            message: `${t.symbol} would become ${pct.toFixed(1)}% of portfolio after this BUY — concentration cap is ${limits.maxConcentrationPct}%.`,
+            message: `This buy would make ${t.symbol} ${pct.toFixed(1)}% of your portfolio — over the ` +
+                `${limits.maxConcentrationPct}% cap on any single holding. The cap exists so no one position ` +
+                `can take the account down with it.`,
         };
     }
     return null;
@@ -145,32 +282,71 @@ function checkPillarOverdrift(t, ctx, limits) {
         return {
             code: 'pillar_overdrift',
             severity: 'block',
-            message: `BUY would push ${t.pillar} to ${postPct.toFixed(1)}% (target ${target.targetPct}%, overdrift +${overdrift.toFixed(1)}pp). Cap is +${limits.maxPillarOverdriftPp}pp.`,
+            message: `This buy would push your ${t.pillar} pillar to ${postPct.toFixed(1)}% of the portfolio — ` +
+                `${overdrift.toFixed(1)} points past its ${target.targetPct}% target ` +
+                `(${limits.maxPillarOverdriftPp} points over is the most the app allows). ` +
+                `Raise the pillar's target in Settings if this is deliberate.`,
         };
     }
     return null;
 }
 function checkMargin(t, ctx, limits) {
-    if (!isBuy(t.instruction))
-        return null;
     if (ctx.totalValue <= 0)
         return null;
-    // Best-effort post-trade margin estimate: assume any BUY beyond available cash
-    // dips into margin. We approximate available cash as (equity − marginBalance).
-    const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
-    const notional = tradeNotional(t);
-    const newMarginDraw = Math.max(0, notional - availableCash);
-    const projectedMargin = ctx.marginBalance + newMarginDraw;
-    const projectedTotal = ctx.totalValue + newMarginDraw;
+    // Margin BALANCE increase — not AFW impact. Cash-secured shorts and long
+    // option opens reduce AFW but don't bump margin debt, so they should NOT
+    // trip the utilization cap. See projectMarginIncrease docstring.
+    const marginIncrease = projectMarginIncrease(t, ctx);
+    if (marginIncrease <= 0)
+        return null;
+    const projectedMargin = ctx.marginBalance + marginIncrease;
+    const projectedTotal = ctx.totalValue + marginIncrease;
     const pct = projectedTotal > 0 ? (projectedMargin / projectedTotal) * 100 : 0;
     if (pct > limits.maxMarginUtilizationPct) {
         return {
             code: 'margin_cap',
             severity: 'block',
-            message: `BUY would push margin utilization to ${pct.toFixed(1)}% — cap is ${limits.maxMarginUtilizationPct}%.`,
+            message: `This trade would push your borrowing to ${pct.toFixed(1)}% of the account — past your ` +
+                `${limits.maxMarginUtilizationPct}% limit. Free up cash first (or raise the limit in Settings); ` +
+                `Schwab hard-stops everything at 50%.`,
         };
     }
     return null;
+}
+/**
+ * Post-trade AFW floor.
+ *
+ * Projects AFW = (pre-trade AFW − margin draw from this trade). If the result
+ * dips below the configured minimum headroom, BLOCK. Catches the case where
+ * a single trade — especially a short put — passes the pre-trade AFW check
+ * in the signal engine but its own margin requirement leaves you dangerously
+ * close to Schwab's 50% wall.
+ *
+ * Skipped when ctx.afwDollars is undefined (legacy / replay paths). The
+ * upstream margin_cap check is the secondary line of defense in that case.
+ */
+function checkAfwHeadroom(t, ctx, limits) {
+    if (typeof ctx.afwDollars !== 'number')
+        return null;
+    // AFW impact — includes cash-secured collateral and long-option debits
+    // that DON'T appear as margin balance increases. See projectAfwImpact.
+    const draw = projectAfwImpact(t, ctx);
+    if (draw <= 0)
+        return null;
+    const postAfw = ctx.afwDollars - draw;
+    if (postAfw >= limits.minAfwHeadroomAfterTrade)
+        return null;
+    const drawHuman = `$${Math.round(draw).toLocaleString()}`;
+    const preHuman = `$${Math.round(ctx.afwDollars).toLocaleString()}`;
+    const postHuman = `$${Math.round(postAfw).toLocaleString()}`;
+    const floorHuman = `$${Math.round(limits.minAfwHeadroomAfterTrade).toLocaleString()}`;
+    return {
+        code: 'afw_headroom',
+        severity: 'block',
+        message: `This trade would use up ${drawHuman} of your cash cushion (AFW — what you could withdraw today), ` +
+            `taking it from ${preHuman} down to ${postHuman}. The app keeps at least ${floorHuman} in reserve ` +
+            `so one bad day can't push you into Schwab's 50% borrowing wall.`,
+    };
 }
 function checkDailyCount(_t, ctx, limits) {
     const today = new Date().toISOString().slice(0, 10);
@@ -179,7 +355,9 @@ function checkDailyCount(_t, ctx, limits) {
         return {
             code: 'daily_order_count',
             severity: 'block',
-            message: `Daily order cap (${limits.maxOrdersPerDay}) already reached — ${todaysCount} orders placed today.`,
+            message: `${todaysCount} orders have already gone out today — the daily limit is ${limits.maxOrdersPerDay}. ` +
+                `This is a circuit breaker against runaway automation; it resets at midnight, or you can place ` +
+                `the order manually at Schwab if it can't wait.`,
         };
     }
     return null;
@@ -238,6 +416,7 @@ function validateProposedTrade(trade, ctx) {
         checkConcentration(trade, ctx, limits),
         checkPillarOverdrift(trade, ctx, limits),
         checkMargin(trade, ctx, limits),
+        checkAfwHeadroom(trade, ctx, limits),
         checkDailyCount(trade, ctx, limits),
         checkWashSale(trade, ctx, limits),
         checkDrawdown(trade, ctx, limits),

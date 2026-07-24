@@ -180,7 +180,15 @@ async function getSnapshotHistory(limit = 90, accountHash) {
         .reverse()
         .slice(0, limit);
     const records = await Promise.all(sorted.map((key) => store.get(key, { type: 'json' })));
-    return records.filter((r) => r !== null);
+    return records
+        .filter((r) => r !== null)
+        // Normalize legacy synthetic snapshots written before the null-equity fix:
+        // they fabricated equity=totalValue and margin=0, which overstated equity
+        // by the full margin debt in charts and return calcs. Null them on read so
+        // every consumer sees "unknown" instead of fiction.
+        .map((r) => r.synthetic
+        ? { ...r, equity: null, marginBalance: null, marginUtilizationPct: null }
+        : r);
 }
 const CASH_FLOWS_KEY = 'log';
 /**

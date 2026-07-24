@@ -96,6 +96,15 @@ exports.CONFIG = {
     /** Penalize candidates whose family is already above this % of portfolio. */
     PILLAR_FILL_FAMILY_PENALTY_PCT: 10,
     /**
+     * Positions below this market value are 1-share "seeds" — deliberate
+     * universe bookmarks staged by the seed-universe tool. PILLAR_FILL treats
+     * them as preferred scale-up candidates rather than excluding them as
+     * already-held.
+     */
+    SEED_MAX_DOLLARS: 500,
+    /** Score bonus for scaling an existing seed vs introducing an unheld ticker. */
+    PILLAR_FILL_SEED_BONUS: 0.5,
+    /**
      * Absolute margin-utilization ceiling for ANY new-buy rule. Above this,
      * PILLAR_FILL is skipped entirely — MAINTENANCE_RANKED_TRIM is what should
      * be firing first to relieve margin pressure, not new buys that add to it.
@@ -107,6 +116,27 @@ exports.CONFIG = {
      * headroom is below this, no new positions proposed regardless of pillar gap.
      */
     PILLAR_FILL_MIN_AFW_DOLLARS: 5000,
+    /**
+     * Candidate-scoring objective for PILLAR_FILL.
+     *
+     *   'balanced' — original behavior: seed bonus − family penalty − maint
+     *                penalty. Prefers low-maintenance, family-diverse names
+     *                (JEPI/SCHD-tier) regardless of distribution yield.
+     *   'income'   — adds a capped yield credit so high-distribution names
+     *                (Roundhill/YieldMax-tier) rank ahead when the user is
+     *                income-hunting. Family + maintenance penalties still apply.
+     *
+     * Default 'balanced' so flipping this file on deploy never silently changes
+     * what auto-staged BUYs get proposed — 'income' is an explicit opt-in.
+     */
+    PILLAR_FILL_OBJECTIVE: 'balanced',
+    /**
+     * Yield credit cap (percentage points) for the 'income' objective. Anything
+     * advertising above this is likely paying you your own NAV back (MSTY/ULTY
+     * tier decay) — credit stops accruing so decay traps can't outscore honest
+     * payers purely on headline yield.
+     */
+    PILLAR_FILL_YIELD_CREDIT_CAP_PCT: 40,
     // ── TRIPLES_DIP_LADDER — buy-the-dip ladder on triple-leveraged ETFs ──────
     // Per-ticker pivot-anchored ladder. Every fresh 5% drop below the anchor
     // high fires one BUY of fixed size. Bounces don't refire (only NEW lows
@@ -661,9 +691,11 @@ function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchAc
         return []; // not worth a signal
     const signals = [];
     const priority = marginUtilPct > 0.40 ? 'HIGH' : 'MEDIUM';
-    signals.push(makeSignal('MAINTENANCE_RANKED_TRIM', `TRIM_${top.pos.symbol}`, top.pos.symbol, 'SELL', trimDollars, priority, `Margin at ${(marginUtilPct * 100).toFixed(1)}% > ${(trimAbove * 100).toFixed(0)}%. ` +
-        `${top.pos.symbol} has highest maintenance (${top.maint}%) among holdings — selling $${Math.round(trimDollars)} ` +
-        `frees ~$${Math.round(trimDollars * top.maint / 100)} of equity (target margin ≤${(trimTarget * 100).toFixed(0)}%).`, {
+    signals.push(makeSignal('MAINTENANCE_RANKED_TRIM', `TRIM_${top.pos.symbol}`, top.pos.symbol, 'SELL', trimDollars, priority, `Borrowing is at ${(marginUtilPct * 100).toFixed(1)}% — above your ${(trimAbove * 100).toFixed(0)}% limit. ` +
+        `Selling ~$${Math.round(trimDollars).toLocaleString()} of ${top.pos.symbol} frees about ` +
+        `$${Math.round(trimDollars * top.maint / 100).toLocaleString()} of breathing room — ` +
+        `the most of any holding ($${Math.round((top.maint / 100) * 1000)} freed per $1,000 sold). ` +
+        `Goal: borrowing back under ${(trimTarget * 100).toFixed(0)}%.`, {
         marginUtilPct,
         trimAboveThresholdPct: trimAbove,
         targetMarginPct: trimTarget,
@@ -685,8 +717,8 @@ function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchAc
         const uproW = valuation.weightPcts['UPRO'] ?? 0;
         const tqqqW = valuation.weightPcts['TQQQ'] ?? 0;
         const target = uproW <= tqqqW ? 'UPRO' : 'TQQQ';
-        signals.push(makeSignal('MAINTENANCE_RANKED_TRIM', `ROTATE_INTO_${target}`, target, 'BUY', rotationDollars, priority, `Vol-7 1/3 rotation: ~$${Math.round(rotationDollars)} of ${top.pos.symbol} proceeds rotates into ${target} ` +
-            `(currently ${(uproW + tqqqW > 0 ? (target === 'UPRO' ? uproW : tqqqW) : 0).toFixed(1)}%).`, {
+        signals.push(makeSignal('MAINTENANCE_RANKED_TRIM', `ROTATE_INTO_${target}`, target, 'BUY', rotationDollars, priority, `One-third of the ${top.pos.symbol} sale (~$${Math.round(rotationDollars).toLocaleString()}) goes back into ${target} — ` +
+            `the strategy's 1/3 rule keeps you invested for the recovery while lowering borrowing (Vol 7).`, {
             rotationFromSymbol: top.pos.symbol,
             rotationFraction: exports.CONFIG.ROTATION_INTO_TRIPLES_PCT,
             targetTicker: target,
@@ -720,7 +752,7 @@ function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchAc
  *  - Capped at PILLAR_FILL_MAX_DOLLARS per candidate, MAX_CANDIDATES per pillar
  *  - Bounded by 95% of available cash to leave a buffer
  */
-function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, afwDollars, buyingPowerAvail, inDefense, killSwitchActive, recentSells30d, makeSignal) {
+function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, afwDollars, buyingPowerAvail, inDefense, killSwitchActive, recentSells30d, divYields, makeSignal) {
     if (!pillarTargets)
         return [];
     if (inDefense || killSwitchActive)
@@ -778,9 +810,38 @@ function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, a
     // Wash-sale defensive skip — only blocks symbols sold at a loss in window.
     const washSaleSkip = new Set(recentSells30d.filter((s) => s.isLoss).map((s) => s.symbol));
     const marginUtilPct = valuation.marginDebt / totalForPct;
-    // Score candidates from the AI-curated income subset.
-    const scored = (0, fund_metadata_1.listAiCurated)('income')
+    const lookupYield = (symbol) => {
+        const live = divYields?.[symbol];
+        if (typeof live === 'number' && Number.isFinite(live) && live > 0) {
+            return { yieldPct: live, yieldSource: 'live' };
+        }
+        const fb = (0, fund_metadata_1.getFallbackYieldPct)(symbol);
+        if (fb !== null && fb > 0)
+            return { yieldPct: fb, yieldSource: 'fallback' };
+        return { yieldPct: 0, yieldSource: 'none' };
+    };
+    const seedCandidates = positions
+        .filter((p) => p.pillar === 'income')
+        .filter((p) => p.marketValue > 0 && p.marketValue < exports.CONFIG.SEED_MAX_DOLLARS)
+        .map((p) => ({
+        symbol: p.symbol,
+        family: p.family ?? 'Other',
+        maintenancePct: p.maintenancePct ?? 50,
+        maintenancePctSource: p.maintenancePctSource ?? 'default',
+        isSeed: true,
+        ...lookupYield(p.symbol),
+    }));
+    const curatedCandidates = (0, fund_metadata_1.listAiCurated)('income')
         .filter((c) => !heldSymbols.has(c.symbol))
+        .map((c) => ({
+        symbol: c.symbol,
+        family: c.family,
+        maintenancePct: c.maintenancePct,
+        maintenancePctSource: c.maintenancePctSource,
+        isSeed: false,
+        ...lookupYield(c.symbol),
+    }));
+    const scored = [...seedCandidates, ...curatedCandidates]
         .filter((c) => !washSaleSkip.has(c.symbol))
         .filter((c) => {
         if (marginUtilPct > 0.30 && c.maintenancePct > exports.CONFIG.PILLAR_FILL_HIGH_MARGIN_MAINT_CEILING) {
@@ -795,7 +856,14 @@ function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, a
         // Maintenance gets a mild penalty: prefer lower-maint candidates when ranking
         // is otherwise tied, but don't override the family-diversification preference.
         const maintPenalty = c.maintenancePct / 100;
-        const score = -familyPenalty - maintPenalty;
+        const seedBonus = c.isSeed ? exports.CONFIG.PILLAR_FILL_SEED_BONUS : 0;
+        // 'income' objective: credit distribution yield, capped so decay-trap
+        // funds can't win purely on an exorbitant headline number. 'balanced'
+        // (default) ignores yield entirely — original behavior, bit-identical.
+        const yieldCredit = exports.CONFIG.PILLAR_FILL_OBJECTIVE === 'income'
+            ? Math.min(c.yieldPct, exports.CONFIG.PILLAR_FILL_YIELD_CREDIT_CAP_PCT) / 100
+            : 0;
+        const score = seedBonus + yieldCredit - familyPenalty - maintPenalty;
         return { c, familyPct, score };
     })
         .sort((a, b) => b.score - a.score);
@@ -822,8 +890,14 @@ function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, a
     for (let i = 0; i < pickN; i += 1) {
         const { c, familyPct } = scored[i];
         signals.push(makeSignal('PILLAR_FILL', `FILL_INCOME_${c.symbol}`, c.symbol, 'BUY', sizePerSignal, priority, `Income pillar at ${incomePct.toFixed(1)}% vs target ${targetPct}% (gap ${gapPp.toFixed(1)}pp). ` +
-            `${c.symbol} (${c.family}) fills the gap; you don't already hold it` +
-            (familyPct > 0 ? `, and current ${c.family} exposure is ${familyPct.toFixed(1)}%.` : '.'), {
+            `${c.symbol} (${c.family}) fills the gap; ` +
+            (c.isSeed
+                ? `you hold it as a 1-share seed — scale it up`
+                : `you don't already hold it`) +
+            (familyPct > 0 ? `, and current ${c.family} exposure is ${familyPct.toFixed(1)}%` : '') +
+            (exports.CONFIG.PILLAR_FILL_OBJECTIVE === 'income' && c.yieldPct > 0
+                ? `. Income objective: ~${c.yieldPct.toFixed(0)}% distribution rate (${c.yieldSource}).`
+                : '.'), {
             pillar: 'income',
             actualPct: Math.round(incomePct * 100) / 100,
             targetPct,
@@ -832,6 +906,10 @@ function evalPillarFill(positions, valuation, pillarTargets, marginThresholds, a
             familyExposurePct: Math.round(familyPct * 100) / 100,
             candidateMaintPct: c.maintenancePct,
             candidateMaintSource: c.maintenancePctSource,
+            candidateIsSeed: c.isSeed,
+            candidateYieldPct: Math.round(c.yieldPct * 10) / 10,
+            candidateYieldSource: c.yieldSource,
+            objective: exports.CONFIG.PILLAR_FILL_OBJECTIVE,
         }));
     }
     return signals;
@@ -916,7 +994,7 @@ function runSignalEngine(inputs) {
     //     AFW-dollar floor when AFW data available — no new buys when headroom
     //     is too low, regardless of utilization ratio.
     const buyingPowerAvail = inputs.buyingPowerAvailable ?? Math.max(0, inputs.cash);
-    all.push(...evalPillarFill(inputs.positions, valuation, inputs.pillarTargets, inputs.marginThresholds, inputs.afwDollars, buyingPowerAvail, inDefense, nextState.killSwitch.active, inputs.recentSells30d ?? [], makeSignal));
+    all.push(...evalPillarFill(inputs.positions, valuation, inputs.pillarTargets, inputs.marginThresholds, inputs.afwDollars, buyingPowerAvail, inDefense, nextState.killSwitch.active, inputs.recentSells30d ?? [], inputs.divYields, makeSignal));
     // Update prevMonth at month boundary (snapshot current margin for next month's
     // kill-switch comparison).
     const thisMonth = currentYearMonth();
