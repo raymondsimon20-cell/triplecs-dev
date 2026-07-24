@@ -318,9 +318,9 @@ function checkFullExit(t: ProposedTrade, ctx: GuardrailContext): GuardrailViolat
     code: 'full_exit_blocked',
     severity: 'block',
     message:
-      `SELL ${t.shares} ${t.symbol} would close the entire position ` +
-      `(holding ${position.shares} share${position.shares === 1 ? '' : 's'}). ` +
-      'Keep-one-share rule active — reduce quantity to leave at least one share.',
+      `This would sell your entire ${t.symbol} position (all ${position.shares} share${position.shares === 1 ? '' : 's'}). ` +
+      `The app never fully exits a holding automatically — it keeps at least 1 share so the position, ` +
+      `its cost history, and its dividend record stay on the books. Lower the share count to proceed.`,
   };
 }
 
@@ -332,7 +332,10 @@ function checkOrderSize(t: ProposedTrade, ctx: GuardrailContext, limits: Guardra
     return {
       code: 'order_size_cap',
       severity: 'block',
-      message: `${t.instruction} ${t.shares} ${t.symbol} (~$${Math.round(notional).toLocaleString()}) is ${(pct * 100).toFixed(1)}% of portfolio — cap is ${(limits.maxOrderPctOfPortfolio * 100).toFixed(0)}%.`,
+      message:
+        `This single order (~$${Math.round(notional).toLocaleString()} of ${t.symbol}) is ` +
+        `${(pct * 100).toFixed(1)}% of your whole portfolio — the safety cap for any one trade is ` +
+        `${(limits.maxOrderPctOfPortfolio * 100).toFixed(0)}%. Split it into smaller orders if it's intentional.`,
     };
   }
   return null;
@@ -347,7 +350,10 @@ function checkConcentration(t: ProposedTrade, ctx: GuardrailContext, limits: Gua
     return {
       code: 'concentration_cap',
       severity: 'block',
-      message: `${t.symbol} would become ${pct.toFixed(1)}% of portfolio after this BUY — concentration cap is ${limits.maxConcentrationPct}%.`,
+      message:
+        `This buy would make ${t.symbol} ${pct.toFixed(1)}% of your portfolio — over the ` +
+        `${limits.maxConcentrationPct}% cap on any single holding. The cap exists so no one position ` +
+        `can take the account down with it.`,
     };
   }
   return null;
@@ -365,7 +371,11 @@ function checkPillarOverdrift(t: ProposedTrade, ctx: GuardrailContext, limits: G
     return {
       code: 'pillar_overdrift',
       severity: 'block',
-      message: `BUY would push ${t.pillar} to ${postPct.toFixed(1)}% (target ${target.targetPct}%, overdrift +${overdrift.toFixed(1)}pp). Cap is +${limits.maxPillarOverdriftPp}pp.`,
+      message:
+        `This buy would push your ${t.pillar} pillar to ${postPct.toFixed(1)}% of the portfolio — ` +
+        `${overdrift.toFixed(1)} points past its ${target.targetPct}% target ` +
+        `(${limits.maxPillarOverdriftPp} points over is the most the app allows). ` +
+        `Raise the pillar's target in Settings if this is deliberate.`,
     };
   }
   return null;
@@ -388,7 +398,10 @@ function checkMargin(t: ProposedTrade, ctx: GuardrailContext, limits: GuardrailL
     return {
       code: 'margin_cap',
       severity: 'block',
-      message: `${t.instruction} would push margin utilization to ${pct.toFixed(1)}% — cap is ${limits.maxMarginUtilizationPct}%.`,
+      message:
+        `This trade would push your borrowing to ${pct.toFixed(1)}% of the account — past your ` +
+        `${limits.maxMarginUtilizationPct}% limit. Free up cash first (or raise the limit in Settings); ` +
+        `Schwab hard-stops everything at 50%.`,
     };
   }
   return null;
@@ -425,9 +438,9 @@ function checkAfwHeadroom(t: ProposedTrade, ctx: GuardrailContext, limits: Guard
     code: 'afw_headroom',
     severity: 'block',
     message:
-      `${t.instruction} ${t.shares} ${t.symbol} would consume ${drawHuman} of AFW headroom ` +
-      `(pre: ${preHuman} → post: ${postHuman}). Minimum floor is ${floorHuman} to stay clear ` +
-      `of Schwab's 50% margin cap.`,
+      `This trade would use up ${drawHuman} of your cash cushion (AFW — what you could withdraw today), ` +
+      `taking it from ${preHuman} down to ${postHuman}. The app keeps at least ${floorHuman} in reserve ` +
+      `so one bad day can't push you into Schwab's 50% borrowing wall.`,
   };
 }
 
@@ -438,7 +451,10 @@ function checkDailyCount(_t: ProposedTrade, ctx: GuardrailContext, limits: Guard
     return {
       code: 'daily_order_count',
       severity: 'block',
-      message: `Daily order cap (${limits.maxOrdersPerDay}) already reached — ${todaysCount} orders placed today.`,
+      message:
+        `${todaysCount} orders have already gone out today — the daily limit is ${limits.maxOrdersPerDay}. ` +
+        `This is a circuit breaker against runaway automation; it resets at midnight, or you can place ` +
+        `the order manually at Schwab if it can't wait.`,
     };
   }
   return null;

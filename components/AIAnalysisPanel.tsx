@@ -812,7 +812,6 @@ export function AIAnalysisPanel({
           <div className="flex items-center gap-2.5">
             <Brain className="w-5 h-5 text-violet-400" />
             <span className="font-semibold text-white text-sm">AI Portfolio Analysis</span>
-            <span className="text-xs text-[#4a5070] bg-[#2d3248] px-2 py-0.5 rounded-full">Phase 7</span>
           </div>
           {open ? <ChevronUp className="w-4 h-4 text-[#7c82a0]" /> : <ChevronDown className="w-4 h-4 text-[#7c82a0]" />}
         </button>

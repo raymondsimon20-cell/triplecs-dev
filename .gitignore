@@ -30,3 +30,6 @@ next-env.d.ts
 
 # Uploads / sensitive docs (PDFs with strategy rules — optional, remove if you want them versioned)
 # *.pdf
+
+# Claude local session settings
+.claude/

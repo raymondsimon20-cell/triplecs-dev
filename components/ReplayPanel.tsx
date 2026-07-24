@@ -15,6 +15,7 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { History, RefreshCw, AlertTriangle } from 'lucide-react';
+import { ruleName } from '@/lib/friendly';
 
 interface ReplayDay {
   date:                 string;
@@ -158,7 +159,7 @@ export function ReplayPanel() {
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 {byRuleEntries.map(([rule, n]) => (
                   <div key={rule} className="bg-[#1a1d27] border border-[#2d3248] rounded p-2">
-                    <div className="text-[10px] text-[#7c82a0] font-mono">{rule}</div>
+                    <div className="text-[10px] text-[#7c82a0]">{ruleName(rule)}</div>
                     <div className="text-lg font-bold text-white tabular-nums">{n}</div>
                   </div>
                 ))}
@@ -187,7 +188,7 @@ export function ReplayPanel() {
                           {s.sizeDollars > 0 && (
                             <span className="font-mono text-[#a0a4c0] w-20">{fmt$(s.sizeDollars)}</span>
                           )}
-                          <span className="text-[#7c82a0] font-mono text-[10px]">{s.rule}</span>
+                          <span className="text-[#7c82a0] text-[10px]">{ruleName(s.rule)}</span>
                         </div>
                       ))}
                     </div>
