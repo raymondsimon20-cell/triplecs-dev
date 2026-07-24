@@ -7,6 +7,7 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
+import { CalendarCheck } from 'lucide-react';
 import type { NormalizedTransaction } from '@/components/TransactionsView';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -111,9 +112,14 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Month Close</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">Did your equity grow? Monthly reconciliation and equity tracking</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center flex-shrink-0">
+          <CalendarCheck className="w-[18px] h-[18px] text-amber-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Month Close</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">Did your equity grow? Monthly reconciliation and equity tracking</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

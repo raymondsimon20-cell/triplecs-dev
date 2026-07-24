@@ -14,6 +14,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { Activity } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -101,9 +102,14 @@ export function CashFlowView({ transactions, loading, windowDays = 30 }: Props) 
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">{windowDays}-Day Cash Flow</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">Ledger-style breakdown of income, expenses, and contributions</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
+          <Activity className="w-[18px] h-[18px] text-emerald-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">{windowDays}-Day Cash Flow</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">Ledger-style breakdown of income, expenses, and contributions</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

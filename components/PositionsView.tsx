@@ -8,6 +8,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { BarChart2 } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { useSort, SortTh } from '@/components/sortable';
 
@@ -99,9 +100,14 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Positions</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">As of {asOf} · Prices as of {pricesAgo}</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-violet-500/10 border border-violet-500/20 flex items-center justify-center flex-shrink-0">
+          <BarChart2 className="w-[18px] h-[18px] text-violet-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Positions</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">As of {asOf} · Prices as of {pricesAgo}</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

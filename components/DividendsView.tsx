@@ -8,6 +8,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { DollarSign } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { estimateAnnualDividend, getFrequency, distributeToMonths } from '@/components/IncomeHub';
 import { useSort, SortTh } from '@/components/sortable';
@@ -168,9 +169,14 @@ export function DividendsView({ dividends, loading, positions }: Props) {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Dividend Income</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">As of {asOf}</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center flex-shrink-0">
+          <DollarSign className="w-[18px] h-[18px] text-emerald-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Dividend Income</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">As of {asOf}</p>
+        </div>
       </div>
 
       {loading && <div className="text-xs text-[#7c82a0]">Loading dividend history…</div>}

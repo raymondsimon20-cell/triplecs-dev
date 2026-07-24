@@ -24,6 +24,7 @@ import {
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
   Inbox, X, Wallet, History, Calculator, Activity, Layers,
+  ArrowLeftRight, CalendarCheck, Plug, Wrench,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { AccountSwitcher, useAccountNicknames } from '@/components/AccountSwitcher';
@@ -187,33 +188,34 @@ function DataAge({ updated }: { updated: Date }) {
 
 // ─── Top tabs ─────────────────────────────────────────────────────────────────
 function TopTabs({ view, onChange }: { view: View; onChange: (v: View) => void }) {
-  const items: { id: View; label: string }[] = [
-    { id: 'dashboard',    label: 'Dashboard'    },
-    { id: 'positions',    label: 'Positions'    },
-    { id: 'transactions', label: 'Transactions' },
-    { id: 'cashflow',     label: 'Cash Flow'    },
-    { id: 'dividends',    label: 'Dividends'    },
-    { id: 'monthclose',   label: 'Month Close'  },
-    { id: 'ledgerview',   label: 'Ledger'       },
-    { id: 'connections',  label: 'Connections'  },
-    { id: 'today',        label: 'Tools'        },
+  const items: { id: View; label: string; Icon: typeof BarChart2 }[] = [
+    { id: 'dashboard',    label: 'Dashboard',    Icon: Gauge          },
+    { id: 'positions',    label: 'Positions',    Icon: BarChart2      },
+    { id: 'transactions', label: 'Transactions', Icon: ArrowLeftRight },
+    { id: 'cashflow',     label: 'Cash Flow',    Icon: Activity       },
+    { id: 'dividends',    label: 'Dividends',    Icon: DollarSign     },
+    { id: 'monthclose',   label: 'Month Close',  Icon: CalendarCheck  },
+    { id: 'ledgerview',   label: 'Ledger',       Icon: BookOpen       },
+    { id: 'connections',  label: 'Connections',  Icon: Plug           },
+    { id: 'today',        label: 'Tools',        Icon: Wrench         },
   ];
   const inTools = LEGACY_VIEWS.includes(view);
   return (
     <nav className="w-full border-b border-[#1a1e2e] bg-[rgba(18,21,31,0.6)] backdrop-blur sticky top-[57px] z-30">
       <div className="max-w-7xl mx-auto px-4 flex gap-0.5 overflow-x-auto">
-        {items.map(({ id, label }) => {
+        {items.map(({ id, label, Icon }) => {
           const active = id === 'today' ? inTools : view === id;
           return (
             <button
               key={id}
               onClick={() => onChange(id)}
-              className={`px-3 py-2.5 text-xs font-medium transition-colors border-b-2 whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium transition-colors border-b-2 whitespace-nowrap ${
                 active
                   ? 'text-white border-blue-500'
                   : 'text-[#7c82a0] border-transparent hover:text-white'
               }`}
             >
+              <Icon className={`w-3.5 h-3.5 ${active ? 'text-blue-400' : ''}`} />
               {label}
             </button>
           );

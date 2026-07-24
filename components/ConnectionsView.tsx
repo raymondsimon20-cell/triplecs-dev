@@ -6,7 +6,7 @@
  */
 
 import React from 'react';
-import { Landmark, CheckCircle, Plus } from 'lucide-react';
+import { Landmark, CheckCircle, Plus, Plug } from 'lucide-react';
 import { LinkDeviceButton } from '@/components/LinkDeviceButton';
 
 function ago(d: Date | null): string {
@@ -29,9 +29,14 @@ interface Props {
 export function ConnectionsView({ accounts, nicknames, lastUpdated, onRefresh }: Props) {
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Brokerage Connections</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">Connect and sync your brokerage accounts</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-teal-500/10 border border-teal-500/20 flex items-center justify-center flex-shrink-0">
+          <Plug className="w-[18px] h-[18px] text-teal-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Brokerage Connections</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">Connect and sync your brokerage accounts</p>
+        </div>
       </div>
 
       <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4 flex items-center justify-between">

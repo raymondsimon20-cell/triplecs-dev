@@ -7,6 +7,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { ArrowLeftRight } from 'lucide-react';
 import { useSort, SortTh } from '@/components/sortable';
 
 export interface NormalizedTransaction {
@@ -90,9 +91,14 @@ export function TransactionsView({ transactions, loading }: Props) {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Transactions</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">All transactions across your accounts</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center flex-shrink-0">
+          <ArrowLeftRight className="w-[18px] h-[18px] text-cyan-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Transactions</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">All transactions across your accounts</p>
+        </div>
       </div>
 
       {/* Filters */}

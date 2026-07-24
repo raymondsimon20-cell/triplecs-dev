@@ -9,7 +9,7 @@
  */
 
 import React, { useMemo } from 'react';
-import { ArrowRight, Landmark } from 'lucide-react';
+import { ArrowRight, Landmark, Gauge } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { type NormalizedTransaction, parseOptionSymbol } from '@/components/TransactionsView';
 
@@ -94,9 +94,14 @@ export function DashboardOverview({
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Portfolio Dashboard</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">Overview of your investment accounts</p>
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center flex-shrink-0">
+          <Gauge className="w-[18px] h-[18px] text-blue-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Portfolio Dashboard</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">Overview of your investment accounts</p>
+        </div>
       </div>
 
       {/* Stat grid */}

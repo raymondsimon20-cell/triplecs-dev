@@ -7,6 +7,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { BookOpen } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 import { useSort, SortTh } from '@/components/sortable';
 
@@ -61,11 +62,16 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="text-xl font-bold text-white">Ledger</h1>
-        <p className="text-xs text-[#7c82a0] mt-0.5">
+      <div className="flex items-center gap-3">
+        <div className="w-9 h-9 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center flex-shrink-0">
+          <BookOpen className="w-[18px] h-[18px] text-blue-400" />
+        </div>
+        <div>
+          <h1 className="text-xl font-bold text-white">Ledger</h1>
+          <p className="text-xs text-[#7c82a0] mt-0.5">
           Complete transaction ledger · {accountLabel} · trailing {windowDays} days
         </p>
+        </div>
       </div>
 
       <div className="flex items-center gap-2 text-xs">
