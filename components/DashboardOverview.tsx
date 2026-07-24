@@ -11,7 +11,7 @@
 import React, { useMemo } from 'react';
 import { ArrowRight, Landmark } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
-import type { NormalizedTransaction } from '@/components/TransactionsView';
+import { type NormalizedTransaction, parseOptionSymbol } from '@/components/TransactionsView';
 
 const fmt$ = (n: number, dec = 2) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -211,24 +211,30 @@ export function DashboardOverview({
                 <th className="text-left px-4 py-2 font-medium">Date</th>
                 <th className="text-left px-2 py-2 font-medium">Type</th>
                 <th className="text-left px-2 py-2 font-medium">Symbol</th>
+                <th className="text-right px-2 py-2 font-medium">Strike</th>
+                <th className="text-right px-2 py-2 font-medium">Exp</th>
                 <th className="text-left px-2 py-2 font-medium">Description</th>
                 <th className="text-right px-2 py-2 font-medium">Amount</th>
-                <th className="text-right px-4 py-2 font-medium">Units</th>
+                <th className="text-right px-2 py-2 font-medium">Units</th>
+                <th className="text-right px-2 py-2 font-medium">Fee</th>
+                <th className="text-right px-4 py-2 font-medium">P/L</th>
               </tr>
             </thead>
             <tbody>
               {transactionsLoading && (
-                <tr><td colSpan={6} className="px-4 py-4 text-[#4a5070]">Loading transactions…</td></tr>
+                <tr><td colSpan={10} className="px-4 py-4 text-[#4a5070]">Loading transactions…</td></tr>
               )}
               {!transactionsLoading && recentTransactions.length === 0 && (
-                <tr><td colSpan={6} className="px-4 py-4 text-[#4a5070]">No recent transactions.</td></tr>
+                <tr><td colSpan={10} className="px-4 py-4 text-[#4a5070]">No recent transactions.</td></tr>
               )}
-              {recentTransactions.slice(0, 10).map((t) => (
+              {recentTransactions.slice(0, 10).map((t) => {
+                const opt = t.symbol ? parseOptionSymbol(t.symbol) : null;
+                return (
                 <tr key={t.id} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
                   <td className="px-4 py-2 text-[#9aa2c0] whitespace-nowrap">
                     {new Date(t.date + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })}
                   </td>
-                  <td className="px-2 py-2">
+                  <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                       t.category === 'Dividend' ? 'bg-emerald-500/15 text-emerald-300'
                       : t.category.includes('Sale') ? 'bg-blue-500/15 text-blue-300'
@@ -236,12 +242,17 @@ export function DashboardOverview({
                       : 'bg-[#2d3248] text-[#9aa2c0]'
                     }`}>{t.category}</span>
                   </td>
-                  <td className="px-2 py-2 font-mono font-semibold text-white">{t.symbol || '-'}</td>
-                  <td className="px-2 py-2 text-[#7c82a0] max-w-[260px] truncate">{t.description}</td>
+                  <td className="px-2 py-2 font-mono font-semibold text-white">{opt ? `${opt.underlying} ${opt.kind}` : (t.symbol || '-')}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{opt ? fmt$(opt.strike) : '-'}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0] whitespace-nowrap">{opt ? opt.exp : '-'}</td>
+                  <td className="px-2 py-2 text-[#7c82a0] max-w-[240px] truncate">{t.description}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
-                  <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0]">{t.units ? t.units.toFixed(4) : '-'}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.units ? t.units.toFixed(4) : '0.0000'}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.fee > 0 ? `$${t.fee.toFixed(2)}` : '-'}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-[#4a5070]">-</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>

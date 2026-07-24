@@ -36,6 +36,18 @@ export function fmtDate(d: string): string {
   return new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+/**
+ * Parse a Schwab OCC-style option symbol ("XYZ   260718C00150000") into
+ * strike / expiry / type. Returns null for plain equity symbols.
+ */
+export function parseOptionSymbol(symbol: string): { underlying: string; exp: string; strike: number; kind: 'C' | 'P' } | null {
+  const m = symbol.match(/^(\S+)\s+(\d{6})([CP])(\d{8})$/);
+  if (!m) return null;
+  const [, underlying, ymd, kind, strikeRaw] = m;
+  const exp = `${ymd.slice(2, 4)}/${ymd.slice(4, 6)}/${ymd.slice(0, 2)}`;
+  return { underlying, exp, strike: Number(strikeRaw) / 1000, kind: kind as 'C' | 'P' };
+}
+
 const inputCls = 'bg-[#12151f] border border-[#1f2334] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500';
 
 interface Props {
@@ -103,6 +115,8 @@ export function TransactionsView({ transactions, loading }: Props) {
                 <th className="text-left px-4 py-2.5 font-medium">Date</th>
                 <th className="text-left px-2 py-2.5 font-medium">Type</th>
                 <th className="text-left px-2 py-2.5 font-medium">Symbol</th>
+                <th className="text-right px-2 py-2.5 font-medium">Strike</th>
+                <th className="text-right px-2 py-2.5 font-medium">Exp</th>
                 <th className="text-left px-2 py-2.5 font-medium">Description</th>
                 <th className="text-right px-2 py-2.5 font-medium">Amount</th>
                 <th className="text-right px-2 py-2.5 font-medium">Units</th>
@@ -111,24 +125,29 @@ export function TransactionsView({ transactions, loading }: Props) {
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={7} className="px-4 py-6 text-[#4a5070]">Loading transactions…</td></tr>
+                <tr><td colSpan={9} className="px-4 py-6 text-[#4a5070]">Loading transactions…</td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={7} className="px-4 py-6 text-[#4a5070]">No transactions match the filters.</td></tr>
+                <tr><td colSpan={9} className="px-4 py-6 text-[#4a5070]">No transactions match the filters.</td></tr>
               )}
-              {filtered.slice(0, limit).map((t) => (
+              {filtered.slice(0, limit).map((t) => {
+                const opt = t.symbol ? parseOptionSymbol(t.symbol) : null;
+                return (
                 <tr key={t.id} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
                   <td className="px-4 py-2 text-[#9aa2c0] whitespace-nowrap">{fmtDate(t.date)}</td>
                   <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${categoryChipClass(t.category)}`}>{t.category}</span>
                   </td>
-                  <td className="px-2 py-2 font-mono font-semibold text-white">{t.symbol || '-'}</td>
+                  <td className="px-2 py-2 font-mono font-semibold text-white">{opt ? `${opt.underlying} ${opt.kind}` : (t.symbol || '-')}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{opt ? `$${opt.strike.toFixed(2)}` : '-'}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0] whitespace-nowrap">{opt ? opt.exp : '-'}</td>
                   <td className="px-2 py-2 text-[#7c82a0] max-w-[300px] truncate">{t.description}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.units ? t.units.toFixed(4) : '-'}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0]">{t.fee > 0 ? `$${t.fee.toFixed(2)}` : '-'}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
