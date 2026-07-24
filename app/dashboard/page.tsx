@@ -1106,7 +1106,7 @@ export default function DashboardPage() {
                 <TrendingUp className="w-3 h-3 text-blue-400" />
               </div>
               <div className="leading-none">
-                <div className="font-bold text-white text-sm tracking-tight whitespace-nowrap">Paycheck to Portfolio</div>
+                <div className="font-bold text-white text-sm tracking-tight whitespace-nowrap">TripleC</div>
               </div>
             </div>
             <FireProgress
