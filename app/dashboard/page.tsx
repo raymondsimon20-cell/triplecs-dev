@@ -92,6 +92,8 @@ interface AccountData {
   positions: EnrichedPosition[];
   pillarSummary: { pillar: PillarType; label: string; totalValue: number; portfolioPercent: number; positionCount: number; dayGainLoss: number }[];
   marginAlerts: RuleAlert[];
+  /** Raw Schwab currentBalances passthrough — cashBalance for the dashboard. */
+  balances?: { cashBalance?: number } & Record<string, unknown>;
 }
 
 /**
@@ -253,8 +255,8 @@ function PortfolioSubTabs({
   onChange: (s: PortfolioSub) => void;
   counts: { positions: number; orders: number };
 }) {
+  // 'positions' dropped 2026-07 — the top-level Positions page covers it.
   const items: { id: PortfolioSub; label: string; count?: number }[] = [
-    { id: 'positions', label: 'Positions', count: counts.positions },
     { id: 'income',    label: 'Income' },
     { id: 'trades',    label: 'Trades',    count: counts.orders },
     { id: 'market',    label: 'Market' },
@@ -526,6 +528,7 @@ function buildAggregateAccount(accounts: AccountData[]): AccountData {
   const dayGainLoss          = accounts.reduce((s, a) => s + (a.dayGainLoss          || 0), 0);
   const unrealizedGainLoss   = accounts.reduce((s, a) => s + (a.unrealizedGainLoss   || 0), 0);
   const availableForWithdrawal = accounts.reduce((s, a) => s + (a.availableForWithdrawal || 0), 0);
+  const cashBalance            = accounts.reduce((s, a) => s + (a.balances?.cashBalance ?? 0), 0);
 
   // Concatenate positions; recompute portfolioPercent against aggregate value
   // so the per-position % still represents share of the household, not of any
@@ -577,6 +580,7 @@ function buildAggregateAccount(accounts: AccountData[]): AccountData {
     positions,
     pillarSummary,
     marginAlerts,
+    balances: { cashBalance },
   };
 }
 
@@ -628,7 +632,7 @@ export default function DashboardPage() {
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
   const [view, setView]                 = useState<View>('dashboard');
-  const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('positions');
+  const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('income');
 
   // Persist account selection across reloads. We store the accountHash (not
   // index, since the array order is sensitive to Schwab response ordering)
@@ -662,6 +666,14 @@ export default function DashboardPage() {
 
   const nicknames    = useAccountNicknames();
   const accountKey   = isAll ? AGGREGATE_HASH : (resolvedAccount?.accountHash ?? AGGREGATE_HASH);
+
+  // Transactions carry accountHash per row — scope client-side, no refetch.
+  const scopedTransactions = useMemo(
+    () => (isAll || !resolvedAccount)
+      ? transactions
+      : transactions.filter((t) => t.accountHash === resolvedAccount.accountHash),
+    [transactions, isAll, resolvedAccount],
+  );
 
   /**
    * Pick the most-actionable account index when leaving aggregate mode:
@@ -746,9 +758,12 @@ export default function DashboardPage() {
     return annual / 12;
   }, [livePositions]);
 
-  const fetchDividends = useCallback(async () => {
+  const fetchDividends = useCallback(async (accountHash?: string) => {
     try {
-      const res = await fetch('/api/dividends');
+      const url = accountHash
+        ? `/api/dividends?accountHash=${encodeURIComponent(accountHash)}`
+        : '/api/dividends';
+      const res = await fetch(url);
       if (!res.ok) return;
       const data = await res.json() as {
         dividends?: { amount: number; date: string; symbol: string; description?: string }[];
@@ -788,6 +803,14 @@ export default function DashboardPage() {
     finally { setTransactionsLoading(false); }
   }, []);
 
+  // Dividends (re-)fetch whenever the selected account changes — records
+  // don't carry accountHash, so scoping must happen server-side. Also covers
+  // the initial mount fetch.
+  useEffect(() => {
+    fetchDividends(isAll ? undefined : resolvedAccount?.accountHash);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [accountKey, fetchDividends]);
+
   // Per-symbol trailing-12-month dividend totals for the positions table.
   const dividendsBySymbol = useMemo(() => {
     const out: Record<string, number> = {};
@@ -821,11 +844,10 @@ export default function DashboardPage() {
 
   useEffect(() => {
     fetchAccounts();
-    fetchDividends();
     fetchTransactions();
     const interval = setInterval(() => fetchAccounts(true), 60_000);
     return () => clearInterval(interval);
-  }, [fetchAccounts, fetchDividends, fetchTransactions]);
+  }, [fetchAccounts, fetchTransactions]);
 
   // ── Restore persisted account selection once accounts load ────────────────
   // Runs only when the accounts array changes; matches by hash so re-ordering
@@ -1269,15 +1291,15 @@ export default function DashboardPage() {
             <DashboardOverview
               accountLabel={accountLabel}
               accountNumber={account.accountNumber}
-              ownerName=""
+              ownerName={accountLabel}
               totalValue={account.totalValue}
               equity={account.equity}
               marginBalance={account.marginBalance}
-              availableCash={availableForWithdrawal}
+              availableCash={account.balances?.cashBalance ?? 0}
               positions={livePositions}
               lastUpdated={lastUpdated}
               dividends12mo={dividendsTotal}
-              recentTransactions={transactions}
+              recentTransactions={scopedTransactions}
               transactionsLoading={transactionsLoading}
               onViewPositions={() => setView('positions')}
               onViewTransactions={() => setView('transactions')}
@@ -1321,12 +1343,12 @@ export default function DashboardPage() {
                 />
               </div>
             </CollapsiblePanel>
-            <TransactionsView transactions={transactions} loading={transactionsLoading} />
+            <TransactionsView transactions={scopedTransactions} loading={transactionsLoading} />
           </>
         )}
 
         {view === 'cashflow' && (
-          <CashFlowView transactions={transactions} loading={transactionsLoading} windowDays={30} />
+          <CashFlowView transactions={scopedTransactions} loading={transactionsLoading} windowDays={30} />
         )}
 
         {view === 'dividends' && (
@@ -1352,6 +1374,7 @@ export default function DashboardPage() {
                   pillarSummary={account.pillarSummary}
                   onProjectedMonthly={setMonthlyIncome}
                   accountHash={isAll ? undefined : account.accountHash}
+                  visibleTabs={['fire', 'expenses', 'margin']}
                 />
               </div>
             </CollapsiblePanel>
@@ -1363,14 +1386,14 @@ export default function DashboardPage() {
             totalValue={account.totalValue}
             equity={account.equity}
             marginBalance={account.marginBalance}
-            transactions={transactions}
+            transactions={scopedTransactions}
             accountHash={isAll ? undefined : account.accountHash}
           />
         )}
 
         {view === 'ledgerview' && (
           <LedgerView
-            transactions={transactions}
+            transactions={scopedTransactions}
             loading={transactionsLoading}
             accountLabel={accountLabel}
             windowDays={365}
@@ -1539,7 +1562,7 @@ export default function DashboardPage() {
               <MarketReadCard />
               <TopPositionsCard
                 positions={livePositions}
-                onSeeAll={() => { setView('portfolio'); setPortfolioSub('positions'); }}
+                onSeeAll={() => setView('positions')}
               />
             </div>
           </>
@@ -1556,19 +1579,8 @@ export default function DashboardPage() {
               counts={{ positions: account.positions.length, orders: pendingOrders.size }}
             />
 
-            {portfolioSub === 'positions' && (
-              <CollapsiblePanel
-                id="positions"
-                title={`All positions (${account.positions.length})`}
-                icon={<BarChart2 className="w-4 h-4 text-[#9aa2c0]" />}
-                iconContainerClass="bg-white/[0.06] border border-white/10"
-                defaultOpen={true}
-              >
-                <div className="pt-4">
-                  <PositionsTable positions={account.positions} pendingOrders={pendingOrders} />
-                </div>
-              </CollapsiblePanel>
-            )}
+            {/* 'positions' sub-view removed 2026-07 — duplicated the top-level
+                Positions page. PositionsTable stays imported for TradeHub use. */}
 
             {portfolioSub === 'income' && (
               <>

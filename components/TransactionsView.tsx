@@ -20,6 +20,8 @@ export interface NormalizedTransaction {
   units:       number;
   fee:         number;
   accountHash: string;
+  /** Realized P/L for sales matched against the app's trade-history cost basis. */
+  realizedPnl?: number;
 }
 
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -86,6 +88,7 @@ export function TransactionsView({ transactions, loading }: Props) {
       amount:   (t) => t.amount,
       units:    (t) => t.units,
       fee:      (t) => t.fee,
+      pnl:      (t) => t.realizedPnl ?? Number.NEGATIVE_INFINITY,
     });
   }, [transactions, typeFilter, symbolFilter, fromDate, toDate, sortRows]);
 
@@ -139,15 +142,16 @@ export function TransactionsView({ transactions, loading }: Props) {
                 <th className="text-left px-2 py-2.5 font-medium text-[#4a5070]">Description</th>
                 <SortTh id="amount" label="Amount" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
                 <SortTh id="units"  label="Units"  align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
-                <SortTh id="fee"    label="Fee"    align="right" last sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="fee"    label="Fee"    align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="pnl"    label="P/L"    align="right" last sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
               </tr>
             </thead>
             <tbody>
               {loading && (
-                <tr><td colSpan={9} className="px-4 py-6 text-[#4a5070]">Loading transactions…</td></tr>
+                <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">Loading transactions…</td></tr>
               )}
               {!loading && filtered.length === 0 && (
-                <tr><td colSpan={9} className="px-4 py-6 text-[#4a5070]">No transactions match the filters.</td></tr>
+                <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">No transactions match the filters.</td></tr>
               )}
               {filtered.slice(0, limit).map((t) => {
                 const opt = t.symbol ? parseOptionSymbol(t.symbol) : null;
@@ -163,7 +167,10 @@ export function TransactionsView({ transactions, loading }: Props) {
                   <td className="px-2 py-2 text-[#7c82a0] max-w-[300px] truncate">{t.description}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.units ? t.units.toFixed(4) : '-'}</td>
-                  <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0]">{t.fee > 0 ? `$${t.fee.toFixed(2)}` : '-'}</td>
+                  <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.fee > 0 ? `$${t.fee.toFixed(2)}` : '-'}</td>
+                  <td className={`px-4 py-2 text-right tabular-nums ${t.realizedPnl !== undefined ? plColor(t.realizedPnl) : 'text-[#4a5070]'}`}>
+                    {t.realizedPnl !== undefined ? signed$(t.realizedPnl) : '-'}
+                  </td>
                 </tr>
                 );
               })}

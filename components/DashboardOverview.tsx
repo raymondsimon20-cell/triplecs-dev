@@ -137,7 +137,7 @@ export function DashboardOverview({
           <div>
             {ownerName && <div className="text-sm font-semibold text-white">{ownerName}</div>}
             <div className="text-xs text-[#7c82a0]">
-              Schwab ({accountLabel || `···${accountNumber.slice(-3)}`})
+              Schwab (···{accountNumber.slice(-3)})
             </div>
           </div>
         </div>
@@ -257,7 +257,9 @@ export function DashboardOverview({
                   <td className={`px-2 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.units ? t.units.toFixed(4) : '0.0000'}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#7c82a0]">{t.fee > 0 ? `$${t.fee.toFixed(2)}` : '-'}</td>
-                  <td className="px-4 py-2 text-right tabular-nums text-[#4a5070]">-</td>
+                  <td className={`px-4 py-2 text-right tabular-nums ${t.realizedPnl !== undefined ? plColor(t.realizedPnl) : 'text-[#4a5070]'}`}>
+                    {t.realizedPnl !== undefined ? signed$(t.realizedPnl) : '-'}
+                  </td>
                 </tr>
                 );
               })}

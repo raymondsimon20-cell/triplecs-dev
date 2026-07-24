@@ -53,6 +53,11 @@ interface Props {
   onProjectedMonthly?: (monthly: number) => void;
   /** Account scope for dividend fetches. Omit for household-aggregate. */
   accountHash?: string;
+  /**
+   * Limit which tabs render. Used by the Dividends page embed, whose page
+   * already covers Historical/Projected — showing them again would duplicate.
+   */
+  visibleTabs?: Tab[];
 }
 
 type Tab = 'historical' | 'projected' | 'fire' | 'expenses' | 'margin';
@@ -1405,9 +1410,9 @@ function ExpensesTab({ monthlyIncome }: { monthlyIncome: number }) {
 
 // ─── Main Component ───────────────────────────────────────────────────────────
 
-export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [], onProjectedMonthly, accountHash }: Props) {
+export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0, pillarSummary = [], onProjectedMonthly, accountHash, visibleTabs }: Props) {
   const [open, setOpen] = useState(true);
-  const [activeTab, setActiveTab] = useState<Tab>('historical');
+  const [activeTab, setActiveTab] = useState<Tab>(visibleTabs?.[0] ?? 'historical');
   const [data, setData] = useState<DividendData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -1451,13 +1456,13 @@ export function IncomeHub({ positions, totalValue, equity = 0, marginBalance = 0
     if (projectedAnnual > 0) onProjectedMonthly?.(projectedAnnual / 12);
   }, [projectedAnnual, onProjectedMonthly]);
 
-  const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
-    { id: 'historical', label: 'Historical', icon: <BarChart2 className="w-3.5 h-3.5" /> },
-    { id: 'projected',  label: 'Projected',  icon: <Calendar   className="w-3.5 h-3.5" /> },
-    { id: 'fire',       label: 'FIRE',        icon: <Flame      className="w-3.5 h-3.5" /> },
-    { id: 'expenses',   label: 'Expenses',    icon: <Receipt    className="w-3.5 h-3.5" /> },
-    { id: 'margin',     label: 'Margin',      icon: <Target     className="w-3.5 h-3.5" /> },
-  ];
+  const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = ([
+    { id: 'historical' as Tab, label: 'Historical', icon: <BarChart2 className="w-3.5 h-3.5" /> },
+    { id: 'projected' as Tab,  label: 'Projected',  icon: <Calendar   className="w-3.5 h-3.5" /> },
+    { id: 'fire' as Tab,       label: 'FIRE',        icon: <Flame      className="w-3.5 h-3.5" /> },
+    { id: 'expenses' as Tab,   label: 'Expenses',    icon: <Receipt    className="w-3.5 h-3.5" /> },
+    { id: 'margin' as Tab,     label: 'Margin',      icon: <Target     className="w-3.5 h-3.5" /> },
+  ]).filter((t) => !visibleTabs || visibleTabs.includes(t.id));
 
   return (
     <div className="bg-[#1a1d27] border border-[#2d3248] rounded-xl overflow-hidden">

@@ -56,19 +56,20 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
 
   // This month's flow components from transactions.
   const flows = useMemo(() => {
-    let contributions = 0, income = 0, expenses = 0;
+    let contributions = 0, income = 0, expenses = 0, realized = 0;
     for (const t of transactions) {
       if (t.date < monthStartKey) continue;
       if (t.category === 'Contribution') contributions += Math.abs(t.amount);
       else if (t.category === 'Dividend' || t.category === 'Interest') income += Math.abs(t.amount);
       else if (t.category === 'Withdrawal' || t.category === 'Margin Interest') expenses += Math.abs(t.amount);
+      if (typeof t.realizedPnl === 'number') realized += t.realizedPnl;
     }
-    return { contributions, netOperating: income - expenses };
+    return { contributions, netOperating: income - expenses, realized };
   }, [transactions, monthStartKey]);
 
   const marginUsed = Math.abs(marginBalance);
   const opening    = openingEquity ?? 0;
-  const marketOther = equity - opening - flows.contributions - flows.netOperating;
+  const marketOther = equity - opening - flows.contributions - flows.netOperating - flows.realized;
   const netChange   = equity - opening;
   const equityPct   = totalValue > 0 ? (equity / totalValue) * 100 : 0;
 
@@ -78,6 +79,7 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
       { label: 'Opening',      value: opening,            kind: 'total' as const },
       { label: 'Contrib.',     value: flows.contributions, kind: 'delta' as const },
       { label: 'Net Oper.',    value: flows.netOperating,  kind: 'delta' as const },
+      { label: 'Realized P/L', value: flows.realized,      kind: 'delta' as const },
       { label: 'Mkt & Other',  value: marketOther,         kind: 'delta' as const },
       { label: 'Closing',      value: equity,              kind: 'total' as const },
     ];
@@ -193,8 +195,9 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
       </div>
 
       <p className="text-[10px] text-[#4a5070]">
-        Bridge components: contributions and net operating cash from this month&apos;s transactions;
-        &quot;Market &amp; Other&quot; is the residual (price moves, realized P/L, and anything uncategorized).
+        Bridge components: contributions, net operating cash, and realized P/L (from app-placed sales
+        with captured cost basis) from this month&apos;s transactions; &quot;Market &amp; Other&quot; is the
+        residual — price moves plus any sales placed outside the app.
       </p>
     </div>
   );

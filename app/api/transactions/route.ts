@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers, getTransactions } from '@/lib/schwab/client';
 import { getTokens } from '@/lib/storage';
@@ -28,6 +29,57 @@ export interface NormalizedTransaction {
   units:       number;   // share/contract quantity (signed; 0 for cash events)
   fee:         number;
   accountHash: string;
+  /**
+   * Realized P/L for sales, computed by matching the app's trade-history log
+   * (which captures cost basis per share at sale time). Undefined when no
+   * matching history entry exists — e.g. manual sales placed outside the app.
+   */
+  realizedPnl?: number;
+}
+
+// ─── Persistent ledger ────────────────────────────────────────────────────────
+// Schwab's API only serves ~1 year of history, so every fetch is merged into a
+// blob-store ledger keyed by transaction id. Over time the ledger accumulates
+// true all-time history even after Schwab's window rolls past it.
+const LEDGER_STORE = 'txn-ledger';
+const LEDGER_KEY   = 'log';
+const LEDGER_MAX   = 25_000;
+
+// ─── Realized P/L from trade history ─────────────────────────────────────────
+interface HistoryEntry {
+  timestamp?: string; symbol?: string; instruction?: string; quantity?: number;
+  status?: string; costBasisPerShare?: number; accountHash?: string;
+}
+
+/**
+ * Attach realizedPnl to sale transactions by matching trade-history entries on
+ * symbol + calendar date + share count. `amount` is net proceeds (fees already
+ * deducted), so realized = proceeds − basis × shares.
+ */
+function attachRealizedPnl(txns: NormalizedTransaction[], history: HistoryEntry[]): void {
+  const pool = history.filter((h) =>
+    h.status === 'placed' &&
+    (h.instruction === 'SELL' || h.instruction === 'SELL_TO_CLOSE') &&
+    typeof h.costBasisPerShare === 'number' && h.costBasisPerShare > 0 &&
+    h.timestamp && h.symbol,
+  ).map((h) => ({ ...h, date: (h.timestamp as string).split('T')[0], used: false }));
+
+  for (const t of txns) {
+    if (t.category !== 'Stock Sale' && t.category !== 'Option Trade') continue;
+    if (t.amount <= 0 || !t.symbol) continue;
+    const shares = Math.abs(t.units);
+    if (shares <= 0) continue;
+    const match = pool.find((h) =>
+      !h.used &&
+      h.symbol === t.symbol &&
+      h.date === t.date &&
+      Math.abs((h.quantity ?? 0) - shares) < 0.01 &&
+      (!h.accountHash || h.accountHash === t.accountHash),
+    );
+    if (!match) continue;
+    match.used = true;
+    t.realizedPnl = Math.round((t.amount - (match.costBasisPerShare as number) * shares) * 100) / 100;
+  }
 }
 
 const CASH_SYMBOLS     = new Set(['CURRENCY_USD', 'USD', 'CASH']);
@@ -156,11 +208,53 @@ export async function GET(req: Request) {
       }),
     );
 
-    const transactions = perAccount
-      .flat()
-      .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    const fetched = perAccount.flat();
 
-    return NextResponse.json({ transactions, days });
+    // Realized P/L from the app's trade-history log.
+    try {
+      const log = await getStore('trade-history').get('log', { type: 'json' }) as HistoryEntry[] | null;
+      if (Array.isArray(log)) attachRealizedPnl(fetched, log);
+    } catch (err) {
+      console.warn('[Transactions] trade-history load failed (realized P/L skipped):', err);
+    }
+
+    // Merge into the persistent ledger; response = full merged history so the
+    // Ledger page grows past Schwab's API window over time.
+    let transactions = fetched;
+    try {
+      const store = getStore(LEDGER_STORE);
+      const existing = (await store.get(LEDGER_KEY, { type: 'json' })) as NormalizedTransaction[] | null;
+      const byId = new Map<string, NormalizedTransaction>();
+      for (const t of existing ?? []) byId.set(t.id, t);
+      let added = 0;
+      for (const t of fetched) {
+        const prev = byId.get(t.id);
+        // Fresh fetch wins (it may newly carry realizedPnl), but never
+        // downgrade an entry that already has realized data.
+        if (!prev || t.realizedPnl !== undefined || prev.realizedPnl === undefined) {
+          if (!prev) added += 1;
+          byId.set(t.id, { ...prev, ...t });
+        }
+      }
+      transactions = [...byId.values()];
+      if (added > 0 || (existing?.length ?? 0) !== transactions.length) {
+        const capped = transactions
+          .sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))
+          .slice(0, LEDGER_MAX);
+        await store.setJSON(LEDGER_KEY, capped);
+        transactions = capped;
+      }
+    } catch (err) {
+      console.warn('[Transactions] ledger persistence failed (returning fetch only):', err);
+    }
+
+    // Optional account scoping of the response (persistence stays household-wide).
+    const scopedOut = accountHashParam && accountHashParam !== 'all'
+      ? transactions.filter((t) => t.accountHash === accountHashParam)
+      : transactions;
+
+    const sorted = [...scopedOut].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    return NextResponse.json({ transactions: sorted, days });
   } catch (err) {
     console.error('[Transactions API]', err);
     return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 });
