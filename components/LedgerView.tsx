@@ -8,6 +8,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
+import { useSort, SortTh } from '@/components/sortable';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -31,11 +32,22 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
   const [toDate,   setToDate]   = useState('');
   const [limit,    setLimit]    = useState(100);
 
-  const filtered = useMemo(() => transactions.filter((t) => {
-    if (fromDate && t.date < fromDate) return false;
-    if (toDate && t.date > toDate) return false;
-    return true;
-  }), [transactions, fromDate, toDate]);
+  const { sortKey, sortDir, requestSort, sortRows } = useSort<NormalizedTransaction>('date');
+
+  const filtered = useMemo(() => {
+    const base = transactions.filter((t) => {
+      if (fromDate && t.date < fromDate) return false;
+      if (toDate && t.date > toDate) return false;
+      return true;
+    });
+    return sortRows(base, {
+      date:     (t) => t.date,
+      category: (t) => t.category,
+      symbol:   (t) => t.symbol,
+      amount:   (t) => t.amount,
+      units:    (t) => t.units,
+    });
+  }, [transactions, fromDate, toDate, sortRows]);
 
   const stats = useMemo(() => {
     let inflows = 0, inflowN = 0, expenses = 0, expenseN = 0, deployed = 0, deployN = 0;
@@ -93,13 +105,13 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-[#4a5070] border-b border-[#1a1e2e]">
-                <th className="text-left px-4 py-2.5 font-medium">Date</th>
-                <th className="text-left px-2 py-2.5 font-medium">Category</th>
-                <th className="text-left px-2 py-2.5 font-medium">Symbol</th>
-                <th className="text-left px-2 py-2.5 font-medium">Description</th>
-                <th className="text-right px-2 py-2.5 font-medium">Cash Impact</th>
-                <th className="text-right px-4 py-2.5 font-medium">Units</th>
+              <tr className="border-b border-[#1a1e2e]">
+                <SortTh id="date"     label="Date"     first sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="category" label="Category" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="symbol"   label="Symbol"   sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <th className="text-left px-2 py-2.5 font-medium text-[#4a5070]">Description</th>
+                <SortTh id="amount" label="Cash Impact" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="units"  label="Units"       align="right" last sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
               </tr>
             </thead>
             <tbody>

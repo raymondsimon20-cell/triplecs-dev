@@ -7,6 +7,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { useSort, SortTh } from '@/components/sortable';
 
 export interface NormalizedTransaction {
   id:          string;
@@ -67,13 +68,25 @@ export function TransactionsView({ transactions, loading }: Props) {
     [transactions],
   );
 
-  const filtered = useMemo(() => transactions.filter((t) => {
-    if (typeFilter !== 'all' && t.category !== typeFilter) return false;
-    if (symbolFilter && !t.symbol.toUpperCase().includes(symbolFilter.toUpperCase())) return false;
-    if (fromDate && t.date < fromDate) return false;
-    if (toDate && t.date > toDate) return false;
-    return true;
-  }), [transactions, typeFilter, symbolFilter, fromDate, toDate]);
+  const { sortKey, sortDir, requestSort, sortRows } = useSort<NormalizedTransaction>('date');
+
+  const filtered = useMemo(() => {
+    const base = transactions.filter((t) => {
+      if (typeFilter !== 'all' && t.category !== typeFilter) return false;
+      if (symbolFilter && !t.symbol.toUpperCase().includes(symbolFilter.toUpperCase())) return false;
+      if (fromDate && t.date < fromDate) return false;
+      if (toDate && t.date > toDate) return false;
+      return true;
+    });
+    return sortRows(base, {
+      date:     (t) => t.date,
+      category: (t) => t.category,
+      symbol:   (t) => t.symbol,
+      amount:   (t) => t.amount,
+      units:    (t) => t.units,
+      fee:      (t) => t.fee,
+    });
+  }, [transactions, typeFilter, symbolFilter, fromDate, toDate, sortRows]);
 
   return (
     <div className="space-y-4">
@@ -111,16 +124,16 @@ export function TransactionsView({ transactions, loading }: Props) {
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-[#4a5070] border-b border-[#1a1e2e]">
-                <th className="text-left px-4 py-2.5 font-medium">Date</th>
-                <th className="text-left px-2 py-2.5 font-medium">Type</th>
-                <th className="text-left px-2 py-2.5 font-medium">Symbol</th>
-                <th className="text-right px-2 py-2.5 font-medium">Strike</th>
-                <th className="text-right px-2 py-2.5 font-medium">Exp</th>
-                <th className="text-left px-2 py-2.5 font-medium">Description</th>
-                <th className="text-right px-2 py-2.5 font-medium">Amount</th>
-                <th className="text-right px-2 py-2.5 font-medium">Units</th>
-                <th className="text-right px-4 py-2.5 font-medium">Fee</th>
+              <tr className="border-b border-[#1a1e2e]">
+                <SortTh id="date"     label="Date"   first sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="category" label="Type"   sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="symbol"   label="Symbol" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <th className="text-right px-2 py-2.5 font-medium text-[#4a5070]">Strike</th>
+                <th className="text-right px-2 py-2.5 font-medium text-[#4a5070]">Exp</th>
+                <th className="text-left px-2 py-2.5 font-medium text-[#4a5070]">Description</th>
+                <SortTh id="amount" label="Amount" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="units"  label="Units"  align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="fee"    label="Fee"    align="right" last sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
               </tr>
             </thead>
             <tbody>

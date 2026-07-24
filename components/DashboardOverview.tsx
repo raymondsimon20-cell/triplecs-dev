@@ -157,6 +157,17 @@ export function DashboardOverview({
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
+            <thead>
+              <tr className="text-[#4a5070] border-b border-[#1a1e2e]">
+                <th className="text-left px-4 py-2 font-medium">Symbol</th>
+                <th className="text-right px-2 py-2 font-medium">Day $</th>
+                <th className="text-right px-2 py-2 font-medium">Day %</th>
+                <th className="text-right px-2 py-2 font-medium">Gain $</th>
+                <th className="text-right px-2 py-2 font-medium">Gain %</th>
+                <th className="text-right px-2 py-2 font-medium">Value</th>
+                <th className="text-right px-4 py-2 font-medium">Weight</th>
+              </tr>
+            </thead>
             <tbody>
               <tr className="border-b border-[#1a1e2e] font-semibold text-white">
                 <td className="px-4 py-2.5">Portfolio Total</td>

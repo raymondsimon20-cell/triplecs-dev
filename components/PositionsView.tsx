@@ -9,6 +9,7 @@
 
 import React, { useMemo, useState } from 'react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
+import { useSort, SortTh } from '@/components/sortable';
 
 const fmt$ = (n: number, dec = 2) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -61,9 +62,25 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
       .sort((a, b) => b.value - a.value);
   }, [equities, dividendsBySymbol]);
 
-  const filtered = symbolFilter
-    ? rows.filter((r) => r.sym.toUpperCase().includes(symbolFilter.toUpperCase()))
-    : rows;
+  const { sortKey, sortDir, requestSort, sortRows } = useSort<typeof rows[number]>('value');
+
+  const filtered = useMemo(() => {
+    const base = symbolFilter
+      ? rows.filter((r) => r.sym.toUpperCase().includes(symbolFilter.toUpperCase()))
+      : rows;
+    return sortRows(base, {
+      sym:    (r) => r.sym,
+      qty:    (r) => r.qty,
+      price:  (r) => r.price,
+      day:    (r) => r.day,
+      dayPct: (r) => r.dayPct,
+      gain:   (r) => r.gain,
+      gainPct:(r) => r.gainPct,
+      ret:    (r) => r.ret,
+      retPct: (r) => r.retPct,
+      value:  (r) => r.value,
+    });
+  }, [rows, symbolFilter, sortRows]);
 
   const totals = useMemo(() => {
     let day = 0, gain = 0, ret = 0, value = 0;
@@ -109,18 +126,18 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-[#4a5070] border-b border-[#1a1e2e]">
-                <th className="text-left px-4 py-2.5 font-medium">Symbol</th>
-                <th className="text-right px-2 py-2.5 font-medium">Qty</th>
-                <th className="text-right px-2 py-2.5 font-medium">Price</th>
-                <th className="text-right px-2 py-2.5 font-medium">Day $</th>
-                <th className="text-right px-2 py-2.5 font-medium">Day %</th>
-                <th className="text-right px-2 py-2.5 font-medium">Gain $</th>
-                <th className="text-right px-2 py-2.5 font-medium">Gain %</th>
-                <th className="text-right px-2 py-2.5 font-medium">Return $</th>
-                <th className="text-right px-2 py-2.5 font-medium">Return %</th>
-                <th className="text-right px-2 py-2.5 font-medium">Value</th>
-                <th className="text-right px-4 py-2.5 font-medium">Weight</th>
+              <tr className="border-b border-[#1a1e2e]">
+                <SortTh id="sym"     label="Symbol"   first sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="qty"     label="Qty"      align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="price"   label="Price"    align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="day"     label="Day $"    align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="dayPct"  label="Day %"    align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="gain"    label="Gain $"   align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="gainPct" label="Gain %"   align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="ret"     label="Return $" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="retPct"  label="Return %" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="value"   label="Value"    align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="value"   label="Weight"   align="right" last sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
               </tr>
             </thead>
             <tbody>

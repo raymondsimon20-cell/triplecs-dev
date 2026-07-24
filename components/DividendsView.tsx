@@ -10,6 +10,7 @@
 import React, { useMemo, useState } from 'react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { estimateAnnualDividend, getFrequency, distributeToMonths } from '@/components/IncomeHub';
+import { useSort, SortTh } from '@/components/sortable';
 
 export interface DividendRecord {
   date:        string;
@@ -151,7 +152,18 @@ export function DividendsView({ dividends, loading, positions }: Props) {
     return rows.sort((a, b) => b.t12m - a.t12m);
   }, [trailing.bySymbol, positions, projection.bySymbolAnnual]);
 
-  const visibleRows = showAll ? symbolRows : symbolRows.slice(0, 25);
+  const { sortKey, sortDir, requestSort, sortRows } = useSort<typeof symbolRows[number]>('t12m');
+  const sortedRows = useMemo(() => sortRows(symbolRows, {
+    sym:          (r) => r.sym,
+    freq:         (r) => r.freq,
+    t12m:         (r) => r.t12m,
+    payments:     (r) => r.payments,
+    avg:          (r) => r.avg,
+    yieldOnCost:  (r) => r.yieldOnCost,
+    forwardYield: (r) => r.forwardYield,
+    last:         (r) => r.last,
+  }), [symbolRows, sortRows]);
+  const visibleRows = showAll ? sortedRows : sortedRows.slice(0, 25);
   const asOf = new Date().toISOString().split('T')[0];
 
   return (
@@ -206,15 +218,15 @@ export function DividendsView({ dividends, loading, positions }: Props) {
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
-              <tr className="text-[#4a5070] border-b border-[#1a1e2e]">
-                <th className="text-left px-4 py-2.5 font-medium">Symbol</th>
-                <th className="text-left px-2 py-2.5 font-medium">Frequency</th>
-                <th className="text-right px-2 py-2.5 font-medium">Trailing 12M</th>
-                <th className="text-right px-2 py-2.5 font-medium">Payments</th>
-                <th className="text-right px-2 py-2.5 font-medium">Avg Payment</th>
-                <th className="text-right px-2 py-2.5 font-medium">Yield on Cost</th>
-                <th className="text-right px-2 py-2.5 font-medium">Fwd Yield</th>
-                <th className="text-right px-4 py-2.5 font-medium">Last Payment</th>
+              <tr className="border-b border-[#1a1e2e]">
+                <SortTh id="sym"          label="Symbol"        first sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="freq"         label="Frequency"     sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="t12m"         label="Trailing 12M"  align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="payments"     label="Payments"      align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="avg"          label="Avg Payment"   align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="yieldOnCost"  label="Yield on Cost" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="forwardYield" label="Fwd Yield"     align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="last"         label="Last Payment"  align="right" last sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
               </tr>
             </thead>
             <tbody>
