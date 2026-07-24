@@ -369,6 +369,41 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['KGC',   'income', 'Individual', false, false],
 ];
 
+// ─── Fallback distribution yields ────────────────────────────────────────────
+
+/**
+ * Static fallback distribution yields (% annual) for the income/cornerstone
+ * universe. Used by the engine's yield-aware PILLAR_FILL scoring ONLY when a
+ * live Schwab `divYield` is unavailable for the symbol. These go stale —
+ * covered-call fund payouts track volatility — so live data always wins.
+ * Mirrors the fallback table in components/IncomeHub.tsx.
+ */
+const FALLBACK_YIELD_PCT: Record<string, number> = {
+  // Roundhill weeklies
+  XDTE: 30, QDTE: 35, RDTE: 28, WDTE: 30,
+  // YieldMax
+  TSLY: 55, NVDY: 50, CONY: 70, MSFO: 30, AMZY: 45, GOOGY: 25, AIYY: 35,
+  YMAX: 40, YMAG: 35, ULTY: 55, JPMO: 15, APLY: 35, OARK: 45,
+  // Defiance
+  QQQY: 50, IWMY: 55, JEPY: 35,
+  // RexShares / Neos
+  FEPI: 20, AIPI: 25, SPYI: 12, QDVO: 10,
+  // JPMorgan
+  JEPI: 7.5, JEPQ: 9.5,
+  // Cornerstone
+  CLM: 18, CRF: 18,
+  // CEFs
+  PDI: 13, PTY: 10, PCN: 9, EOS: 8, BST: 6, BDJ: 7, RIV: 12, USA: 10,
+  STK: 7, GOF: 14, OXLC: 18, KLIP: 35,
+  // Dividend / broad ETFs
+  DIVO: 4.5, SCHD: 3.5, VYM: 3, QQQ: 0.6, QQQM: 0.6, SPYG: 0.8, NVDA: 0.03,
+};
+
+/** Fallback distribution yield (% annual) or null when unknown. */
+export function getFallbackYieldPct(symbol: string): number | null {
+  return FALLBACK_YIELD_PCT[symbol.toUpperCase()] ?? null;
+}
+
 // ─── Build the lookup table ───────────────────────────────────────────────────
 
 const TABLE: ReadonlyMap<string, FundMetadata> = (() => {

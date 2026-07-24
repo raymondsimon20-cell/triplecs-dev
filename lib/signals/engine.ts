@@ -28,7 +28,7 @@
 
 import type { SignalEngineState } from './state';
 import type { PillarType } from '../schwab/types';
-import { listAiCurated, type FundFamily } from '../data/fund-metadata';
+import { listAiCurated, getFallbackYieldPct, type FundFamily } from '../data/fund-metadata';
 
 // ─── Types ───────────────────────────────────────────────────────────────────
 
@@ -186,6 +186,14 @@ export interface EngineInputs {
    * don't carry AFW data.
    */
   afwDollars?: number;
+
+  /**
+   * Live distribution yields (% annual) keyed by symbol, sourced from Schwab
+   * quote `divYield`. Used by PILLAR_FILL's 'income' objective; falls back to
+   * the static table in fund-metadata when a symbol is missing. Optional so
+   * snapshot-replay and older callers still type-check.
+   */
+  divYields?: Record<string, number>;
 }
 
 export interface EngineResult {
@@ -297,6 +305,27 @@ export const CONFIG = {
    * headroom is below this, no new positions proposed regardless of pillar gap.
    */
   PILLAR_FILL_MIN_AFW_DOLLARS: 5_000,
+  /**
+   * Candidate-scoring objective for PILLAR_FILL.
+   *
+   *   'balanced' — original behavior: seed bonus − family penalty − maint
+   *                penalty. Prefers low-maintenance, family-diverse names
+   *                (JEPI/SCHD-tier) regardless of distribution yield.
+   *   'income'   — adds a capped yield credit so high-distribution names
+   *                (Roundhill/YieldMax-tier) rank ahead when the user is
+   *                income-hunting. Family + maintenance penalties still apply.
+   *
+   * Default 'balanced' so flipping this file on deploy never silently changes
+   * what auto-staged BUYs get proposed — 'income' is an explicit opt-in.
+   */
+  PILLAR_FILL_OBJECTIVE: 'balanced' as 'balanced' | 'income',
+  /**
+   * Yield credit cap (percentage points) for the 'income' objective. Anything
+   * advertising above this is likely paying you your own NAV back (MSTY/ULTY
+   * tier decay) — credit stops accruing so decay traps can't outscore honest
+   * payers purely on headline yield.
+   */
+  PILLAR_FILL_YIELD_CREDIT_CAP_PCT: 40,
 
   // ── TRIPLES_DIP_LADDER — buy-the-dip ladder on triple-leveraged ETFs ──────
   // Per-ticker pivot-anchored ladder. Every fresh 5% drop below the anchor
@@ -1181,6 +1210,7 @@ function evalPillarFill(
   inDefense:           boolean,
   killSwitchActive:    boolean,
   recentSells30d:      RecentSell[],
+  divYields:           Record<string, number> | undefined,
   makeSignal:          MakeSignal,
 ): TradeSignal[] {
   if (!pillarTargets)                return [];
@@ -1262,7 +1292,19 @@ function evalPillarFill(
     maintenancePct:       number;
     maintenancePctSource: 'explicit' | 'default';
     isSeed:               boolean;
+    /** Distribution yield (% annual) — live Schwab divYield, else fallback table, else 0. */
+    yieldPct:             number;
+    yieldSource:          'live' | 'fallback' | 'none';
   }
+  const lookupYield = (symbol: string): { yieldPct: number; yieldSource: FillCandidate['yieldSource'] } => {
+    const live = divYields?.[symbol];
+    if (typeof live === 'number' && Number.isFinite(live) && live > 0) {
+      return { yieldPct: live, yieldSource: 'live' };
+    }
+    const fb = getFallbackYieldPct(symbol);
+    if (fb !== null && fb > 0) return { yieldPct: fb, yieldSource: 'fallback' };
+    return { yieldPct: 0, yieldSource: 'none' };
+  };
   const seedCandidates: FillCandidate[] = positions
     .filter((p) => p.pillar === 'income')
     .filter((p) => p.marketValue > 0 && p.marketValue < CONFIG.SEED_MAX_DOLLARS)
@@ -1272,6 +1314,7 @@ function evalPillarFill(
       maintenancePct:       p.maintenancePct ?? 50,
       maintenancePctSource: p.maintenancePctSource ?? 'default',
       isSeed:               true,
+      ...lookupYield(p.symbol),
     }));
   const curatedCandidates: FillCandidate[] = listAiCurated('income')
     .filter((c) => !heldSymbols.has(c.symbol))
@@ -1281,6 +1324,7 @@ function evalPillarFill(
       maintenancePct:       c.maintenancePct,
       maintenancePctSource: c.maintenancePctSource,
       isSeed:               false,
+      ...lookupYield(c.symbol),
     }));
 
   const scored = [...seedCandidates, ...curatedCandidates]
@@ -1299,7 +1343,13 @@ function evalPillarFill(
       // is otherwise tied, but don't override the family-diversification preference.
       const maintPenalty = c.maintenancePct / 100;
       const seedBonus    = c.isSeed ? CONFIG.PILLAR_FILL_SEED_BONUS : 0;
-      const score = seedBonus - familyPenalty - maintPenalty;
+      // 'income' objective: credit distribution yield, capped so decay-trap
+      // funds can't win purely on an exorbitant headline number. 'balanced'
+      // (default) ignores yield entirely — original behavior, bit-identical.
+      const yieldCredit = CONFIG.PILLAR_FILL_OBJECTIVE === 'income'
+        ? Math.min(c.yieldPct, CONFIG.PILLAR_FILL_YIELD_CREDIT_CAP_PCT) / 100
+        : 0;
+      const score = seedBonus + yieldCredit - familyPenalty - maintPenalty;
       return { c, familyPct, score };
     })
     .sort((a, b) => b.score - a.score);
@@ -1342,7 +1392,10 @@ function evalPillarFill(
         (c.isSeed
           ? `you hold it as a 1-share seed — scale it up`
           : `you don't already hold it`) +
-        (familyPct > 0 ? `, and current ${c.family} exposure is ${familyPct.toFixed(1)}%.` : '.'),
+        (familyPct > 0 ? `, and current ${c.family} exposure is ${familyPct.toFixed(1)}%` : '') +
+        (CONFIG.PILLAR_FILL_OBJECTIVE === 'income' && c.yieldPct > 0
+          ? `. Income objective: ~${c.yieldPct.toFixed(0)}% distribution rate (${c.yieldSource}).`
+          : '.'),
       {
         pillar:                 'income',
         actualPct:              Math.round(incomePct * 100) / 100,
@@ -1353,6 +1406,9 @@ function evalPillarFill(
         candidateMaintPct:      c.maintenancePct,
         candidateMaintSource:   c.maintenancePctSource,
         candidateIsSeed:        c.isSeed,
+        candidateYieldPct:      Math.round(c.yieldPct * 10) / 10,
+        candidateYieldSource:   c.yieldSource,
+        objective:              CONFIG.PILLAR_FILL_OBJECTIVE,
       },
     ));
   }
@@ -1482,6 +1538,7 @@ export function runSignalEngine(inputs: EngineInputs): EngineResult {
     inDefense,
     nextState.killSwitch.active,
     inputs.recentSells30d ?? [],
+    inputs.divYields,
     makeSignal,
   ));
 

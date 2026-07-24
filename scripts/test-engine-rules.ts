@@ -21,6 +21,7 @@
 import assert from 'node:assert/strict';
 import {
   runSignalEngine,
+  CONFIG,
   type EngineInputs,
   type EnginePosition,
   type TradeSignal,
@@ -260,6 +261,74 @@ test('seeds respect the wash-sale skip like any other candidate', () => {
   }));
   const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
   assert.ok(!tickers.includes('XDTE'), `wash-sale seed XDTE must be skipped; got ${tickers.join(',')}`);
+});
+
+test("objective 'income': high-yield candidates outrank low-yield safety picks", () => {
+  // 'as const' is compile-time only — runtime mutation works for the test.
+  const cfg  = CONFIG as unknown as { PILLAR_FILL_OBJECTIVE: 'balanced' | 'income' };
+  const prev = cfg.PILLAR_FILL_OBJECTIVE;
+  cfg.PILLAR_FILL_OBJECTIVE = 'income';
+  try {
+    const result = runSignalEngine(baseInputs({
+      positions: [enrichedPosition('SCHD', 625, 50_000)],
+      cash:      50_000,
+    }));
+    const fires = findSignals(result.signals, 'PILLAR_FILL');
+    assert.ok(fires.length >= 1, `expected PILLAR_FILL signals, got ${fires.length}`);
+    for (const f of fires) {
+      const y = Number(f.data.candidateYieldPct ?? 0);
+      assert.ok(y >= 25, `income objective should pick high payers; ${f.ticker} yields ${y}%`);
+      assert.ok(/income objective/i.test(f.reason), `reason should note the objective: ${f.reason}`);
+      assert.equal(f.data.objective, 'income');
+    }
+    // JEPI (7.5%) and DIVO (4.5%) are the 'balanced' favorites — the yield
+    // credit must displace them from the top-2.
+    const tickers = fires.map((s) => s.ticker);
+    assert.ok(!tickers.includes('JEPI') && !tickers.includes('DIVO'),
+      `low-yield safety picks should be displaced; got ${tickers.join(',')}`);
+  } finally {
+    cfg.PILLAR_FILL_OBJECTIVE = prev;
+  }
+});
+
+test("objective 'income': live divYields override the static fallback table", () => {
+  const cfg  = CONFIG as unknown as { PILLAR_FILL_OBJECTIVE: 'balanced' | 'income' };
+  const prev = cfg.PILLAR_FILL_OBJECTIVE;
+  cfg.PILLAR_FILL_OBJECTIVE = 'income';
+  try {
+    // NVDY's fallback yield (50%) makes it a top income pick. A live Schwab
+    // divYield of 3% must demote it — live data wins over the stale table.
+    const result = runSignalEngine(baseInputs({
+      positions: [enrichedPosition('SCHD', 625, 50_000)],
+      cash:      50_000,
+      divYields: { NVDY: 3 },
+    }));
+    const tickers = findSignals(result.signals, 'PILLAR_FILL').map((s) => s.ticker);
+    assert.ok(!tickers.includes('NVDY'),
+      `NVDY with live 3% yield should be demoted; got ${tickers.join(',')}`);
+  } finally {
+    cfg.PILLAR_FILL_OBJECTIVE = prev;
+  }
+});
+
+test("objective 'balanced' (default) ignores yield entirely — original ranking", () => {
+  assert.equal(CONFIG.PILLAR_FILL_OBJECTIVE, 'balanced', 'default objective must be balanced');
+  // With identical inputs plus a huge live yield on a high-maint name, the
+  // balanced ranking must not change: yield carries zero weight.
+  const withYields = runSignalEngine(baseInputs({
+    positions: [enrichedPosition('SCHD', 625, 50_000)],
+    cash:      50_000,
+    divYields: { CONY: 90, TSLY: 80 },
+  }));
+  const without = runSignalEngine(baseInputs({
+    positions: [enrichedPosition('SCHD', 625, 50_000)],
+    cash:      50_000,
+  }));
+  assert.deepEqual(
+    findSignals(withYields.signals, 'PILLAR_FILL').map((s) => s.ticker),
+    findSignals(without.signals, 'PILLAR_FILL').map((s) => s.ticker),
+    'balanced ranking must be unaffected by divYields',
+  );
 });
 
 test('runtime marginThresholds override CONFIG defaults', () => {

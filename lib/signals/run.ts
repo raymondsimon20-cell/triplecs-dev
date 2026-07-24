@@ -184,6 +184,8 @@ async function fetchAggregatedPortfolio(): Promise<{
   cash:       number;
   marginDebt: number;
   prices:     Record<string, number>;
+  /** Live Schwab divYield (% annual) per symbol — engine 'income' objective. */
+  divYields:  Record<string, number>;
   /**
    * AFW (Available For Withdrawal) — Schwab's margin-headroom metric, summed
    * across accounts. Sourced from `availableFunds` on the balances object.
@@ -308,11 +310,17 @@ async function fetchAggregatedPortfolio(): Promise<{
     ...ALWAYS_PRICE_TICKERS,
   ]));
   const prices: Record<string, number> = {};
+  const divYields: Record<string, number> = {};
   if (tickers.length > 0) {
     const quotes = await client.getQuotes(tickers);
     for (const [sym, q] of Object.entries(quotes)) {
       const price = q.quote?.lastPrice ?? q.quote?.mark;
       if (price && Number.isFinite(price)) prices[sym] = price;
+      // Live distribution yield for PILLAR_FILL's 'income' objective. Schwab
+      // reports 0 for non-payers — skip those so the engine falls back to the
+      // static table (which also returns nothing for true non-payers).
+      const dy = q.quote?.divYield;
+      if (typeof dy === 'number' && Number.isFinite(dy) && dy > 0) divYields[sym] = dy;
     }
     // Surface any tickers Schwab failed to quote so the cron's "ok — n
     // signals" log makes it obvious which symbols were skipped. Previously
@@ -331,7 +339,7 @@ async function fetchAggregatedPortfolio(): Promise<{
     }
   }
 
-  return { positions, cash, marginDebt, prices, afwDollars, optionPositions, accountBuckets };
+  return { positions, cash, marginDebt, prices, divYields, afwDollars, optionPositions, accountBuckets };
 }
 
 // ─── Phase 2 inputs ──────────────────────────────────────────────────────────
@@ -606,6 +614,7 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
         cash:       bucket.cash,
         marginDebt: bucket.marginDebt,
         prices:     portfolio.prices,
+        divYields:  portfolio.divYields,
         spyHistory: market.spyHistory,
         vix:        market.vix,
         state,
