@@ -191,7 +191,7 @@ function getFrequency(symbol: string): Frequency {
   return FREQ_MAP[symbol.toUpperCase()] ?? 'quarterly';
 }
 
-function estimateAnnualDividend(pos: EnrichedPosition): number {
+export function estimateAnnualDividend(pos: EnrichedPosition): number {
   const symbol = pos.instrument?.symbol?.toUpperCase() ?? '';
   if (pos.quote?.divYield && pos.quote.divYield > 0)
     return pos.marketValue * (pos.quote.divYield / 100);

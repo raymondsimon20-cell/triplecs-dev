@@ -31,7 +31,8 @@ import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
 import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
 import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
-import { IncomeHub } from '@/components/IncomeHub';
+import { IncomeHub, estimateAnnualDividend } from '@/components/IncomeHub';
+import { IncomeProjectionCard } from '@/components/IncomeProjectionCard';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
@@ -124,8 +125,13 @@ function MetricCard({
 function FireProgress({ monthly, target }: { monthly: number; target: number }) {
   const pct = target > 0 ? Math.min((monthly / target) * 100, 100) : 0;
   const reached = pct >= 100;
+  const compact = (n: number) =>
+    n >= 1000 ? `$${(n / 1000).toFixed(1).replace(/\.0$/, '')}K` : `$${Math.round(n)}`;
   return (
-    <div className="hidden md:flex items-center gap-2 min-w-[140px]" title={`FIRE target: $${target.toLocaleString()}/mo`}>
+    <div
+      className="hidden md:flex items-center gap-2 min-w-[190px]"
+      title={`Projected income ${compact(monthly)}/mo vs FIRE target $${target.toLocaleString()}/mo`}
+    >
       <span className="text-[10px] text-[#7c82a0] uppercase tracking-wider">FIRE</span>
       <div className="flex-1 h-1.5 bg-[#1f2334] rounded-full overflow-hidden">
         <div
@@ -133,8 +139,8 @@ function FireProgress({ monthly, target }: { monthly: number; target: number }) 
           style={{ width: `${pct}%` }}
         />
       </div>
-      <span className={`text-[11px] font-semibold tabular-nums ${reached ? 'text-emerald-400' : 'text-[#9aa2c0]'}`}>
-        {pct.toFixed(0)}%
+      <span className={`text-[11px] font-semibold tabular-nums whitespace-nowrap ${reached ? 'text-emerald-400' : 'text-[#9aa2c0]'}`}>
+        {compact(monthly)}<span className="text-[#4a5070] font-normal">/{compact(target)}</span>
       </span>
     </div>
   );
@@ -678,6 +684,19 @@ export default function DashboardPage() {
     }));
   }, [resolvedAccount, liveQuotes]);
 
+  // Forward projection from current holdings — available immediately on the
+  // Today view, no longer gated on IncomeHub mounting (which only happens on
+  // Portfolio → Income). This is what the header FIRE pill and the income
+  // projection card read.
+  const projectedMonthlyFromHoldings = useMemo(() => {
+    let annual = 0;
+    for (const p of livePositions) {
+      if (p.instrument?.assetType === 'OPTION') continue;
+      annual += estimateAnnualDividend(p);
+    }
+    return annual / 12;
+  }, [livePositions]);
+
   const fetchDividends = useCallback(async () => {
     try {
       const res = await fetch('/api/dividends');
@@ -1013,7 +1032,10 @@ export default function DashboardPage() {
                 <div className="font-bold text-white text-sm tracking-tight">Triple C</div>
               </div>
             </div>
-            <FireProgress monthly={monthlyIncome} target={fireTarget} />
+            <FireProgress
+              monthly={projectedMonthlyFromHoldings > 0 ? projectedMonthlyFromHoldings : monthlyIncome}
+              target={fireTarget}
+            />
           </div>
 
           <div className="flex items-center gap-2 sm:gap-2.5 text-xs">
@@ -1213,6 +1235,17 @@ export default function DashboardPage() {
                 sub={maxDrift > 2 ? 'Rebalance staged' : maxDrift > 1 ? 'Watch' : 'On target'}
               />
             </div>
+
+            {/* Income projection — the clear "how much does this pay me per
+                month" card. Projected (holdings × trailing rates) vs actual
+                30-day cash vs an editable near-term goal, with a capital-gap
+                hint and the long-term FIRE bar tucked underneath. */}
+            <IncomeProjectionCard
+              positions={livePositions}
+              actualMonthly={monthlyIncome}
+              fireTarget={fireTarget}
+              onOpenIncomeHub={() => { setView('portfolio'); setPortfolioSub('income'); }}
+            />
 
             {/* Daily autopilot plan — tier-classified preview of what the
                 engine would do today. Lives above the Today queue so the user
