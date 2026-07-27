@@ -11,22 +11,24 @@ export const dynamic = 'force-dynamic';
  * GET /api/target-allocation — per-ticker metrics for the Target Allocation
  * tool (Tools → Allocation).
  *
- * Serves raw metrics only; scoring/signals/calculator live client-side so
- * thresholds can be tuned without a redeploy. Universe = real positions
- * (market value ≥ $500) — 1-share seeds are universe bookmarks and are never
- * scored (seed-universe convention).
+ * Scores the FULL equity universe including 1-share seeds (they're scale-up
+ * candidates — scoring them for ADD decisions is the point; the client keeps
+ * them exempt from Trim signals per the seed convention).
  *
- * Metrics per ticker: price, shares, value, pillar, SMA50 + % vs, 12/24-month
- * price return, distribution yield (live divYield ?? fallback table), margin
- * maintenance %.
- *
- * Price-history calls are chunked (5 at a time) and the whole payload is
- * cached in Blobs for 30 minutes per account scope.
+ * 160+ price-history calls can't fit in one serverless invocation, so history
+ * metrics warm progressively: each request computes up to HISTORY_BUDGET
+ * missing/stale symbols (chunked), persists them into a single blob map with
+ * a ~20h TTL (daily candles change daily), and reports `pending` — the count
+ * still un-warmed. The client re-polls until pending reaches zero; after the
+ * first warm-up, requests are served entirely from the map.
  */
 
-const SEED_MAX_DOLLARS = 500;
-const CACHE_STORE = 'target-alloc';
-const CACHE_TTL_MS = 30 * 60 * 1000;
+const HIST_STORE     = 'target-alloc';
+const HIST_KEY       = 'hist-map';
+const HIST_TTL_MS    = 20 * 60 * 60 * 1000;
+const HISTORY_BUDGET = 40;   // per-request history fetches
+const CHUNK          = 10;   // parallel history calls per wave
+const QUOTE_CHUNK    = 50;
 
 export interface AllocationRow {
   symbol:         string;
@@ -35,22 +37,22 @@ export interface AllocationRow {
   shares:         number;
   price:          number;
   marketValue:    number;
+  isSeed:         boolean;
   sma50:          number | null;
   vsSma50Pct:     number | null;
-  /** Price return %, trailing ~12 / ~24 months (null when history is short). */
   ret12Pct:       number | null;
   ret24Pct:       number | null;
   yieldPct:       number;
   yieldSource:    'live' | 'fallback' | 'none';
   maintenancePct: number;
+  /** History metrics not warmed yet — SMA/returns are null this round. */
+  pending:        boolean;
 }
 
-function pctChange(from: number, to: number): number | null {
-  if (!Number.isFinite(from) || from <= 0) return null;
-  return ((to - from) / from) * 100;
-}
+interface HistMetric { ts: number; sma50: number | null; c12: number | null; c24: number | null }
 
-/** Close nearest to `daysAgo` calendar days back (candles are chronological). */
+const SEED_MAX_DOLLARS = 500;
+
 function closeNear(candles: { datetime: number; close: number }[], daysAgo: number): number | null {
   if (candles.length === 0) return null;
   const target = Date.now() - daysAgo * 24 * 60 * 60 * 1000;
@@ -59,7 +61,6 @@ function closeNear(candles: { datetime: number; close: number }[], daysAgo: numb
     const dist = Math.abs(c.datetime - target);
     if (!best || dist < best.dist) best = { dist, close: c.close };
   }
-  // Reject matches more than 30 days off-target — history too short.
   return best && best.dist < 30 * 24 * 60 * 60 * 1000 ? best.close : null;
 }
 
@@ -70,16 +71,6 @@ export async function GET(req: Request) {
 
   const { searchParams } = new URL(req.url);
   const accountHashParam = searchParams.get('accountHash') ?? 'all';
-  const cacheKey = `rows-${accountHashParam}`;
-
-  // Serve fresh-enough cache.
-  try {
-    const cached = await getStore(CACHE_STORE).get(cacheKey, { type: 'json' }) as
-      | { generatedAt: number; rows: AllocationRow[] } | null;
-    if (cached && Date.now() - cached.generatedAt < CACHE_TTL_MS && !searchParams.get('refresh')) {
-      return NextResponse.json({ ...cached, cached: true });
-    }
-  } catch { /* cache miss is fine */ }
 
   try {
     const tokens = await getTokens();
@@ -90,9 +81,9 @@ export async function GET(req: Request) {
     const scoped = accountHashParam !== 'all'
       ? allAccounts.filter((a) => a.hashValue === accountHashParam)
       : allAccounts;
-    if (!scoped.length) return NextResponse.json({ rows: [], generatedAt: Date.now() });
+    if (!scoped.length) return NextResponse.json({ rows: [], pending: 0, generatedAt: Date.now() });
 
-    // Aggregate positions across scope; skip options + sub-$500 seeds.
+    // Full equity universe (seeds included).
     const bySymbol = new Map<string, { shares: number; marketValue: number }>();
     for (const { hashValue } of scoped) {
       const wrapper = await client.getAccount(hashValue);
@@ -106,50 +97,79 @@ export async function GET(req: Request) {
         bySymbol.set(sym, prev);
       }
     }
-    const universe = [...bySymbol.entries()]
-      .filter(([, v]) => v.marketValue >= SEED_MAX_DOLLARS)
-      .map(([sym]) => sym);
+    const universe = [...bySymbol.keys()];
 
-    // Quotes: price + live divYield.
-    const quotes = await client.getQuotes(universe);
-
-    // Price history: ~25 months of daily candles, chunked to be polite.
-    const to   = new Date().toISOString().split('T')[0];
-    const from = new Date(Date.now() - 25 * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-    const freshTokens = await getTokens();
-    const histories = new Map<string, { datetime: number; close: number }[]>();
-    for (let i = 0; i < universe.length; i += 5) {
-      const chunk = universe.slice(i, i + 5);
-      await Promise.all(chunk.map(async (sym) => {
-        try {
-          const candles = await getPriceHistory(freshTokens!, sym, from, to);
-          histories.set(sym, candles.map((c) => ({ datetime: c.datetime, close: c.close })));
-        } catch (err) {
-          console.warn(`[TargetAlloc] history failed for ${sym}:`, err);
-          histories.set(sym, []);
-        }
-      }));
+    // Quotes in chunks of 50.
+    const quotes: Record<string, { quote?: { lastPrice?: number; mark?: number; divYield?: number } }> = {};
+    for (let i = 0; i < universe.length; i += QUOTE_CHUNK) {
+      const chunk = universe.slice(i, i + QUOTE_CHUNK);
+      try {
+        Object.assign(quotes, await client.getQuotes(chunk));
+      } catch (err) {
+        console.warn('[TargetAlloc] quote chunk failed:', err);
+      }
     }
 
+    // History metric map: load, warm up to budget, persist.
+    const store = getStore(HIST_STORE);
+    let histMap: Record<string, HistMetric> = {};
+    try {
+      const raw = await store.get(HIST_KEY, { type: 'json' }) as Record<string, HistMetric> | null;
+      if (raw && typeof raw === 'object') histMap = raw;
+    } catch { /* start empty */ }
+
+    const now = Date.now();
+    const stale = universe.filter((sym) => {
+      const m = histMap[sym];
+      return !m || now - m.ts > HIST_TTL_MS;
+    });
+    const toFetch = stale.slice(0, HISTORY_BUDGET);
+
+    if (toFetch.length > 0) {
+      const to   = new Date().toISOString().split('T')[0];
+      const from = new Date(now - 25 * 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+      const freshTokens = await getTokens();
+      for (let i = 0; i < toFetch.length; i += CHUNK) {
+        const wave = toFetch.slice(i, i + CHUNK);
+        await Promise.all(wave.map(async (sym) => {
+          try {
+            const candles = (await getPriceHistory(freshTokens!, sym, from, to))
+              .map((c) => ({ datetime: c.datetime, close: c.close }));
+            const closes = candles.map((c) => c.close);
+            histMap[sym] = {
+              ts: now,
+              sma50: closes.length >= 50 ? closes.slice(-50).reduce((s, v) => s + v, 0) / 50 : null,
+              c12: closeNear(candles, 365),
+              c24: closeNear(candles, 730),
+            };
+          } catch (err) {
+            console.warn(`[TargetAlloc] history failed for ${sym}:`, err);
+            // Record the attempt with nulls so one bad symbol can't consume
+            // the budget forever; TTL will retry it tomorrow.
+            histMap[sym] = { ts: now, sma50: null, c12: null, c24: null };
+          }
+        }));
+      }
+      try { await store.setJSON(HIST_KEY, histMap); } catch { /* non-fatal */ }
+    }
+
+    const pending = Math.max(0, stale.length - toFetch.length);
+
     const rows: AllocationRow[] = universe.map((sym) => {
-      const pos     = bySymbol.get(sym)!;
-      const q       = quotes[sym]?.quote;
-      const price   = q?.lastPrice ?? q?.mark ?? (pos.shares > 0 ? pos.marketValue / pos.shares : 0);
-      const candles = histories.get(sym) ?? [];
-      const closes  = candles.map((c) => c.close);
-      const sma50   = closes.length >= 50
-        ? closes.slice(-50).reduce((s, v) => s + v, 0) / 50
-        : null;
+      const pos   = bySymbol.get(sym)!;
+      const q     = quotes[sym]?.quote;
+      const price = q?.lastPrice ?? q?.mark ?? (pos.shares > 0 ? pos.marketValue / pos.shares : 0);
+      const m     = histMap[sym];
+      const hasHist = !!m && now - m.ts <= HIST_TTL_MS + 60_000;
 
       const liveYield = q?.divYield;
       const fb = getFallbackYieldPct(sym);
       const yieldPct = (typeof liveYield === 'number' && liveYield > 0) ? liveYield : (fb ?? 0);
-      const yieldSource: AllocationRow['yieldSource'] =
-        (typeof liveYield === 'number' && liveYield > 0) ? 'live' : fb ? 'fallback' : 'none';
-
       const meta = getFundMetadata(sym);
-      const c12 = closeNear(candles, 365);
-      const c24 = closeNear(candles, 730);
+
+      const sma50 = hasHist ? m.sma50 : null;
+      const c12   = hasHist ? m.c12 : null;
+      const c24   = hasHist ? m.c24 : null;
 
       return {
         symbol:         sym,
@@ -158,19 +178,19 @@ export async function GET(req: Request) {
         shares:         pos.shares,
         price,
         marketValue:    pos.marketValue,
+        isSeed:         pos.marketValue < SEED_MAX_DOLLARS,
         sma50:          sma50 !== null ? Math.round(sma50 * 100) / 100 : null,
-        vsSma50Pct:     sma50 !== null && price > 0 ? Math.round(((price / sma50) - 1) * 10_000) / 100 : null,
-        ret12Pct:       c12 !== null ? Math.round((pctChange(c12, price) ?? 0) * 100) / 100 : null,
-        ret24Pct:       c24 !== null ? Math.round((pctChange(c24, price) ?? 0) * 100) / 100 : null,
+        vsSma50Pct:     sma50 !== null && sma50 > 0 && price > 0 ? Math.round(((price / sma50) - 1) * 10_000) / 100 : null,
+        ret12Pct:       c12 !== null && c12 > 0 ? Math.round(((price - c12) / c12) * 10_000) / 100 : null,
+        ret24Pct:       c24 !== null && c24 > 0 ? Math.round(((price - c24) / c24) * 10_000) / 100 : null,
         yieldPct:       Math.round(yieldPct * 100) / 100,
-        yieldSource,
+        yieldSource:    (typeof liveYield === 'number' && liveYield > 0) ? 'live' : fb ? 'fallback' : 'none',
         maintenancePct: meta?.maintenancePct ?? 60,
+        pending:        !hasHist,
       };
     });
 
-    const payload = { rows, generatedAt: Date.now() };
-    try { await getStore(CACHE_STORE).setJSON(cacheKey, payload); } catch { /* non-fatal */ }
-    return NextResponse.json(payload);
+    return NextResponse.json({ rows, pending, generatedAt: now });
   } catch (err) {
     console.error('[TargetAlloc API]', err);
     return NextResponse.json({ error: 'Failed to compute allocation metrics' }, { status: 500 });

@@ -121,6 +121,10 @@ function scoreRow(r: AllocationRow, navDiscPct: number | null, catchUp: boolean,
   else if (score >= 32) signal = 'Hold';
   else signal = 'Trim';
 
+  // Seed convention: 1-share universe bookmarks are scale-up candidates only —
+  // never rated below Neutral (they aren't harvestable positions).
+  if (r.isSeed && (signal === 'Hold' || signal === 'Trim')) signal = 'Neutral';
+
   return { score, signal, tr12, tr24 };
 }
 
@@ -150,20 +154,22 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     try { localStorage.setItem('triple-c-alloc-focus-n', String(n)); } catch { /* ignore */ }
   };
 
-  const fetchData = useCallback(async (refresh = false) => {
+  const [pending, setPending] = useState(0);
+
+  const fetchData = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
       const params = new URLSearchParams();
       if (accountHash) params.set('accountHash', accountHash);
-      if (refresh) params.set('refresh', '1');
       const [allocRes, navRes] = await Promise.all([
         fetch(`/api/target-allocation?${params.toString()}`),
         fetch('/api/cornerstone').catch(() => null),
       ]);
       if (!allocRes.ok) throw new Error(`HTTP ${allocRes.status}`);
-      const alloc = await allocRes.json() as { rows?: AllocationRow[] };
+      const alloc = await allocRes.json() as { rows?: AllocationRow[]; pending?: number };
       setRows(Array.isArray(alloc.rows) ? alloc.rows : []);
+      setPending(alloc.pending ?? 0);
       if (navRes?.ok) {
         const nav = await navRes.json() as { funds?: { ticker: string; premiumDiscount: number }[] };
         const m: Record<string, number> = {};
@@ -180,6 +186,14 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   }, [accountHash]);
 
   useEffect(() => { fetchData(); }, [fetchData]);
+
+  // Progressive warm-up: each request scores ~40 more tickers' history; keep
+  // polling until the whole universe is warm.
+  useEffect(() => {
+    if (pending <= 0 || loading || error) return;
+    const t = setTimeout(() => fetchData(), 2_000);
+    return () => clearTimeout(t);
+  }, [pending, loading, error, fetchData]);
 
   // ── Bucket state vs targets ─────────────────────────────────────────────────
   const buckets = useMemo(() => {
@@ -373,7 +387,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
             Focus {focus ? 'on' : 'off'}
           </button>
           <button
-            onClick={() => fetchData(true)}
+            onClick={() => fetchData()}
             disabled={loading}
             className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
           >
@@ -398,10 +412,20 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
         </div>
       )}
 
+      {pending > 0 && (
+        <div className="flex items-center gap-2 bg-blue-500/10 border border-blue-500/20 rounded-lg px-3 py-2 text-xs text-blue-200">
+          <div className="w-3.5 h-3.5 border-2 border-blue-400/30 border-t-blue-400 rounded-full animate-spin flex-shrink-0" />
+          <span>
+            Warming up price history for the full universe — {pending} ticker{pending === 1 ? '' : 's'} remaining.
+            Scores refine automatically as metrics land.
+          </span>
+        </div>
+      )}
+
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat icon={DollarSign} label="Est. Blended Yield" value={`${blended.toFixed(2)}%`} sub="value-weighted, scored universe" valueClass="text-emerald-400" />
-        <Stat icon={Layers} label="Scored Tickers" value={String(scored.length)} sub="positions ≥ $500 (seeds excluded)" />
+        <Stat icon={Layers} label="Scored Tickers" value={String(scored.length)} sub="full universe · seeds never rated below Neutral" />
         <Stat icon={TrendingUp} label="Strong Add / Add" value={String(scored.filter((r) => r.signal === 'Strong Add' || r.signal === 'Add').length)} />
         <Stat icon={AlertTriangle} label="Hold / Trim" value={String(scored.filter((r) => r.signal === 'Hold' || r.signal === 'Trim').length)} iconClass="text-orange-400/60" />
       </div>
@@ -516,8 +540,9 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
               )}
               {tableRows.map((r) => (
                 <tr key={r.symbol} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
-                  <td className="px-4 py-2 font-mono font-semibold text-white">
+                  <td className="px-4 py-2 font-mono font-semibold text-white whitespace-nowrap">
                     {r.symbol}
+                    {r.isSeed && <span className="ml-1.5 text-[9px] px-1 py-0.5 rounded bg-[#2d3248] text-[#7c82a0] font-sans" title="1-share universe bookmark — scale-up candidate">seed</span>}
                     {r.catchUp && <span className="ml-1.5 text-[9px] text-emerald-400/80" title="Bucket under target — catch-up contributions favored">↑</span>}
                   </td>
                   <td className="px-2 py-2 text-[#9aa2c0]">{PILLAR_LABEL[r.pillar] ?? r.pillar}</td>
@@ -553,7 +578,8 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       <p className="text-[10px] text-[#4a5070] leading-relaxed">
         Score = 50-day SMA position + NAV premium/discount (where available) + 12/24-month total return
         (price return + estimated distributions) + yield (capped at 40pp) + margin maintenance + bucket
-        catch-up need. NAV data covers CLM/CRF via the Cornerstone feed. Informational — signals do not
+        catch-up need. NAV data covers CLM/CRF via the Cornerstone feed. Seeds (sub-$500 bookmarks) are
+        scored as scale-up candidates but never rated below Neutral. Informational — signals do not
         stage orders.
       </p>
     </div>
