@@ -19,8 +19,35 @@ import type { Config } from '@netlify/functions';
 import { runSignalsAndStage } from '../../lib/signals/run';
 import { recordHeartbeat } from '../../lib/signals/cron-health';
 
+/**
+ * 2026-07 — MASTER SWITCH. Engine disabled at the user's request after its
+ * trades underperformed: no signal staging, no auto-execution, no dip-ladder
+ * buys, nothing. The weekly drift rebalance (daily-rebalance.mts) is now the
+ * only automated trading path, and it stages for manual approval.
+ *
+ * Flip to true (and redeploy) to re-enable. Manual runs via /api/signals and
+ * the shadow/backtest endpoints still work for evaluation — only this cron
+ * is gated.
+ */
+const SIGNAL_ENGINE_ENABLED = false;
+
 export default async (): Promise<Response> => {
   const startedAt = Date.now();
+
+  if (!SIGNAL_ENGINE_ENABLED) {
+    console.log('[daily-signal-engine] disabled by master switch — no signals run.');
+    await recordHeartbeat({
+      ranAt:       startedAt,
+      durationMs:  0,
+      status:      'success',
+      signalCount: 0,
+      actionable:  0,
+    }).catch(() => undefined);
+    return new Response(
+      JSON.stringify({ ok: true, disabled: true }),
+      { status: 200, headers: { 'Content-Type': 'application/json' } },
+    );
+  }
 
   // Early "cron entered" heartbeat. runSignalsAndStage records its own
   // success/error beat inside its try/catch, but if an exception escapes

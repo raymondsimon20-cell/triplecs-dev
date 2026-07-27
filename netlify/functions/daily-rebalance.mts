@@ -1,11 +1,14 @@
 /**
- * Netlify Scheduled Function — daily per-account drift rebalance AND the
- * single daily-digest email send point.
+ * Netlify Scheduled Function — WEEKLY per-account drift rebalance AND the
+ * consolidated digest email send point.
  *
- * Cron: `30 21 * * 1-5` (21:30 UTC, weekdays — 15 min AFTER the signal-engine
- * cron at 21:15 so the engine's MAINTENANCE_RANKED_TRIM / PILLAR_FILL signals
- * land in the inbox first; this cron is the "did the signal engine miss
- * anything chunky?" backstop).
+ * Cron: `30 21 * * 3` (21:30 UTC Wednesdays, after US market close).
+ * 2026-07 — moved from weekdays to weekly at the user's request: the signal
+ * engine is disabled (see daily-signal-engine.mts master switch) and the
+ * drift rebalance — which stages orders for manual approval, never fires
+ * them — is now the only automated trading path. The digest email ships
+ * with this run, so it's weekly too; the separate morning-alert cron is
+ * unchanged.
  *
  * Loops every linked Schwab account, computes pillar drift against each
  * account's strategy targets, and stages deterministic rebalance trades into
@@ -146,5 +149,5 @@ export default async (): Promise<Response> => {
 };
 
 export const config: Config = {
-  schedule: '30 21 * * 1-5',   // 21:30 UTC weekdays — 15 min after signal-engine
+  schedule: '30 21 * * 3',   // 21:30 UTC Wednesdays — weekly drift rebalance (stage-for-approval)
 };
