@@ -798,7 +798,7 @@ export default function DashboardPage() {
       const res = await fetch('/api/transactions?days=365');
       if (!res.ok) return;
       const data = await res.json() as { transactions?: NormalizedTransaction[] };
-      setTransactions(data.transactions ?? []);
+      setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
     } catch { /* swallow */ }
     finally { setTransactionsLoading(false); }
   }, []);

@@ -41,7 +41,7 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
     if (accountHash) params.set('accountHash', accountHash);
     fetch(`/api/snapshots?${params.toString()}`)
       .then((r) => (r.ok ? r.json() : { snapshots: [] }))
-      .then((d) => setSnapshots((d.snapshots ?? []).reverse()))
+      .then((d) => setSnapshots(Array.isArray(d?.snapshots) ? [...d.snapshots].reverse() : []))
       .catch(() => setSnapshots([]));
   }, [accountHash]);
 

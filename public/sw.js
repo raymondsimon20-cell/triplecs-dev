@@ -1,29 +1,23 @@
 /**
  * Triple C Dashboard — Service Worker
  *
- * Strategy:
- *   - App shell (HTML, CSS, JS): cache-first with network update
- *   - API data: network-first with cache fallback (stale data beats no data)
- *   - Images/icons: cache-first
+ * Strategy (v2 — fixes post-deploy version skew):
+ *   - Navigations (HTML): network-first, cache only as offline fallback.
+ *     Serving cached HTML cache-first caused stale pages to load old chunk
+ *     manifests after deploys → mixed-version TypeErrors.
+ *   - /_next/static/ chunks: cache-first (content-hashed, immutable).
+ *   - API data: network-first with cache fallback (stale beats nothing).
+ *   - Everything else: network-first with cache fallback.
  */
 
-const CACHE_NAME = 'triplec-v1';
-const APP_SHELL = [
-  '/',
-  '/dashboard',
-  '/favicon.svg',
-  '/manifest.json',
-];
+const CACHE_NAME = 'triplec-v2';
 
-// Install — cache app shell
 self.addEventListener('install', (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_SHELL))
-  );
+  event.waitUntil(caches.open(CACHE_NAME));
   self.skipWaiting();
 });
 
-// Activate — clean old caches
+// Activate — clean old caches (including v1's stale app shell)
 self.addEventListener('activate', (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
@@ -33,7 +27,21 @@ self.addEventListener('activate', (event) => {
   self.clients.claim();
 });
 
-// Fetch — network-first for API, cache-first for assets
+function networkFirst(request) {
+  return fetch(request)
+    .then((response) => {
+      if (response.ok) {
+        const clone = response.clone();
+        caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+      }
+      return response;
+    })
+    .catch(() => caches.match(request).then((cached) => {
+      if (cached) return cached;
+      throw new Error('offline and not cached');
+    }));
+}
+
 self.addEventListener('fetch', (event) => {
   const { request } = event;
   const url = new URL(request.url);
@@ -41,42 +49,23 @@ self.addEventListener('fetch', (event) => {
   // Skip non-GET and cross-origin
   if (request.method !== 'GET' || url.origin !== self.location.origin) return;
 
-  // API routes: network-first with cache fallback
-  if (url.pathname.startsWith('/api/')) {
+  // Immutable content-hashed build assets: cache-first is safe forever.
+  if (url.pathname.startsWith('/_next/static/')) {
     event.respondWith(
-      fetch(request)
-        .then((response) => {
-          // Cache successful API responses for offline fallback
+      caches.match(request).then((cached) =>
+        cached ?? fetch(request).then((response) => {
           if (response.ok) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
           }
           return response;
         })
-        .catch(() => caches.match(request)) // Offline → stale cached data
+      )
     );
     return;
   }
 
-  // Everything else: cache-first, network fallback
-  event.respondWith(
-    caches.match(request).then((cached) => {
-      if (cached) {
-        // Update cache in background
-        fetch(request).then((response) => {
-          if (response.ok) {
-            caches.open(CACHE_NAME).then((cache) => cache.put(request, response));
-          }
-        }).catch(() => {});
-        return cached;
-      }
-      return fetch(request).then((response) => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
-        }
-        return response;
-      });
-    })
-  );
+  // Navigations, API, and everything else: fresh network first, cache as
+  // offline fallback only. Prevents stale HTML pointing at deleted chunks.
+  event.respondWith(networkFirst(request));
 });
