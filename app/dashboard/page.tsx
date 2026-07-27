@@ -771,6 +771,7 @@ export default function DashboardPage() {
     return annual / 12;
   }, [livePositions]);
 
+  const dividendsFetchedAt = useRef(0);
   const fetchDividends = useCallback(async (accountHash?: string) => {
     try {
       const url = accountHash
@@ -778,6 +779,7 @@ export default function DashboardPage() {
         : '/api/dividends';
       const res = await fetch(url);
       if (!res.ok) return;
+      dividendsFetchedAt.current = Date.now();
       const data = await res.json() as {
         dividends?: { amount: number; date: string; symbol: string; description?: string }[];
         total?: number;
@@ -805,6 +807,7 @@ export default function DashboardPage() {
 
   // Normalized multi-type transaction ledger — powers the Transactions,
   // Cash Flow, Month Close, and Ledger pages plus the dashboard's recent list.
+  const transactionsFetchedAt = useRef(0);
   const fetchTransactions = useCallback(async () => {
     try {
       setTransactionsLoading(true);
@@ -812,9 +815,30 @@ export default function DashboardPage() {
       if (!res.ok) return;
       const data = await res.json() as { transactions?: NormalizedTransaction[] };
       setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
+      transactionsFetchedAt.current = Date.now();
     } catch { /* swallow */ }
     finally { setTransactionsLoading(false); }
   }, []);
+
+  // Keep the ledger pages fresh: opening any transaction-backed view refetches
+  // when the data is older than 5 minutes (Schwab posts dividends/fills
+  // throughout the day). The Connections "Sync now" button forces it anytime.
+  useEffect(() => {
+    const txnViews: View[] = ['dashboard', 'transactions', 'cashflow', 'monthclose', 'ledgerview'];
+    if (!txnViews.includes(view)) return;
+    if (Date.now() - transactionsFetchedAt.current > 5 * 60 * 1000) {
+      fetchTransactions();
+    }
+  }, [view, fetchTransactions]);
+
+  // Same staleness rule for the Dividends page.
+  useEffect(() => {
+    if (view !== 'dividends') return;
+    if (Date.now() - dividendsFetchedAt.current > 5 * 60 * 1000) {
+      fetchDividends(isAll ? undefined : resolvedAccount?.accountHash);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, fetchDividends]);
 
   // Dividends (re-)fetch whenever the selected account changes — records
   // don't carry accountHash, so scoping must happen server-side. Also covers
