@@ -10,6 +10,7 @@ import React, { useMemo, useState } from 'react';
 import { Activity, BookOpen, ShoppingCart, TrendingDown, TrendingUp } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 import { useSort, SortTh } from '@/components/sortable';
+import { TickerAvatar, TableSkeleton } from '@/components/polish';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -85,22 +86,22 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+        <div className="bg-[#12151f] border border-[#1f2334] border-t-2 border-t-blue-500/60 rounded-lg p-3.5">
           <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Total Inflows</div><TrendingUp className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400/60" /></div>
           <div className="text-lg font-bold tabular-nums text-emerald-400">{signed$(stats.inflows)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{stats.inflowN} transactions</div>
         </div>
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+        <div className="bg-[#12151f] border border-[#1f2334] border-t-2 border-t-blue-500/60 rounded-lg p-3.5">
           <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Total Expenses</div><TrendingDown className="w-3.5 h-3.5 flex-shrink-0 text-red-400/60" /></div>
           <div className="text-lg font-bold tabular-nums text-red-400">{signed$(stats.expenses)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{stats.expenseN} transactions</div>
         </div>
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+        <div className="bg-[#12151f] border border-[#1f2334] border-t-2 border-t-blue-500/60 rounded-lg p-3.5">
           <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Capital Deployed</div><ShoppingCart className="w-3.5 h-3.5 flex-shrink-0 text-violet-300/60" /></div>
           <div className="text-lg font-bold tabular-nums text-violet-300">{signed$(stats.deployed)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{stats.deployN} transactions</div>
         </div>
-        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+        <div className="bg-[#12151f] border border-[#1f2334] border-t-2 border-t-blue-500/60 rounded-lg p-3.5">
           <div className="flex items-start justify-between gap-2 mb-1"><div className="text-[11px] text-[#7c82a0]">Net Cash Movement</div><Activity className="w-3.5 h-3.5 flex-shrink-0 text-[#4a5070]" /></div>
           <div className={`text-lg font-bold tabular-nums ${plColor(stats.net)}`}>{signed$(stats.net)}</div>
           <div className="text-[10px] text-[#4a5070] mt-0.5">{filtered.length} transactions total</div>
@@ -121,7 +122,7 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={6} className="px-4 py-6 text-[#4a5070]">Loading ledger…</td></tr>}
+              {loading && <TableSkeleton cols={6} rows={8} />}
               {!loading && filtered.length === 0 && (
                 <tr><td colSpan={6} className="px-4 py-6 text-[#4a5070]">No transactions in range.</td></tr>
               )}
@@ -131,7 +132,14 @@ export function LedgerView({ transactions, loading, accountLabel, windowDays }: 
                   <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${categoryChipClass(t.category)}`}>{t.category}</span>
                   </td>
-                  <td className="px-2 py-2 font-mono font-semibold text-white">{t.symbol || '-'}</td>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    {t.symbol ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <TickerAvatar symbol={t.symbol} size="sm" />
+                        <span className="font-mono font-semibold text-white">{t.symbol}</span>
+                      </span>
+                    ) : <span className="text-[#4a5070]">-</span>}
+                  </td>
                   <td className="px-2 py-2 text-[#7c82a0] max-w-[300px] truncate">{t.description}</td>
                   <td className={`px-2 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
                   <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0]">{t.units ? t.units.toFixed(4) : '0.0000'}</td>

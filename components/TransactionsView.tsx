@@ -9,6 +9,7 @@
 import React, { useMemo, useState } from 'react';
 import { ArrowLeftRight } from 'lucide-react';
 import { useSort, SortTh } from '@/components/sortable';
+import { TickerAvatar, TableSkeleton } from '@/components/polish';
 
 export interface NormalizedTransaction {
   id:          string;
@@ -147,9 +148,7 @@ export function TransactionsView({ transactions, loading }: Props) {
               </tr>
             </thead>
             <tbody>
-              {loading && (
-                <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">Loading transactions…</td></tr>
-              )}
+              {loading && <TableSkeleton cols={10} rows={8} />}
               {!loading && filtered.length === 0 && (
                 <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">No transactions match the filters.</td></tr>
               )}
@@ -161,7 +160,16 @@ export function TransactionsView({ transactions, loading }: Props) {
                   <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${categoryChipClass(t.category)}`}>{t.category}</span>
                   </td>
-                  <td className="px-2 py-2 font-mono font-semibold text-white">{opt ? `${opt.underlying} ${opt.kind}` : (t.symbol || '-')}</td>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    {t.symbol && !opt ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <TickerAvatar symbol={t.symbol} size="sm" />
+                        <span className="font-mono font-semibold text-white">{t.symbol}</span>
+                      </span>
+                    ) : (
+                      <span className="font-mono font-semibold text-white">{opt ? `${opt.underlying} ${opt.kind}` : '-'}</span>
+                    )}
+                  </td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{opt ? `$${opt.strike.toFixed(2)}` : '-'}</td>
                   <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0] whitespace-nowrap">{opt ? opt.exp : '-'}</td>
                   <td className="px-2 py-2 text-[#7c82a0] max-w-[300px] truncate">{t.description}</td>

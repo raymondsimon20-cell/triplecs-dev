@@ -9,6 +9,7 @@
 
 import React, { useMemo, useState } from 'react';
 import { StatCard as Stat } from '@/components/StatCard';
+import { TickerAvatar, PlChip, WeightBar } from '@/components/polish';
 import { BarChart2, Hash, List, Trophy, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { useSort, SortTh } from '@/components/sortable';
@@ -25,9 +26,11 @@ interface Props {
   lastUpdated:      Date | null;
   /** Per-symbol dividend totals (trailing 12 months) for the return column. */
   dividendsBySymbol: Record<string, number>;
+  /** Per-symbol realized P/L (app-placed sales, trailing window). */
+  realizedBySymbol?: Record<string, number>;
 }
 
-export function PositionsView({ positions, totalValue, lastUpdated, dividendsBySymbol }: Props) {
+export function PositionsView({ positions, totalValue, lastUpdated, dividendsBySymbol, realizedBySymbol = {} }: Props) {
   const [symbolFilter, setSymbolFilter] = useState('');
 
   const equities = useMemo(
@@ -47,12 +50,13 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
         const gain = p.gainLoss ?? 0;
         const cost = (p.averagePrice ?? 0) * qty;
         const divs = dividendsBySymbol[sym] ?? 0;
-        const ret  = gain + divs;
+        const realized = realizedBySymbol[sym] ?? 0;
+        const ret  = gain + divs + realized;
         const retPct = cost > 0 ? (ret / cost) * 100 : 0;
         return { sym, qty, price, day, dayPct, gain, gainPct: p.gainLossPercent ?? 0, ret, retPct, value: v };
       })
       .sort((a, b) => b.value - a.value);
-  }, [equities, dividendsBySymbol]);
+  }, [equities, dividendsBySymbol, realizedBySymbol]);
 
   const { sortKey, sortDir, requestSort, sortRows } = useSort<typeof rows[number]>('value');
 
@@ -102,10 +106,10 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={Wallet} label="Total Value"    value={fmt$(totals.value)} />
-        <Stat icon={List} label="Positions"      value={String(rows.length)} />
-        <Stat icon={Hash} label="Unique Symbols" value={String(new Set(rows.map((r) => r.sym)).size)} />
-        <Stat icon={Trophy} label="Top Position"   value={top ? top.sym : '—'} sub={top ? fmt$(top.value) : undefined} />
+        <Stat icon={Wallet} label="Total Value" value={fmt$(totals.value)} rawValue={totals.value} format={(n) => '$' + Math.round(n).toLocaleString('en-US')} accentClass="border-t-violet-500/60" index={0} />
+        <Stat icon={List} label="Positions" value={String(rows.length)} accentClass="border-t-violet-500/60" index={1} />
+        <Stat icon={Hash} label="Unique Symbols" value={String(new Set(rows.map((r) => r.sym)).size)} accentClass="border-t-violet-500/60" index={2} />
+        <Stat icon={Trophy} label="Top Position" value={top ? top.sym : '—'} sub={top ? fmt$(top.value) : undefined} accentClass="border-t-violet-500/60" index={3} />
       </div>
 
       <div className="flex items-center gap-2 text-xs">
@@ -154,17 +158,22 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
                 const w = totals.value > 0 ? (r.value / totals.value) * 100 : 0;
                 return (
                   <tr key={r.sym} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
-                    <td className="px-4 py-2 font-mono font-semibold text-white">{r.sym}</td>
+                    <td className="px-4 py-2">
+                      <span className="inline-flex items-center gap-2">
+                        <TickerAvatar symbol={r.sym} size="sm" />
+                        <span className="font-mono font-semibold text-white">{r.sym}</span>
+                      </span>
+                    </td>
                     <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{r.qty.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}</td>
                     <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{fmt$(r.price)}</td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${r.day === 0 ? 'text-[#4a5070]' : plColor(r.day)}`}>{r.day === 0 ? '--' : signed$(r.day)}</td>
+                    <td className="px-2 py-2 text-right"><PlChip value={r.day} /></td>
                     <td className={`px-2 py-2 text-right tabular-nums ${r.day === 0 ? 'text-[#4a5070]' : plColor(r.day)}`}>{r.day === 0 ? '--' : signedPct(r.dayPct)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.gain)}`}>{signed$(r.gain)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.gain)}`}>{signedPct(r.gainPct)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.ret)}`}>{signed$(r.ret)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.ret)}`}>{signedPct(r.retPct)}</td>
                     <td className="px-2 py-2 text-right tabular-nums text-white">{fmt$(r.value)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0]">{w.toFixed(2)}%</td>
+                    <td className="px-4 py-2 text-right"><WeightBar pct={w} colorClass="bg-violet-500/70" /></td>
                   </tr>
                 );
               })}
@@ -174,7 +183,7 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
       </div>
 
       <p className="text-[10px] text-[#4a5070]">
-        Return $ / % = unrealized gain plus dividends received on the symbol over the trailing 12 months.
+        Return $ / % = unrealized gain + dividends received (trailing 12 months) + realized P/L from app-placed sales.
       </p>
     </div>
   );

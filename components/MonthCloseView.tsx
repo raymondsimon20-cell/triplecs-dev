@@ -115,12 +115,12 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={Wallet} label="Closing Equity" value={fmt$(equity)} />
+        <Stat icon={Wallet} label="Closing Equity" value={fmt$(equity)} accentClass="border-t-amber-500/60" index={0} />
         <Stat icon={TrendingUp} label="Net Change"     value={openingEquity === null ? fmt$(equity) : signed$(netChange)}
               sub={openingEquity === null ? 'First month — no opening balance' : undefined}
-              valueClass={openingEquity === null ? 'text-white' : plColor(netChange)} />
-        <Stat icon={Percent} label="Equity %"       value={`${equityPct.toFixed(1)}%`} />
-        <Stat icon={Activity} label="Market & Other" value={signed$(marketOther)} valueClass={plColor(marketOther)} />
+              valueClass={openingEquity === null ? 'text-white' : plColor(netChange)} accentClass="border-t-amber-500/60" index={1} />
+        <Stat icon={Percent} label="Equity %"       value={`${equityPct.toFixed(1)}%`} accentClass="border-t-amber-500/60" index={2} />
+        <Stat icon={Activity} label="Market & Other" value={signed$(marketOther)} valueClass={plColor(marketOther)} accentClass="border-t-amber-500/60" index={3} />
       </div>
 
       {/* Balance sheet */}

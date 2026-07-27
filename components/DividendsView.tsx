@@ -8,7 +8,9 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { BarChart as RBarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
 import { StatCard as Stat } from '@/components/StatCard';
+import { TickerAvatar, TableSkeleton } from '@/components/polish';
 import { CalendarDays, Coins, DollarSign, Gauge, Hash, Percent, TrendingUp } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { estimateAnnualDividend, getFrequency, distributeToMonths } from '@/components/IncomeHub';
@@ -29,22 +31,27 @@ const FREQ_LABEL: Record<string, string> = {
 };
 
 
-function BarChart({ labels, values, barClass }: { labels: string[]; values: number[]; barClass: string }) {
-  const max = Math.max(...values, 1);
+function BarChart({ labels, values, color }: { labels: string[]; values: number[]; color: string }) {
+  const data = labels.map((label, i) => ({ label, value: Math.round(values[i] * 100) / 100 }));
   return (
-    <div>
-      <div className="flex items-end gap-1.5 h-36">
-        {values.map((v, i) => (
-          <div key={i} className="flex-1 flex flex-col justify-end h-full" title={`${labels[i]}: ${fmt$(v)}`}>
-            <div className={`${barClass} rounded-t-sm`} style={{ height: `${(v / max) * 100}%`, minHeight: v > 0 ? '3px' : '0' }} />
-          </div>
-        ))}
-      </div>
-      <div className="flex gap-1.5 mt-1.5">
-        {labels.map((l, i) => (
-          <div key={i} className="flex-1 text-center text-[9px] text-[#4a5070] truncate">{l}</div>
-        ))}
-      </div>
+    <div className="h-44">
+      <ResponsiveContainer width="100%" height="100%">
+        <RBarChart data={data} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
+          <XAxis dataKey="label" tick={{ fill: '#4a5070', fontSize: 10 }} axisLine={{ stroke: '#1f2334' }} tickLine={false} interval={0} angle={-30} height={38} textAnchor="end" />
+          <YAxis
+            tick={{ fill: '#4a5070', fontSize: 10 }}
+            tickFormatter={(v: number) => (v >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${v}`)}
+            axisLine={false} tickLine={false} width={44}
+          />
+          <Tooltip
+            cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+            contentStyle={{ background: '#1a1d27', border: '1px solid #3d4468', borderRadius: 8, fontSize: 12 }}
+            labelStyle={{ color: '#7c82a0' }}
+            formatter={(v) => [fmt$(Number(v)), 'Income']}
+          />
+          <Bar dataKey="value" fill={color} fillOpacity={0.85} radius={[3, 3, 0, 0]} maxBarSize={32} />
+        </RBarChart>
+      </ResponsiveContainer>
     </div>
   );
 }
@@ -172,18 +179,18 @@ export function DividendsView({ dividends, loading, positions }: Props) {
       {loading && <div className="text-xs text-[#7c82a0]">Loading dividend history…</div>}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={DollarSign} label="Trailing 12M Income" value={fmt$(trailing.total)} sub={`${trailing.activeMonths}/12 months active`} valueClass="text-emerald-400" />
-        <Stat icon={CalendarDays} label="Monthly Average"     value={fmt$(trailing.total / 12)} />
-        <Stat icon={Hash} label="Dividend Symbols"    value={String(trailing.bySymbol.size)} sub={`${trailing.payments} total payments`} />
-        <Stat icon={Coins} label="12M Income (fetched window)" value={fmt$(trailing.total)} />
+        <Stat icon={DollarSign} label="Trailing 12M Income" value={fmt$(trailing.total)} sub={`${trailing.activeMonths}/12 months active`} valueClass="text-emerald-400" accentClass="border-t-emerald-500/60" index={0} />
+        <Stat icon={CalendarDays} label="Monthly Average" value={fmt$(trailing.total / 12)} accentClass="border-t-emerald-500/60" index={1} />
+        <Stat icon={Hash} label="Dividend Symbols"    value={String(trailing.bySymbol.size)} sub={`${trailing.payments} total payments`} accentClass="border-t-emerald-500/60" index={0} />
+        <Stat icon={Coins} label="12M Income (fetched window)" value={fmt$(trailing.total)} accentClass="border-t-emerald-500/60" index={1} />
       </div>
 
       <div className="text-xs font-semibold text-[#9aa2c0] uppercase tracking-wider pt-1">Projections</div>
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={TrendingUp} label="Est. Annual Income"  value={fmt$(projection.annual)} valueClass="text-violet-300" />
-        <Stat icon={CalendarDays} label="Est. Monthly Income" value={fmt$(projection.annual / 12)} valueClass="text-violet-300" />
-        <Stat icon={Percent} label="Yield on Cost"       value={`${projection.yieldOnCost.toFixed(2)}%`} sub={`${projection.payerCount} of ${projection.totalSymbols} symbols`} />
-        <Stat icon={Gauge} label="Forward Yield"       value={`${projection.forwardYield.toFixed(2)}%`} />
+        <Stat icon={TrendingUp} label="Est. Annual Income"  value={fmt$(projection.annual)} valueClass="text-violet-300" accentClass="border-t-emerald-500/60" index={2} />
+        <Stat icon={CalendarDays} label="Est. Monthly Income" value={fmt$(projection.annual / 12)} valueClass="text-violet-300" accentClass="border-t-emerald-500/60" index={5} />
+        <Stat icon={Percent} label="Yield on Cost"       value={`${projection.yieldOnCost.toFixed(2)}%`} sub={`${projection.payerCount} of ${projection.totalSymbols} symbols`} accentClass="border-t-emerald-500/60" index={3} />
+        <Stat icon={Gauge} label="Forward Yield"       value={`${projection.forwardYield.toFixed(2)}%`} accentClass="border-t-emerald-500/60" index={4} />
       </div>
       <p className="text-[10px] text-[#4a5070]">
         Projected dividend income is an estimate based on current holdings, Schwab yields, and trailing history.
@@ -195,7 +202,7 @@ export function DividendsView({ dividends, loading, positions }: Props) {
           <span className="text-sm font-semibold text-white">Projected Future Payments (Next 12 Months)</span>
           <div className="text-[10px] text-[#4a5070]">12-month projected total: {fmt$(projection.annual)}</div>
         </div>
-        <BarChart labels={projection.labels} values={projection.monthTotals} barClass="bg-violet-500/70" />
+        <BarChart labels={projection.labels} values={projection.monthTotals} color="#8b5cf6" />
       </div>
 
       <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4">
@@ -203,7 +210,7 @@ export function DividendsView({ dividends, loading, positions }: Props) {
           <span className="text-sm font-semibold text-white">Monthly Dividend Income (Trailing 12 Months)</span>
           <div className="text-[10px] text-[#4a5070]">12-month total: {fmt$(trailing.total)} (current month may be partial)</div>
         </div>
-        <BarChart labels={trailing.months.map((m) => m.label)} values={trailing.monthValues} barClass="bg-emerald-500/70" />
+        <BarChart labels={trailing.months.map((m) => m.label)} values={trailing.monthValues} color="#10b981" />
       </div>
 
       {/* By-symbol table */}
@@ -226,12 +233,18 @@ export function DividendsView({ dividends, loading, positions }: Props) {
               </tr>
             </thead>
             <tbody>
+              {loading && symbolRows.length === 0 && <TableSkeleton cols={8} rows={6} />}
               {symbolRows.length === 0 && !loading && (
                 <tr><td colSpan={8} className="px-4 py-6 text-[#4a5070]">No dividend payments in the trailing window.</td></tr>
               )}
               {visibleRows.map((r) => (
                 <tr key={r.sym} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
-                  <td className="px-4 py-2 font-mono font-semibold text-white">{r.sym}</td>
+                  <td className="px-4 py-2">
+                    <span className="inline-flex items-center gap-2">
+                      <TickerAvatar symbol={r.sym} size="sm" />
+                      <span className="font-mono font-semibold text-white">{r.sym}</span>
+                    </span>
+                  </td>
                   <td className="px-2 py-2">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${
                       r.freq === 'Weekly' ? 'bg-violet-500/15 text-violet-300'

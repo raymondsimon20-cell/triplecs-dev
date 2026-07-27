@@ -8,8 +8,9 @@
  * transactions. Dark theme, matches existing surface palette.
  */
 
-import React, { useMemo } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { StatCard as Stat } from '@/components/StatCard';
+import { TickerAvatar, PlChip, WeightBar, TableSkeleton } from '@/components/polish';
 import { ArrowRight, Banknote, Clock, CreditCard, Gauge, Landmark, Layers, List, Percent, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { type NormalizedTransaction, parseOptionSymbol } from '@/components/TransactionsView';
@@ -58,6 +59,24 @@ export function DashboardOverview({
   const marginUsed = Math.abs(marginBalance);
   const equityPct  = totalValue > 0 ? (equity / totalValue) * 100 : 0;
 
+  // 30-day snapshot series for the hero sparklines.
+  const [spark, setSpark] = useState<{ gross: number[]; net: number[] }>({ gross: [], net: [] });
+  useEffect(() => {
+    fetch('/api/snapshots?limit=30')
+      .then((r) => (r.ok ? r.json() : { snapshots: [] }))
+      .then((d) => {
+        const snaps = Array.isArray(d?.snapshots) ? [...d.snapshots].reverse() : [];
+        setSpark({
+          gross: snaps.map((s: { totalValue?: number }) => s.totalValue ?? 0).filter((v: number) => v > 0),
+          net:   snaps.filter((s: { synthetic?: boolean; equity?: number | null }) => !s.synthetic && typeof s.equity === 'number')
+                      .map((s: { equity?: number | null }) => s.equity as number),
+        });
+      })
+      .catch(() => { /* sparkline is decoration — never break the page */ });
+  }, []);
+
+  const money0 = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
+
   const { dayGL, totalGain, costBasis } = useMemo(() => {
     let dayGL = 0, totalGain = 0, costBasis = 0;
     for (const p of positions) {
@@ -71,7 +90,12 @@ export function DashboardOverview({
 
   const dayPct       = totalValue > 0 ? (dayGL / totalValue) * 100 : 0;
   const gainPct      = costBasis > 0 ? (totalGain / costBasis) * 100 : 0;
-  const totalReturn  = totalGain + dividends12mo;
+  // Realized P/L from app-placed sales (matched against captured cost basis).
+  const realizedTotal = useMemo(
+    () => recentTransactions.reduce((s, t) => s + (typeof t.realizedPnl === 'number' ? t.realizedPnl : 0), 0),
+    [recentTransactions],
+  );
+  const totalReturn  = totalGain + dividends12mo + realizedTotal;
   const returnPct    = costBasis > 0 ? (totalReturn / costBasis) * 100 : 0;
 
   const topPositions = useMemo(
@@ -96,13 +120,17 @@ export function DashboardOverview({
 
       {/* Stat grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={Layers} label="Gross Portfolio Value" value={fmt$(totalValue)} />
-        <Stat icon={Wallet} label="Net Portfolio Value"   value={fmt$(equity)} />
-        <Stat icon={CreditCard} label="Margin Used"           value={fmt$(marginUsed)} valueClass={marginUsed > 0 ? 'text-orange-300' : 'text-white'} />
-        <Stat icon={Percent} label="Equity %"              value={`${equityPct.toFixed(1)}%`} />
-        <Stat icon={List} label="Unique Positions"      value={String(positions.length)} />
-        <Stat icon={Banknote} label="Available Cash (incl. unsettled)" value={fmt$(availableCash)} />
-        <Stat icon={Clock} label="Last Sync"             value={ago(lastUpdated)} />
+        <Stat icon={Layers} label="Gross Portfolio Value" value={fmt$(totalValue)} rawValue={totalValue} format={money0}
+              accentClass="border-t-blue-500/60" spark={spark.gross} index={0} />
+        <Stat icon={Wallet} label="Net Portfolio Value" value={fmt$(equity)} rawValue={equity} format={money0}
+              accentClass="border-t-blue-500/60" spark={spark.net} sparkColor="#5DCAA5" index={1} />
+        <Stat icon={CreditCard} label="Margin Used" value={fmt$(marginUsed)} rawValue={marginUsed} format={money0}
+              valueClass={marginUsed > 0 ? 'text-orange-300' : 'text-white'} accentClass="border-t-blue-500/60" index={2} />
+        <Stat icon={Percent} label="Equity %" value={`${equityPct.toFixed(1)}%`} accentClass="border-t-blue-500/60" index={3} />
+        <Stat icon={List} label="Unique Positions" value={String(positions.length)} accentClass="border-t-blue-500/60" index={4} />
+        <Stat icon={Banknote} label="Available Cash (incl. unsettled)" value={fmt$(availableCash)} rawValue={availableCash} format={money0}
+              accentClass="border-t-blue-500/60" index={5} />
+        <Stat icon={Clock} label="Last Sync" value={ago(lastUpdated)} accentClass="border-t-blue-500/60" index={6} />
         <div className="hidden md:block" />
       </div>
 
@@ -111,17 +139,20 @@ export function DashboardOverview({
         {([
           { label: 'Day Change',   v: dayGL,       pct: dayPct,    sub: undefined },
           { label: 'Total Gain',   v: totalGain,   pct: gainPct,   sub: undefined },
-          { label: 'Total Return', v: totalReturn, pct: returnPct, sub: 'incl. dividends (12mo)' },
-        ]).map(({ label, v, pct, sub }) => {
+          { label: 'Total Return', v: totalReturn, pct: returnPct, sub: 'incl. dividends & realized (12mo)' },
+        ]).map(({ label, v, pct, sub }, i) => {
           const Trend = v >= 0 ? TrendingUp : TrendingDown;
+          const accent = v > 0 ? 'border-t-emerald-500/60' : v < 0 ? 'border-t-red-500/50' : 'border-t-[#2d3248]';
           return (
-            <div key={label} className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+            <div key={label} className={`bg-[#12151f] border border-[#1f2334] border-t-2 ${accent} rounded-lg p-3.5`} style={{ animationDelay: `${i * 40}ms` }}>
               <div className="flex items-start justify-between gap-2 mb-1">
                 <div className="text-[11px] text-[#7c82a0]">{label}</div>
                 <Trend className={`w-3.5 h-3.5 flex-shrink-0 ${plColor(v)}`} />
               </div>
-              <div className={`text-lg font-bold tabular-nums ${plColor(v)}`}>{signed$(v)}</div>
-              <div className={`text-xs tabular-nums ${plColor(v)}`}>{signedPct(pct)}</div>
+              <div className="flex items-baseline gap-2">
+                <span className={`text-2xl font-bold tabular-nums leading-tight ${plColor(v)}`}>{signed$(v)}</span>
+                <PlChip value={pct} pct />
+              </div>
               {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
             </div>
           );
@@ -182,17 +213,20 @@ export function DashboardOverview({
                 const dayP = v - day > 0 ? (day / (v - day)) * 100 : 0;
                 return (
                   <tr key={p.instrument.symbol} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
-                    <td className="px-4 py-2 font-mono font-semibold text-white">{p.instrument.symbol}</td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${day === 0 ? 'text-[#4a5070]' : plColor(day)}`}>
-                      {day === 0 ? '--' : signed$(day)}
+                    <td className="px-4 py-2">
+                      <span className="inline-flex items-center gap-2">
+                        <TickerAvatar symbol={p.instrument.symbol} size="sm" />
+                        <span className="font-mono font-semibold text-white">{p.instrument.symbol}</span>
+                      </span>
                     </td>
+                    <td className="px-2 py-2 text-right"><PlChip value={day} /></td>
                     <td className={`px-2 py-2 text-right tabular-nums ${day === 0 ? 'text-[#4a5070]' : plColor(day)}`}>
                       {day === 0 ? '--' : signedPct(dayP)}
                     </td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(p.gainLoss)}`}>{signed$(p.gainLoss)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(p.gainLoss)}`}>{signedPct(p.gainLossPercent)}</td>
                     <td className="px-2 py-2 text-right tabular-nums text-white">{fmt$(v)}</td>
-                    <td className="px-4 py-2 text-right tabular-nums text-[#7c82a0]">{w.toFixed(2)}%</td>
+                    <td className="px-4 py-2 text-right"><WeightBar pct={w} /></td>
                   </tr>
                 );
               })}
@@ -229,9 +263,7 @@ export function DashboardOverview({
               </tr>
             </thead>
             <tbody>
-              {transactionsLoading && (
-                <tr><td colSpan={10} className="px-4 py-4 text-[#4a5070]">Loading transactions…</td></tr>
-              )}
+              {transactionsLoading && <TableSkeleton cols={10} rows={5} />}
               {!transactionsLoading && recentTransactions.length === 0 && (
                 <tr><td colSpan={10} className="px-4 py-4 text-[#4a5070]">No recent transactions.</td></tr>
               )}

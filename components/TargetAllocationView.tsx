@@ -424,10 +424,10 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={DollarSign} label="Est. Blended Yield" value={`${blended.toFixed(2)}%`} sub="value-weighted, scored universe" valueClass="text-emerald-400" />
-        <Stat icon={Layers} label="Scored Tickers" value={String(scored.length)} sub="full universe · seeds never rated below Neutral" />
-        <Stat icon={TrendingUp} label="Strong Add / Add" value={String(scored.filter((r) => r.signal === 'Strong Add' || r.signal === 'Add').length)} />
-        <Stat icon={AlertTriangle} label="Hold / Trim" value={String(scored.filter((r) => r.signal === 'Hold' || r.signal === 'Trim').length)} iconClass="text-orange-400/60" />
+        <Stat icon={DollarSign} label="Est. Blended Yield" value={`${blended.toFixed(2)}%`} sub="value-weighted, scored universe" valueClass="text-emerald-400" accentClass="border-t-violet-500/60" index={0} />
+        <Stat icon={Layers} label="Scored Tickers" value={String(scored.length)} sub="full universe · seeds never rated below Neutral" accentClass="border-t-violet-500/60" index={1} />
+        <Stat icon={TrendingUp} label="Strong Add / Add" value={String(scored.filter((r) => r.signal === 'Strong Add' || r.signal === 'Add').length)} accentClass="border-t-violet-500/60" index={2} />
+        <Stat icon={AlertTriangle} label="Hold / Trim" value={String(scored.filter((r) => r.signal === 'Hold' || r.signal === 'Trim').length)} iconClass="text-orange-400/60" accentClass="border-t-violet-500/60" index={3} />
       </div>
 
       {/* Bucket allocations */}

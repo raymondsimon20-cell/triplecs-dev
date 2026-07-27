@@ -14,7 +14,9 @@
  */
 
 import React, { useMemo, useState } from 'react';
+import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { StatCard as Stat } from '@/components/StatCard';
+import { TickerAvatar, TableSkeleton } from '@/components/polish';
 import { Activity, Banknote, CreditCard, PiggyBank, ShoppingCart, TrendingDown, TrendingUp } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 
@@ -134,13 +136,13 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={TrendingUp} label="Total Income"     value={fmt$(agg.income)}        valueClass="text-emerald-400" />
-        <Stat icon={TrendingDown} label="Total Expenses"   value={fmt$(agg.expenses)}      valueClass="text-red-400" />
-        <Stat icon={CreditCard} label="Margin Cost"      value={fmt$(agg.marginCost)}    sub="Included in Total Expenses" valueClass="text-orange-300" />
-        <Stat icon={PiggyBank} label="Contributions"    value={fmt$(agg.contributions)} />
-        <Stat icon={Banknote} label="Cash Withdrawals" value={fmt$(agg.withdrawals)}   sub="Included in Total Expenses" />
-        <Stat icon={ShoppingCart} label="Capital Deployed" value={fmt$(agg.deployed)} />
-        <Stat icon={Activity} label="Net Operating"    value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} />
+        <Stat icon={TrendingUp} label="Total Income" value={fmt$(agg.income)} valueClass="text-emerald-400" accentClass="border-t-emerald-500/60" index={0} />
+        <Stat icon={TrendingDown} label="Total Expenses" value={fmt$(agg.expenses)} valueClass="text-red-400" accentClass="border-t-emerald-500/60" index={1} />
+        <Stat icon={CreditCard} label="Margin Cost" value={fmt$(agg.marginCost)} sub="Included in Total Expenses" valueClass="text-orange-300" accentClass="border-t-emerald-500/60" index={2} />
+        <Stat icon={PiggyBank} label="Contributions" value={fmt$(agg.contributions)} accentClass="border-t-emerald-500/60" index={3} />
+        <Stat icon={Banknote} label="Cash Withdrawals" value={fmt$(agg.withdrawals)} sub="Included in Total Expenses" accentClass="border-t-emerald-500/60" index={4} />
+        <Stat icon={ShoppingCart} label="Capital Deployed" value={fmt$(agg.deployed)} accentClass="border-t-emerald-500/60" index={5} />
+        <Stat icon={Activity} label="Net Operating" value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} accentClass="border-t-emerald-500/60" index={6} />
       </div>
 
       {/* Daily net operating chart */}
@@ -151,31 +153,40 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
           </span>
           <span className="text-[10px] text-[#4a5070]">{rangeLabel} ({days.length} {weekly ? 'weeks' : 'days'})</span>
         </div>
-        <div className="flex items-end gap-[2px] h-32">
-          {days.map((d) => {
-            const h = (Math.abs(d.net) / maxAbs) * 100;
-            return (
-              <div
-                key={d.date}
-                className="flex-1 flex flex-col justify-end h-full group relative"
-                title={`${fmtDate(d.date)}: ${signed$(d.net)}`}
-              >
-                <div className="flex flex-col justify-center h-full">
-                  <div className="h-1/2 flex flex-col justify-end">
-                    {d.net > 0 && <div className="bg-emerald-500/80 rounded-t-sm" style={{ height: `${h / 2}%`, minHeight: '2px' }} />}
-                  </div>
-                  <div className="border-t border-[#2d3248]" />
-                  <div className="h-1/2">
-                    {d.net < 0 && <div className="bg-red-500/80 rounded-b-sm" style={{ height: `${h / 2}%`, minHeight: '2px' }} />}
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </div>
-        <div className="flex justify-between text-[10px] text-[#4a5070] mt-2">
-          <span>{new Date(cutoff + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
-          <span>{new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}</span>
+        <div className="h-44">
+          <ResponsiveContainer width="100%" height="100%">
+            <BarChart data={days} margin={{ top: 4, right: 4, bottom: 0, left: 4 }}>
+              <XAxis
+                dataKey="date"
+                tick={{ fill: '#4a5070', fontSize: 10 }}
+                tickFormatter={(d: string) => new Date(d + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}
+                interval="preserveStartEnd"
+                minTickGap={40}
+                axisLine={{ stroke: '#1f2334' }}
+                tickLine={false}
+              />
+              <YAxis
+                tick={{ fill: '#4a5070', fontSize: 10 }}
+                tickFormatter={(v: number) => (Math.abs(v) >= 1000 ? `$${(v / 1000).toFixed(1)}K` : `$${v}`)}
+                axisLine={false}
+                tickLine={false}
+                width={48}
+              />
+              <Tooltip
+                cursor={{ fill: 'rgba(255,255,255,0.04)' }}
+                contentStyle={{ background: '#1a1d27', border: '1px solid #3d4468', borderRadius: 8, fontSize: 12 }}
+                labelStyle={{ color: '#7c82a0' }}
+                labelFormatter={(d) => fmtDate(String(d))}
+                formatter={(v) => [signed$(Number(v)), 'Net']}
+              />
+              <ReferenceLine y={0} stroke="#2d3248" />
+              <Bar dataKey="net" radius={[2, 2, 0, 0]} maxBarSize={18}>
+                {days.map((d) => (
+                  <Cell key={d.date} fill={d.net >= 0 ? '#10b981' : '#ef4444'} fillOpacity={0.85} />
+                ))}
+              </Bar>
+            </BarChart>
+          </ResponsiveContainer>
         </div>
         <div className="flex gap-4 mt-2 text-[10px] text-[#7c82a0]">
           <span>{days.filter((d) => d.net > 0).length} {weekly ? 'weeks' : 'days'} positive</span>
@@ -209,7 +220,7 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
               </tr>
             </thead>
             <tbody>
-              {loading && <tr><td colSpan={5} className="px-4 py-6 text-[#4a5070]">Loading…</td></tr>}
+              {loading && <TableSkeleton cols={5} rows={6} />}
               {!loading && tableTxns.length === 0 && (
                 <tr><td colSpan={5} className="px-4 py-6 text-[#4a5070]">No transactions in this window.</td></tr>
               )}
@@ -217,7 +228,14 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
                 <tr key={t.id} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
                   <td className="px-4 py-2 text-[#9aa2c0] whitespace-nowrap">{fmtDate(t.date)}</td>
                   <td className="px-2 py-2 text-[#7c82a0] max-w-[280px] truncate">{t.description}</td>
-                  <td className="px-2 py-2 font-mono font-semibold text-white">{t.symbol || '-'}</td>
+                  <td className="px-2 py-2 whitespace-nowrap">
+                    {t.symbol ? (
+                      <span className="inline-flex items-center gap-1.5">
+                        <TickerAvatar symbol={t.symbol} size="sm" />
+                        <span className="font-mono font-semibold text-white">{t.symbol}</span>
+                      </span>
+                    ) : <span className="text-[#4a5070]">-</span>}
+                  </td>
                   <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${categoryChipClass(t.category)}`}>{t.category}</span>
                   </td>

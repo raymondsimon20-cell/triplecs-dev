@@ -1,29 +1,81 @@
 'use client';
 
 /**
- * StatCard — shared stat tile for the P2P-style pages, with an optional
- * corner icon. Keeps the label top-left, icon top-right in the page accent.
+ * StatCard — shared stat tile for the P2P-style pages.
+ *
+ * Polish pass (2026-07): bigger tabular hero number, optional animated
+ * count-up (rawValue + format), optional 30-point sparkline, optional accent
+ * top border carrying the page color, and a staggered entrance (index prop).
  */
 
 import React from 'react';
+import { motion } from 'framer-motion';
 import type { LucideIcon } from 'lucide-react';
+import { AnimatedNumber } from '@/components/AnimatedNumber';
 
-export function StatCard({ label, value, sub, valueClass = 'text-white', icon: Icon, iconClass = 'text-[#4a5070]' }: {
+export function Sparkline({ points, stroke = '#378ADD', height = 26 }: {
+  points: number[];
+  stroke?: string;
+  height?: number;
+}) {
+  if (points.length < 2) return null;
+  const min = Math.min(...points);
+  const max = Math.max(...points);
+  const range = max - min || 1;
+  const w = 160;
+  const coords = points.map((v, i) => {
+    const x = (i / (points.length - 1)) * w;
+    const y = height - 3 - ((v - min) / range) * (height - 6);
+    return `${x.toFixed(1)},${y.toFixed(1)}`;
+  });
+  const line = `M${coords.join(' L')}`;
+  return (
+    <svg width="100%" height={height} viewBox={`0 0 ${w} ${height}`} preserveAspectRatio="none" className="mt-1.5" aria-hidden="true">
+      <path d={`${line} L${w},${height} L0,${height} Z`} fill={stroke} opacity="0.12" />
+      <path d={line} fill="none" stroke={stroke} strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+export function StatCard({
+  label, value, sub, valueClass = 'text-white', icon: Icon, iconClass = 'text-[#4a5070]',
+  accentClass, spark, sparkColor, rawValue, format, index = 0,
+}: {
   label:      string;
   value:      string;
   sub?:       string;
   valueClass?: string;
   icon?:      LucideIcon;
   iconClass?: string;
+  /** Tailwind border-color class for the 2px accent top border, e.g. 'border-t-blue-500/60'. */
+  accentClass?: string;
+  /** 30-point series for the sparkline under the number. */
+  spark?:     number[];
+  sparkColor?: string;
+  /** When provided with `format`, the number counts up on load/update. */
+  rawValue?:  number;
+  format?:    (n: number) => string;
+  /** Position in the grid — staggers the entrance animation. */
+  index?:     number;
 }) {
   return (
-    <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5">
+    <motion.div
+      initial={{ opacity: 0, y: 6 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.25, delay: Math.min(index * 0.04, 0.3), ease: 'easeOut' }}
+      className={`bg-[#12151f] border border-[#1f2334] rounded-lg p-3.5 ${accentClass ? `border-t-2 ${accentClass}` : ''}`}
+    >
       <div className="flex items-start justify-between gap-2 mb-1">
         <div className="text-[11px] text-[#7c82a0]">{label}</div>
         {Icon && <Icon className={`w-3.5 h-3.5 flex-shrink-0 ${iconClass}`} />}
       </div>
-      <div className={`text-lg font-bold tabular-nums ${valueClass}`}>{value}</div>
+      <div className={`text-2xl font-bold tabular-nums leading-tight ${valueClass}`}>
+        {rawValue !== undefined && format
+          ? <AnimatedNumber value={rawValue} format={format} />
+          : value}
+      </div>
+      {spark && spark.length > 1 && <Sparkline points={spark} stroke={sparkColor ?? '#378ADD'} />}
       {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
-    </div>
+    </motion.div>
   );
 }

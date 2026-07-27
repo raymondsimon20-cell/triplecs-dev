@@ -677,6 +677,17 @@ export default function DashboardPage() {
     [transactions, isAll, resolvedAccount],
   );
 
+  // Per-symbol realized P/L (app-placed sales) for the positions Return column.
+  const realizedBySymbol = useMemo(() => {
+    const out: Record<string, number> = {};
+    for (const t of scopedTransactions) {
+      if (typeof t.realizedPnl === 'number' && t.symbol) {
+        out[t.symbol] = (out[t.symbol] ?? 0) + t.realizedPnl;
+      }
+    }
+    return out;
+  }, [scopedTransactions]);
+
   /**
    * Pick the most-actionable account index when leaving aggregate mode:
    * ranks by max-pillar-drift (computed against per-account targets), with
@@ -1321,6 +1332,7 @@ export default function DashboardPage() {
             totalValue={account.totalValue}
             lastUpdated={lastUpdated}
             dividendsBySymbol={dividendsBySymbol}
+            realizedBySymbol={realizedBySymbol}
           />
         )}
 
