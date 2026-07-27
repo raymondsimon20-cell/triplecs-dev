@@ -24,7 +24,7 @@ import {
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
   Inbox, X, Wallet, History, Calculator, Activity, Layers,
-  ArrowLeftRight, CalendarCheck, Plug, Wrench,
+  ArrowLeftRight, CalendarCheck, Plug, Wrench, Crosshair,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
 import { AccountSwitcher, useAccountNicknames } from '@/components/AccountSwitcher';
@@ -42,6 +42,7 @@ import { DividendsView, type DividendRecord } from '@/components/DividendsView';
 import { MonthCloseView } from '@/components/MonthCloseView';
 import { LedgerView } from '@/components/LedgerView';
 import { ConnectionsView } from '@/components/ConnectionsView';
+import { TargetAllocationView } from '@/components/TargetAllocationView';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
@@ -104,8 +105,8 @@ interface AccountData {
 type View =
   | 'dashboard' | 'positions' | 'transactions' | 'cashflow' | 'dividends'
   | 'monthclose' | 'ledgerview' | 'connections'
-  | 'today' | 'portfolio' | 'history';
-const LEGACY_VIEWS: View[] = ['today', 'portfolio', 'history'];
+  | 'today' | 'portfolio' | 'history' | 'allocation';
+const LEGACY_VIEWS: View[] = ['today', 'portfolio', 'history', 'allocation'];
 type PortfolioSub = 'positions' | 'income' | 'trades' | 'market' | 'strategy';
 
 // ─── Slim metric card ─────────────────────────────────────────────────────────
@@ -226,9 +227,10 @@ function TopTabs({ view, onChange }: { view: View; onChange: (v: View) => void }
       {inTools && (
         <div className="max-w-7xl mx-auto px-4 flex gap-1 pb-1.5">
           {([
-            { id: 'today' as View,     label: 'Today',     Icon: Zap     },
-            { id: 'portfolio' as View, label: 'Portfolio', Icon: Wallet  },
-            { id: 'history' as View,   label: 'History',   Icon: History },
+            { id: 'today' as View,      label: 'Today',      Icon: Zap       },
+            { id: 'portfolio' as View,  label: 'Portfolio',  Icon: Wallet    },
+            { id: 'allocation' as View, label: 'Allocation', Icon: Crosshair },
+            { id: 'history' as View,    label: 'History',    Icon: History   },
           ]).map(({ id, label, Icon }) => (
             <button
               key={id}
@@ -1406,6 +1408,23 @@ export default function DashboardPage() {
             nicknames={nicknames}
             lastUpdated={lastUpdated}
             onRefresh={() => { fetchAccounts(true); fetchTransactions(); fetchDividends(); }}
+          />
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            ALLOCATION view (Tools) — scored universe + rebalance calculator.
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'allocation' && (
+          <TargetAllocationView
+            accountHash={isAll ? undefined : account.accountHash}
+            totalValue={account.totalValue}
+            pillarSummary={account.pillarSummary}
+            targets={{
+              triplesPct:     strategyTargets.triplesPct,
+              cornerstonePct: strategyTargets.cornerstonePct,
+              incomePct:      strategyTargets.incomePct,
+              hedgePct:       strategyTargets.hedgePct,
+            }}
           />
         )}
 
