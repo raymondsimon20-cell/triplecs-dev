@@ -20,7 +20,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Crosshair, RefreshCw, Calculator, Lightbulb, DollarSign, Layers, TrendingUp, AlertTriangle } from 'lucide-react';
+import { Crosshair, RefreshCw, Calculator, Lightbulb, DollarSign, Layers, TrendingUp, AlertTriangle, Focus } from 'lucide-react';
 import { StatCard as Stat } from '@/components/StatCard';
 import { useSort, SortTh } from '@/components/sortable';
 import type { AllocationRow } from '@/app/api/target-allocation/route';
@@ -133,6 +133,23 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   const [error, setError]       = useState<string | null>(null);
   const [contribution, setContribution] = useState('');
 
+  // Focus mode — concentrate the table + calculator on the top-N scored
+  // tickers. Persisted so the preference survives reloads.
+  const [focus, setFocus]   = useState<boolean>(() => {
+    try { return localStorage.getItem('triple-c-alloc-focus') === '1'; } catch { return false; }
+  });
+  const [focusN, setFocusN] = useState<number>(() => {
+    try { const n = Number(localStorage.getItem('triple-c-alloc-focus-n')); return [5, 10, 15].includes(n) ? n : 10; } catch { return 10; }
+  });
+  const toggleFocus = () => setFocus((v) => {
+    try { localStorage.setItem('triple-c-alloc-focus', v ? '0' : '1'); } catch { /* ignore */ }
+    return !v;
+  });
+  const pickFocusN = (n: number) => {
+    setFocusN(n);
+    try { localStorage.setItem('triple-c-alloc-focus-n', String(n)); } catch { /* ignore */ }
+  };
+
   const fetchData = useCallback(async (refresh = false) => {
     setLoading(true);
     setError(null);
@@ -192,8 +209,19 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     return { ...r, navDiscPct, catchUp, ...s };
   }), [rows, navMap, underTarget, overTarget]);
 
+  // Top-N scored symbols for focus mode.
+  const focusedSet = useMemo(() => {
+    const top = [...scored].sort((a, b) => b.score - a.score).slice(0, focusN);
+    return new Set(top.map((r) => r.symbol));
+  }, [scored, focusN]);
+
+  const visibleScored = useMemo(
+    () => (focus ? scored.filter((r) => focusedSet.has(r.symbol)) : scored),
+    [scored, focus, focusedSet],
+  );
+
   const { sortKey, sortDir, requestSort, sortRows } = useSort<ScoredRow>('score');
-  const tableRows = useMemo(() => sortRows(scored, {
+  const tableRows = useMemo(() => sortRows(visibleScored, {
     symbol: (r) => r.symbol,
     pillar: (r) => r.pillar,
     score:  (r) => r.score,
@@ -204,7 +232,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     yield:  (r) => r.yieldPct,
     nav:    (r) => r.navDiscPct ?? Number.NEGATIVE_INFINITY,
     margin: (r) => r.maintenancePct,
-  }), [scored, sortRows]);
+  }), [visibleScored, sortRows]);
 
   // ── Blended yield (scored universe, value-weighted) ────────────────────────
   const blended = useMemo(() => {
@@ -267,6 +295,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       if (alloc < 1) continue;
       const candidates = scored
         .filter((r) => r.pillar === pillar && (r.signal === 'Strong Add' || r.signal === 'Add') && r.price > 0)
+        .filter((r) => !focus || focusedSet.has(r.symbol))
         .sort((a, b) => b.score - a.score)
         .slice(0, 3);
       if (candidates.length === 0) continue;
@@ -285,6 +314,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     //    candidate until nothing fits.
     const addable = scored
       .filter((r) => (r.signal === 'Strong Add' || r.signal === 'Add') && r.price > 0)
+      .filter((r) => !focus || focusedSet.has(r.symbol))
       .sort((a, b) => b.score - a.score);
     let leftover = cash - spent;
     let guard = 500;
@@ -301,7 +331,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       .map(([symbol, b]) => ({ symbol, ...b, cost: b.shares * b.price }))
       .sort((a, b) => b.cost - a.cost);
     return { list, spent, leftover: cash - spent, cash };
-  }, [contribution, buckets, scored, totalValue]);
+  }, [contribution, buckets, scored, totalValue, focus, focusedSet]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -314,14 +344,53 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
           <h1 className="text-xl font-bold text-white">Target Allocation</h1>
           <p className="text-xs text-[#7c82a0] mt-0.5">Scored universe, bucket targets, and a whole-share contribution planner</p>
         </div>
-        <button
-          onClick={() => fetchData(true)}
-          disabled={loading}
-          className="ml-auto flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
-        </button>
+        <div className="ml-auto flex items-center gap-2">
+          {focus && (
+            <div className="flex items-center gap-0.5">
+              {[5, 10, 15].map((n) => (
+                <button
+                  key={n}
+                  onClick={() => pickFocusN(n)}
+                  className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                    focusN === n ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30' : 'text-[#7c82a0] hover:text-white border border-transparent'
+                  }`}
+                >
+                  {n}
+                </button>
+              ))}
+            </div>
+          )}
+          <button
+            onClick={toggleFocus}
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors border ${
+              focus
+                ? 'bg-violet-600/20 text-violet-300 border-violet-500/40'
+                : 'text-[#7c82a0] hover:text-white border-[#2d3248]'
+            }`}
+            title="Concentrate the table and calculator on the top-scored tickers"
+          >
+            <Focus className="w-3.5 h-3.5" />
+            Focus {focus ? 'on' : 'off'}
+          </button>
+          <button
+            onClick={() => fetchData(true)}
+            disabled={loading}
+            className="flex items-center gap-1.5 text-xs text-[#7c82a0] hover:text-white transition-colors disabled:opacity-50"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} /> Refresh
+          </button>
+        </div>
       </div>
+
+      {focus && (
+        <div className="flex items-center gap-2 bg-violet-500/10 border border-violet-500/20 rounded-lg px-3 py-2 text-xs text-violet-200">
+          <Focus className="w-3.5 h-3.5 flex-shrink-0" />
+          <span>
+            Focus mode: showing the top {focusN} of {scored.length} scored tickers — the calculator
+            only deploys into these names.
+          </span>
+        </div>
+      )}
 
       {error && (
         <div className="bg-red-500/10 border border-red-500/25 text-red-300 text-xs rounded-lg p-3 flex items-center gap-2">
