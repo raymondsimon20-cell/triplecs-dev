@@ -10,7 +10,7 @@
 import React, { useMemo, useState } from 'react';
 import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, PlChip, WeightBar } from '@/components/polish';
-import { BarChart2, Hash, List, Trophy, Wallet } from 'lucide-react';
+import { BarChart2, Download, Hash, List, Trophy, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { useSort, SortTh } from '@/components/sortable';
 
@@ -93,6 +93,32 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
   const pricesAgo = lastUpdated && Date.now() - lastUpdated.getTime() < 90_000 ? 'Just now'
     : lastUpdated ? `${Math.floor((Date.now() - lastUpdated.getTime()) / 60_000)}m ago` : '—';
 
+  // Exports what is currently on screen — filter and sort included — so the file
+  // matches what the user is looking at rather than a hidden full set.
+  const exportCsv = () => {
+    const header = ['Symbol', 'Shares', 'Price', 'Day Chg $', 'Day Chg %', 'Total Gain $', 'Total Gain %', 'Total Return $', 'Total Return %', 'Value', '% Portfolio'];
+    const pct = (v: number) => (totalValue > 0 ? (v / totalValue) * 100 : 0);
+    const body = filtered.map((r) => [
+      r.sym, String(r.qty), r.price.toFixed(2), r.day.toFixed(2), r.dayPct.toFixed(2),
+      r.gain.toFixed(2), r.gainPct.toFixed(2), r.ret.toFixed(2), r.retPct.toFixed(2),
+      r.value.toFixed(2), pct(r.value).toFixed(2),
+    ]);
+    const totalRow = [
+      'PORTFOLIO TOTAL', '', '', totals.day.toFixed(2), totals.dayPct.toFixed(2),
+      totals.gain.toFixed(2), totals.gainPct.toFixed(2), totals.ret.toFixed(2), totals.retPct.toFixed(2),
+      totals.value.toFixed(2), '100.00',
+    ];
+    const csv = [header, ...body, totalRow]
+      .map((row) => row.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
+      .join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `positions-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -103,6 +129,13 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
           <h1 className="text-xl font-bold text-white">Positions</h1>
           <p className="text-xs text-[#7c82a0] mt-0.5">As of {asOf} · Prices as of {pricesAgo}</p>
         </div>
+        <button
+          onClick={exportCsv}
+          disabled={filtered.length === 0}
+          className="ml-auto inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+        >
+          <Download className="w-3.5 h-3.5" /> Export CSV
+        </button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

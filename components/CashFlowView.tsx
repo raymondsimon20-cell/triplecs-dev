@@ -13,11 +13,11 @@
  *   Net Operating = Income − Expenses
  */
 
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { BarChart, Bar, Cell, XAxis, YAxis, Tooltip, ReferenceLine, ResponsiveContainer } from 'recharts';
 import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, TableSkeleton } from '@/components/polish';
-import { Activity, Banknote, CreditCard, PiggyBank, ShoppingCart, TrendingDown, TrendingUp } from 'lucide-react';
+import { Activity, Banknote, CreditCard, Download, PiggyBank, Plus, ShoppingCart, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -29,17 +29,119 @@ const EXPENSE_CATS  = new Set(['Withdrawal', 'Margin Interest']);
 const DEPLOY_CATS   = new Set(['Stock Purchase', 'Option Trade']);
 
 
+/** A manually recorded cash flow, from /api/contributions. */
+interface ManualFlow {
+  id:          string;
+  date:        string;
+  direction:   'in' | 'out';
+  amount:      number;
+  kind:        string;
+  description?: string;
+  accountHash?: string;
+}
+
 interface Props {
   transactions: NormalizedTransaction[];
   loading:      boolean;
   windowDays?:  number;
+  accountHash?: string;
 }
 
 const WINDOW_CHOICES = [30, 60, 90, 180, 365];
 
-export function CashFlowView({ transactions, loading, windowDays: initialWindow = 30 }: Props) {
+const todayKey = () => new Date().toISOString().slice(0, 10);
+
+export function CashFlowView({ transactions, loading, windowDays: initialWindow = 30, accountHash }: Props) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [windowDays, setWindowDays] = useState(initialWindow);
+
+  // ── Manual contributions ────────────────────────────────────────────────────
+  const [manual, setManual] = useState<ManualFlow[]>([]);
+  const [showForm, setShowForm] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [form, setForm] = useState({
+    date: todayKey(), amount: '', direction: 'in' as 'in' | 'out', description: '',
+  });
+
+  const loadManual = useCallback(async () => {
+    try {
+      const qs = accountHash ? `?accountHash=${encodeURIComponent(accountHash)}` : '';
+      const res = await fetch(`/api/contributions${qs}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      setManual(Array.isArray(json?.contributions) ? json.contributions : []);
+    } catch (err) {
+      console.warn('[CashFlowView] could not load manual contributions:', err);
+    }
+  }, [accountHash]);
+
+  useEffect(() => { void loadManual(); }, [loadManual]);
+
+  const submitContribution = async () => {
+    const amt = Number(form.amount);
+    if (!Number.isFinite(amt) || amt === 0) { setFormError('Enter a non-zero amount.'); return; }
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(form.date)) { setFormError('Enter a valid date.'); return; }
+
+    setSaving(true);
+    setFormError(null);
+    try {
+      const res = await fetch('/api/contributions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          date: form.date,
+          amount: Math.abs(amt),
+          direction: form.direction,
+          description: form.description || undefined,
+          accountHash,
+        }),
+      });
+      if (!res.ok) {
+        const j = await res.json().catch(() => ({}));
+        setFormError(j?.error ?? 'Could not save.');
+        return;
+      }
+      await loadManual();
+      setShowForm(false);
+      setForm({ date: todayKey(), amount: '', direction: 'in', description: '' });
+    } catch {
+      setFormError('Could not save — check your connection.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const removeContribution = async (id: string) => {
+    // Optimistic: drop it locally, restore on failure.
+    const prior = manual;
+    setManual((m) => m.filter((x) => x.id !== id));
+    try {
+      const res = await fetch(`/api/contributions?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+      if (!res.ok) setManual(prior);
+    } catch {
+      setManual(prior);
+    }
+  };
+
+  // Manual flows join the same pipeline as broker transactions so they land in
+  // the aggregates, the chart, and the table without special-casing downstream.
+  const manualAsTxns = useMemo<NormalizedTransaction[]>(
+    () => manual.map((m) => ({
+      id: m.id,
+      date: m.date,
+      category: m.direction === 'in' ? 'Contribution' : 'Withdrawal',
+      symbol: '',
+      description: m.description || (m.direction === 'in' ? 'Manual contribution' : 'Manual withdrawal'),
+      amount: m.direction === 'in' ? Math.abs(m.amount) : -Math.abs(m.amount),
+      units: 0,
+      fee: 0,
+      accountHash: m.accountHash ?? '',
+    })),
+    [manual],
+  );
+
+  const manualIds = useMemo(() => new Set(manual.map((m) => m.id)), [manual]);
 
   const cutoff = useMemo(() => {
     const d = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
@@ -47,8 +149,10 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
   }, [windowDays]);
 
   const windowTxns = useMemo(
-    () => transactions.filter((t) => t.date >= cutoff),
-    [transactions, cutoff],
+    () => [...transactions, ...manualAsTxns]
+      .filter((t) => t.date >= cutoff)
+      .sort((a, b) => b.date.localeCompare(a.date)),
+    [transactions, manualAsTxns, cutoff],
   );
 
   const agg = useMemo(() => {
@@ -110,6 +214,25 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
 
   const rangeLabel = `${new Date(cutoff + 'T12:00:00').toLocaleDateString('en-US', { month: 'short', day: 'numeric' })} – ${new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric' })}`;
 
+  const exportCsv = () => {
+    const header = ['Date', 'Description', 'Symbol', 'Category', 'Amount', 'Source'];
+    const rows = tableTxns.map((t) => [
+      t.date, t.description, t.symbol, t.category, t.amount.toFixed(2),
+      manualIds.has(t.id) ? 'manual' : 'schwab',
+    ]);
+    const csv = [header, ...rows]
+      .map((row) => row.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
+      .join('\n');
+    const url = URL.createObjectURL(new Blob([csv], { type: 'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `cash-flow-${windowDays}d-${todayKey()}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const inputClass = 'w-full bg-[#0f1117] border border-[#2d3248] rounded-md px-2.5 py-1.5 text-xs text-white placeholder-[#4a5070] focus:outline-none focus:border-emerald-500/50 transition-colors';
+
   return (
     <div className="space-y-4">
       <div className="flex items-center gap-3">
@@ -132,8 +255,98 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
               {d}d
             </button>
           ))}
+          <div className="w-px h-5 bg-[#2d3248] mx-1.5" />
+          <button
+            onClick={() => { setShowForm((v) => !v); setFormError(null); }}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-emerald-500/30 bg-emerald-600/15 text-[11px] text-emerald-300 hover:bg-emerald-600/25 transition-colors"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add Contribution
+          </button>
+          <button
+            onClick={exportCsv}
+            disabled={tableTxns.length === 0}
+            className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-md border border-[#2d3248] text-[11px] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            <Download className="w-3.5 h-3.5" /> Export CSV
+          </button>
         </div>
       </div>
+
+      {/* Manual contribution entry */}
+      {showForm && (
+        <div className="bg-[#12151f] border border-emerald-500/25 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <span className="text-sm font-semibold text-white">Record a cash flow</span>
+            <button onClick={() => setShowForm(false)} className="text-[#7c82a0] hover:text-white" aria-label="Close">
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+          <p className="text-[10px] text-[#4a5070] mb-3">
+            For deposits and withdrawals that never appear in the Schwab feed. Without them, outside
+            transfers get absorbed into &quot;Market &amp; Other&quot; on the equity bridge and look like
+            gains or losses you never made.
+          </p>
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-2.5 items-end">
+            <div>
+              <label htmlFor="cf-date" className="block text-[10px] text-[#7c82a0] mb-1">Date</label>
+              <input id="cf-date" type="date" value={form.date} max={todayKey()}
+                     onChange={(e) => setForm((f) => ({ ...f, date: e.target.value }))} className={inputClass} />
+            </div>
+            <div>
+              <label htmlFor="cf-dir" className="block text-[10px] text-[#7c82a0] mb-1">Direction</label>
+              <select id="cf-dir" value={form.direction}
+                      onChange={(e) => setForm((f) => ({ ...f, direction: e.target.value as 'in' | 'out' }))}
+                      className={inputClass}>
+                <option value="in">Contribution (in)</option>
+                <option value="out">Withdrawal (out)</option>
+              </select>
+            </div>
+            <div>
+              <label htmlFor="cf-amt" className="block text-[10px] text-[#7c82a0] mb-1">Amount ($)</label>
+              <input id="cf-amt" type="number" inputMode="decimal" step="0.01" min="0" placeholder="0.00"
+                     value={form.amount}
+                     onChange={(e) => setForm((f) => ({ ...f, amount: e.target.value }))} className={inputClass} />
+            </div>
+            <div className="col-span-2 md:col-span-1">
+              <label htmlFor="cf-desc" className="block text-[10px] text-[#7c82a0] mb-1">Description (optional)</label>
+              <input id="cf-desc" type="text" maxLength={200} placeholder="e.g. Paycheck transfer"
+                     value={form.description}
+                     onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))} className={inputClass} />
+            </div>
+            <button
+              onClick={submitContribution}
+              disabled={saving}
+              className="px-3 py-1.5 rounded-md bg-emerald-600/80 hover:bg-emerald-600 text-xs text-white font-medium disabled:opacity-50 transition-colors"
+            >
+              {saving ? 'Saving…' : 'Save'}
+            </button>
+          </div>
+          {formError && <p className="text-[11px] text-red-400 mt-2">{formError}</p>}
+
+          {manual.length > 0 && (
+            <div className="mt-4 border-t border-[#1f2334] pt-3">
+              <div className="text-[10px] text-[#7c82a0] mb-1.5">
+                {manual.length} manual entr{manual.length === 1 ? 'y' : 'ies'} on record
+              </div>
+              <div className="max-h-40 overflow-y-auto space-y-1">
+                {[...manual].sort((a, b) => b.date.localeCompare(a.date)).map((m) => (
+                  <div key={m.id} className="flex items-center gap-2 text-[11px] py-1 border-b border-[#161a28] last:border-0">
+                    <span className="text-[#9aa2c0] tabular-nums w-24">{fmtDate(m.date)}</span>
+                    <span className={`tabular-nums w-24 ${m.direction === 'in' ? 'text-emerald-400' : 'text-red-400'}`}>
+                      {m.direction === 'in' ? '+' : '-'}{fmt$(m.amount)}
+                    </span>
+                    <span className="text-[#7c82a0] truncate flex-1">{m.description}</span>
+                    <button onClick={() => removeContribution(m.id)}
+                            className="text-[#4a5070] hover:text-red-400 transition-colors" aria-label="Delete entry">
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat icon={TrendingUp} label="Total Income" value={fmt$(agg.income)} valueClass="text-emerald-400" accentClass="border-t-emerald-500/60" index={0} />
@@ -238,6 +451,11 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
                   </td>
                   <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${categoryChipClass(t.category)}`}>{t.category}</span>
+                    {manualIds.has(t.id) && (
+                      <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-[#2d3248] text-[#7c82a0]" title="Manually recorded, not from the Schwab feed">
+                        manual
+                      </span>
+                    )}
                   </td>
                   <td className={`px-4 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
                 </tr>

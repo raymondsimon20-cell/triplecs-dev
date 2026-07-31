@@ -345,6 +345,38 @@ export async function appendCashFlows(events: CashFlowEvent[]): Promise<number> 
   return fresh.length;
 }
 
+/**
+ * Add a single user-entered cash-flow event.
+ *
+ * Deliberately does NOT go through `appendCashFlows`. That function
+ * fingerprint-dedupes on (accountHash, date, kind, amount, direction), which is
+ * right for the idempotent Schwab sync but wrong here: two genuine $500 deposits
+ * on the same day are a real thing a person can do, and silently dropping the
+ * second would understate contributions in the equity bridge. Manual entries are
+ * deduped on `id` alone, which the caller makes unique.
+ */
+export async function addManualCashFlow(event: CashFlowEvent): Promise<CashFlowEvent> {
+  const existing = await getCashFlows();
+  if (existing.some((e) => e.id === event.id)) return event;
+  const merged = [...existing, event].sort((a, b) => a.date.localeCompare(b.date));
+  await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
+  return event;
+}
+
+/**
+ * Remove a manually-entered cash-flow event by id.
+ * Refuses to touch Schwab-sourced events — those are reconstructed from the
+ * broker feed and deleting one locally would just resurrect it on next sync.
+ * Returns true when something was actually removed.
+ */
+export async function deleteManualCashFlow(id: string): Promise<boolean> {
+  const existing = await getCashFlows();
+  const target = existing.find((e) => e.id === id);
+  if (!target || target.source !== 'manual') return false;
+  await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, existing.filter((e) => e.id !== id));
+  return true;
+}
+
 // ─── Recommendation tracking ──────────────────────────────────────────────────
 
 export interface TrackedRecommendation {

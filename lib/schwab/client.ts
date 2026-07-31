@@ -210,6 +210,151 @@ export function missingQuoteSymbols(quotes: SchwabQuotesResponse): string[] {
   return Array.isArray(m) ? m : [];
 }
 
+// ─── Instrument fundamentals (declared dividend dates) ────────────────────────
+
+/**
+ * Schwab's fundamental block. Every field is optional and loosely typed on
+ * purpose: the field names Schwab returns have varied across API revisions
+ * (`dividendDate` vs `divDate`, `nextDividendPayDate` vs `nextDivPayDate`), and
+ * coverage is inconsistent across asset classes. Normalise via
+ * `extractDividendDates` rather than reading these directly.
+ */
+export interface SchwabFundamental {
+  symbol?:               string;
+  dividendAmount?:       number;
+  dividendYield?:        number;
+  dividendFreq?:         number;
+  /** Most recent ex-dividend date. */
+  dividendDate?:         string;
+  /** Most recent pay date. */
+  dividendPayDate?:      string;
+  /** Next declared ex-dividend date. */
+  nextDividendDate?:     string;
+  /** Next declared pay date. */
+  nextDividendPayDate?:  string;
+  [key: string]: unknown;
+}
+
+export interface SchwabInstrument {
+  cusip?:       string;
+  symbol?:      string;
+  description?: string;
+  exchange?:    string;
+  assetType?:   string;
+  fundamental?: SchwabFundamental;
+}
+
+export interface DeclaredDividendDates {
+  symbol:       string;
+  /** Next declared ex-date (YYYY-MM-DD) — null when Schwab has none. */
+  nextExDate:   string | null;
+  /** Next declared pay date (YYYY-MM-DD) — null when Schwab has none. */
+  nextPayDate:  string | null;
+  lastExDate:   string | null;
+  lastPayDate:  string | null;
+  /** Declared payments per year, when Schwab reports it. */
+  freq:         number | null;
+  amount:       number | null;
+}
+
+/** Coerce Schwab's assorted date encodings to YYYY-MM-DD, or null. */
+function normaliseDate(v: unknown): string | null {
+  if (v == null) return null;
+  if (typeof v === 'number') {
+    if (v <= 0) return null;
+    // Schwab sometimes returns epoch millis, sometimes seconds.
+    const ms = v > 1e11 ? v : v * 1000;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+  }
+  if (typeof v !== 'string' || v.trim() === '') return null;
+  // Already ISO-ish, or a full timestamp — take the date part.
+  const m = v.match(/^(\d{4}-\d{2}-\d{2})/);
+  if (m) return m[1];
+  const d = new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d.toISOString().slice(0, 10);
+}
+
+function pick(f: SchwabFundamental, keys: string[]): unknown {
+  for (const k of keys) {
+    if (f[k] != null && f[k] !== '' && f[k] !== 0) return f[k];
+  }
+  return null;
+}
+
+/** Normalise a fundamental block into declared dividend dates. */
+export function extractDividendDates(symbol: string, f: SchwabFundamental | undefined): DeclaredDividendDates {
+  if (!f) {
+    return { symbol, nextExDate: null, nextPayDate: null, lastExDate: null, lastPayDate: null, freq: null, amount: null };
+  }
+  const freqRaw = pick(f, ['dividendFreq', 'divFreq', 'dividendFrequency']);
+  const amtRaw = pick(f, ['dividendAmount', 'divAmount', 'dividendPayAmount']);
+  return {
+    symbol,
+    nextExDate:  normaliseDate(pick(f, ['nextDividendDate', 'nextDivDate', 'nextDividendExDate', 'nextDivExDate'])),
+    nextPayDate: normaliseDate(pick(f, ['nextDividendPayDate', 'nextDivPayDate'])),
+    lastExDate:  normaliseDate(pick(f, ['dividendDate', 'divDate', 'dividendExDate'])),
+    lastPayDate: normaliseDate(pick(f, ['dividendPayDate', 'divPayDate'])),
+    freq:        typeof freqRaw === 'number' ? freqRaw : null,
+    amount:      typeof amtRaw === 'number' ? amtRaw : null,
+  };
+}
+
+/**
+ * Fetch instrument fundamentals — the only Schwab surface that carries
+ * *declared* forward dividend dates (the quote endpoint has trailing data only).
+ *
+ * Schwab's `/instruments` endpoint is documented with a single `symbol`
+ * parameter. Comma-separated batches work in practice but are not guaranteed,
+ * so this batches optimistically and degrades to per-symbol requests. Coverage
+ * is genuinely spotty for closed-end funds and recently launched ETFs — callers
+ * should expect nulls and fall back to a derived estimate.
+ */
+export async function getFundamentals(
+  tokens: SchwabTokens,
+  symbols: string[],
+): Promise<Record<string, DeclaredDividendDates>> {
+  const out: Record<string, DeclaredDividendDates> = {};
+
+  const valid = Array.from(new Set(
+    symbols
+      .map((s) => s?.trim().toUpperCase())
+      .filter((s): s is string => !!s && s.length > 0 && s.length <= 20 && !s.includes(' ')),
+  ));
+  if (valid.length === 0) return out;
+
+  const url = (syms: string[]) =>
+    `${MARKET_BASE}/instruments?symbol=${syms.join(',')}&projection=fundamental`;
+
+  const absorb = (resp: { instruments?: SchwabInstrument[] } | undefined) => {
+    for (const inst of resp?.instruments ?? []) {
+      const sym = (inst.symbol ?? inst.fundamental?.symbol ?? '').toUpperCase();
+      if (!sym) continue;
+      out[sym] = extractDividendDates(sym, inst.fundamental);
+    }
+  };
+
+  // Batch in modest chunks — large symbol lists tend to 400 on this endpoint.
+  const CHUNK = 25;
+  for (let i = 0; i < valid.length; i += CHUNK) {
+    const chunk = valid.slice(i, i + CHUNK);
+    try {
+      absorb(await schwabFetch<{ instruments?: SchwabInstrument[] }>(url(chunk), tokens));
+    } catch (err) {
+      console.warn(`[getFundamentals] Batch of ${chunk.length} failed, retrying individually:`, err);
+      for (const sym of chunk) {
+        try {
+          absorb(await schwabFetch<{ instruments?: SchwabInstrument[] }>(url([sym]), tokens));
+        } catch (innerErr) {
+          console.error(`[getFundamentals] Failed to resolve fundamentals: ${sym}`, innerErr);
+        }
+      }
+    }
+  }
+
+  return out;
+}
+
 // ─── Price history endpoint ───────────────────────────────────────────────────
 
 export interface PriceHistoryCandle {

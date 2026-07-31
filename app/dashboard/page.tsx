@@ -1386,7 +1386,12 @@ export default function DashboardPage() {
         )}
 
         {view === 'cashflow' && (
-          <CashFlowView transactions={scopedTransactions} loading={transactionsLoading} windowDays={30} />
+          <CashFlowView
+            transactions={scopedTransactions}
+            loading={transactionsLoading}
+            windowDays={30}
+            accountHash={isAll ? undefined : account.accountHash}
+          />
         )}
 
         {view === 'dividends' && (
