@@ -3,8 +3,11 @@
 Source: p2ptrain-cpswo7uz.manus.space, Modules 1–5 plus the live Target Allocation tool.
 Captured 2026-07-31. Paraphrased into implementable rules — not a transcript.
 
-Status column: **HAVE** = already encoded in Triple C App · **PARTIAL** = exists but differs
+Status column: **HAVE** = encoded in Triple C App · **PARTIAL** = exists but differs
 · **MISSING** = not in the app · **CONFLICT** = contradicts current behavior.
+
+**Updated 2026-07-31** after the implementation pass. Items built during that pass
+carry a pointer to the module that implements them.
 
 ---
 
@@ -12,12 +15,12 @@ Status column: **HAVE** = already encoded in Triple C App · **PARTIAL** = exist
 
 | # | Rule | Status |
 |---|---|---|
-| A1 | 100% of W-2 income direct-deposits into the brokerage account | MISSING (no income model) |
-| A2 | Incoming cash pays down margin first, then is invested | MISSING |
-| A3 | Margin is the "bridge" covering living expenses until dividends catch up | PARTIAL (margin tracked, bridge not modeled) |
-| A4 | Target ≈ $600 positive cash flow per paycheck after interest cost | MISSING |
-| A5 | Bills are paid from margin/debit against the account, not from held-back salary | MISSING |
-| A6 | Start by floating one small bill before scaling to core expenses | MISSING (onboarding concept) |
+| A1 | 100% of W-2 income direct-deposits into the brokerage account | HAVE — `lib/portfolio/bridge.ts`, MarginBridgePanel |
+| A2 | Incoming cash pays down margin first, then is invested | HAVE — modelled in `projectBridge` |
+| A3 | Margin is the "bridge" covering living expenses until dividends catch up | HAVE — bridge direction + months-to-clear |
+| A4 | Target ≈ $600 positive cash flow per paycheck after interest cost | HAVE — BusinessSpreadPanel, net/paycheck |
+| A5 | Bills are paid from margin/debit against the account, not from held-back salary | HAVE — implicit in the bridge cycle |
+| A6 | Start by floating one small bill before scaling to core expenses | MISSING — onboarding concept, not modelled |
 
 ## B. Margin Safety
 
@@ -27,9 +30,9 @@ Status column: **HAVE** = already encoded in Triple C App · **PARTIAL** = exist
 | B2 | Know the maintenance requirement per position: SPY/SPYG ≈ 30%, major stocks 30–50%, high-volatility funds up to 100% | HAVE (`maintenancePct` in fund-metadata) |
 | B3 | Never use margin for speculation or depreciating assets | N/A (policy, not computable) |
 | B4 | Monitor equity % daily | HAVE (MarginRiskPanel) |
-| B5 | Margin rate target ≤ 8.4%; renegotiate every 6 months | MISSING (no rate tracking) |
+| B5 | Margin rate target ≤ 8.4%; renegotiate every 6 months | PARTIAL — rate stored (7.75%), no renegotiation reminder |
 | B6 | $2,000 minimum to qualify for margin | N/A |
-| B7 | Positive spread test: blended yield must exceed margin rate by a wide margin (target 17–22pp) | MISSING as a *rule*; yield is computed but never checked against margin cost |
+| B7 | Positive spread test: blended yield must exceed margin rate | HAVE — BusinessSpreadPanel, shown beside total return |
 
 **Note on B1 vs. the app's AFW guardrail:** the app currently blocks trades whose projected
 post-trade AFW dips below $10K. That is a dollar floor; B1 is a ratio. They are not the same
@@ -41,27 +44,27 @@ The training modules describe **three** buckets. The live allocation tool uses *
 
 | Tool bucket | Purpose | Triple C App equivalent |
 |---|---|---|
-| Growth (Anchors) | Capital appreciation; stabilizes margin equity; low maintenance % | **NONE** |
+| Growth (Anchors) | Capital appreciation; stabilizes margin equity; low maintenance % | `growth` (added 2026-07) |
 | CEFs (Engines) | DRIP at NAV compounding | `cornerstone` |
 | High Yield (Workhorses) | Covered-call/put income that pays the bills | `income` |
 | Leveraged | 3x amplification | `triples` |
 
 | # | Rule | Status |
 |---|---|---|
-| C1 | Every bucket funded from day one — no sequencing | MISSING |
-| C2 | Growth bucket exists to stabilize margin equity, chosen partly for *low maintenance %* | MISSING — no Growth pillar at all |
+| C1 | Every bucket funded from day one — no sequencing | PARTIAL — planner splits by gap, no sequencing rule |
+| C2 | Growth bucket exists to stabilize margin equity, chosen partly for *low maintenance %* | HAVE — Growth pillar added, 35% maintenance default |
 | C3 | Bucket targets sum to 100% | HAVE |
-| C4 | Per-fund targets within a bucket; unset funds split the remainder evenly | MISSING |
-| C5 | App has a `hedge` pillar the source has no equivalent for (source files DOG/FAZ/FNGD under Growth/Leveraged) | CONFLICT |
+| C4 | Per-fund targets within a bucket; unset funds split the remainder evenly | SKIPPED — duplicates score-driven allocation; see T2 note |
+| C5 | App had a `hedge` pillar the source has no equivalent for | RESOLVED — retired, inverse/vol folded into Leveraged |
 
 ## D. CEFs / DRIP
 
 | # | Rule | Status |
 |---|---|---|
-| D1 | Enable DRIP **at NAV** specifically on CLM and CRF | MISSING (no DRIP state tracked) |
+| D1 | Enable DRIP **at NAV** specifically on CLM and CRF | HAVE — `lib/portfolio/drip.ts`, inferred from transactions |
 | D2 | NAV discount of 13–20% is the expected compounding edge | PARTIAL (`/api/cornerstone` has premium/discount) |
 | D3 | Judge CEFs on **Total Return** (price + all distributions), never price alone | PARTIAL (Positions has Total Return) |
-| D4 | Rights offering (N2A) play: sell into the filing announcement, buy back after dilution | MISSING |
+| D4 | Rights offering (N2A) play: sell into the filing announcement, buy back after dilution | MISSING — not built |
 | D5 | Vol-7 overlay: NAV premium > 30% is a box/sell trigger | HAVE (hard override in scoring) |
 
 **Live data point:** the source tool currently shows CLM at +17.1% and CRF at +16.2% premium and
@@ -71,11 +74,11 @@ rates both Neutral — i.e. the 30% trigger is the app's Vol-7 rule, not the too
 
 | # | Rule | Status |
 |---|---|---|
-| E1 | Buy monthly puts on SPY or QQQ, 10–20% OTM, ~30 DTE, rolled each expiration | PARTIAL (options tooling exists, no standing insurance rule) |
-| E2 | Treat put premium as a recurring operating expense, not a discretionary trade | MISSING |
-| E3 | Puts exist to protect *margin equity* from breaching 50%, not to profit | MISSING as stated intent |
-| E4 | Increase protection when: market at ATH with elevated P/E · VIX unusually low · margin utilization above comfort · macro/geopolitical stress | MISSING (MarketConditions exists but doesn't drive hedge sizing) |
-| E5 | Covered calls only on growth positions you'd be happy to sell higher | MISSING |
+| E1 | Buy monthly puts on SPY or QQQ, 10–20% OTM, ~30 DTE, rolled each expiration | HAVE — PutInsurancePanel checks OTM band + DTE |
+| E2 | Treat put premium as a recurring operating expense, not a discretionary trade | PARTIAL — framed as standing cover, not expensed |
+| E3 | Puts exist to protect *margin equity*, not to profit | HAVE — drawdown headroom is the headline metric |
+| E4 | Increase protection under stress conditions | PARTIAL — MarketConditions sizes the hedge sleeve; not linked to the put panel |
+| E5 | Covered calls only on growth positions you'd be happy to sell higher | MISSING — not built |
 | E6 | Cash-secured puts at your genuine target buy price | HAVE (OpenPutTracker, put chain) |
 
 ## F. Crash Playbook
@@ -96,7 +99,7 @@ rates both Neutral — i.e. the 30% trigger is the app's Vol-7 rule, not the too
 | 3 | $100,000 | "Charlie Munger Rule" — hardest milestone; compounding accelerates |
 | 4 | $3,000–4,400+/mo | Dividends cover all expenses; bridge no longer needed |
 
-Status: MISSING — the app has no milestone/phase concept.
+Status: HAVE — `lib/portfolio/milestones.ts`, MilestonesPanel on Tools → Today. Paced by observed contributions rather than an assumed savings rate.
 
 ## H. Stated Targets (source claims)
 
@@ -114,21 +117,27 @@ What the source tool does that Triple C App's Target Allocation does not:
 
 | # | Behavior | Status |
 |---|---|---|
-| T1 | Four buckets including **Growth** | MISSING |
-| T2 | Two-level targets: bucket %, then per-fund % *within* bucket | MISSING |
-| T3 | Unset funds split their bucket's remainder evenly | MISSING |
-| T4 | **"Set Targets from Current"** — snapshot present allocation as the starting point | MISSING |
-| T5 | Selectable SMA period: 50 / 100 / 200 | PARTIAL (50 hardcoded) |
-| T6 | **User-editable scoring weights**, auto-normalized to 100%, persisted locally | MISSING (weights hardcoded) |
-| T7 | **Catch-Up weight as a slider** controlling concentration on underweight tickers | PARTIAL (fixed ±8 step) |
-| T8 | **"Apply to Rebalance" toggle** — scores proportionally drive buy allocation within each bucket | PARTIAL (always on, top-3 only) |
-| T9 | Focus Mode | HAVE |
-| T10 | Signal filter chips (Strong Add / Add / Neutral / Hold / Trim) | MISSING |
-| T11 | "% Bucket" vs "% Portfolio" display toggle | MISSING |
-| T12 | Per-bucket estimated blended yield + projected target yield from target weights | MISSING |
-| T13 | Custom filters + EVALUATE | MISSING |
-| T14 | Progressive load counter ("Loaded 90 of 163 tickers") | HAVE |
-| T15 | Yield defined as *last distribution annualized*, forward-looking | HAVE (as of the cadence work) |
+| T1 | Four buckets including **Growth** | HAVE |
+| T2 | Two-level targets: bucket %, then per-fund % *within* bucket | SKIPPED — see note below |
+| T3 | Unset funds split their bucket's remainder evenly | SKIPPED — follows from T2 |
+| T4 | **"Set Targets from Current"** — snapshot present allocation as the starting point | HAVE |
+| T5 | Selectable SMA period: 50 / 100 / 200 | HAVE — `lib/portfolio/sma.ts` |
+| T6 | **User-editable scoring weights**, normalised, persisted locally | HAVE |
+| T7 | **Catch-Up weight as a slider** | HAVE — one of the six weights |
+| T8 | **"Apply to Rebalance" toggle** | HAVE — even split across top 8 when off |
+| T9 | Focus Mode | HAVE (already existed) |
+| T10 | Signal filter chips | HAVE |
+| T11 | "% Bucket" vs "% Portfolio" display toggle | HAVE |
+| T12 | Per-bucket blended yield + projected target yield | HAVE |
+| T13 | Custom filters + EVALUATE | MISSING — not built |
+| T14 | Progressive load counter | HAVE (already existed) |
+| T15 | Yield defined as *last distribution annualized*, forward-looking | HAVE — cadence-derived |
+
+**Why T2/T3 were skipped:** per-fund targets duplicate the scoring engine. Within-bucket
+allocation is already decided by score — that is what the apply-scores toggle controls.
+A second, manual mechanism competing with it would be ambiguous when the two disagree,
+and setting targets by hand across 160+ holdings is not realistic. Raising the Catch-Up
+weight is the existing lever for more control over within-bucket allocation.
 
 Shared columns: Ticker · Bucket · Score · Signal · vs 50-SMA · 12MO · 24MO · Yield · NAV Disc · Margin.
 Column set already matches; the difference is configurability, not display.
