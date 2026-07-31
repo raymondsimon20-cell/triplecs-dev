@@ -135,5 +135,8 @@ export const DEFAULT_TARGETS: StrategyTargets = {
 
   familyCapPct: 20,
   fireNumber: 10000,
-  marginRatePct: 8.4,           // P2P negotiated-rate target
+  // Actual negotiated Schwab rate. P2P quotes 8.4% as the rate to aim for;
+  // this account is already below it, so the real figure stands — the spread
+  // math should reflect what is actually charged, not the target.
+  marginRatePct: 7.75,
 };

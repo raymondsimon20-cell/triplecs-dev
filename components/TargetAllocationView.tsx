@@ -30,6 +30,7 @@ import { useSort, SortTh } from '@/components/sortable';
 import type { AllocationRow } from '@/app/api/target-allocation/route';
 import type { DividendRecord } from '@/components/DividendsView';
 import { deriveCadence, annualiseFromHistory } from '@/lib/portfolio/dividend-cadence';
+import { useStrategyTargets, updateStrategyTargets } from '@/components/SettingsPanel';
 
 const fmt$ = (n: number, dec = 2) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -93,6 +94,75 @@ interface Props {
  */
 const MAX_DERIVED_YIELD_PCT = 150;
 
+// ─── Scoring weights ──────────────────────────────────────────────────────────
+
+/**
+ * The six scoring factors, as user-adjustable weights.
+ *
+ * Each factor contributes a normalised −1…+1 signal; the weight sets how many
+ * points that signal is worth. Weights are relative and are normalised to a
+ * fixed total swing so raising one factor genuinely trades off against the
+ * others rather than just inflating every score.
+ */
+export interface ScoringWeights {
+  sma:         number;  // price vs moving average — below = accumulation zone
+  nav:         number;  // CEF premium/discount
+  totalReturn: number;  // 12/24-month total return
+  yieldW:      number;  // distribution yield
+  maintenance: number;  // margin maintenance efficiency
+  catchUp:     number;  // bucket under/over its target
+}
+
+export const DEFAULT_WEIGHTS: ScoringWeights = {
+  sma: 15, nav: 10, totalReturn: 13, yieldW: 15, maintenance: 10, catchUp: 8,
+};
+
+const WEIGHT_LABELS: Record<keyof ScoringWeights, string> = {
+  sma:         'vs Moving Avg',
+  nav:         'NAV Disc/Prem',
+  totalReturn: 'Total Return',
+  yieldW:      'Yield',
+  maintenance: 'Margin Efficiency',
+  catchUp:     'Catch-Up',
+};
+
+const WEIGHT_HELP: Record<keyof ScoringWeights, string> = {
+  sma:         'Rewards buying below the moving average.',
+  nav:         'Rewards discounts, penalises premiums. CEFs only.',
+  totalReturn: 'Price return plus estimated distributions, 12 and 24 month.',
+  yieldW:      'Distribution yield. Credit is capped at 40pp regardless of weight — a decay trap paying 90% cannot buy the top rank.',
+  maintenance: 'Lower margin maintenance frees more equity per dollar.',
+  catchUp:     'Boosts tickers whose bucket is under target; penalises over-target buckets.',
+};
+
+const WEIGHTS_KEY = 'triple-c-alloc-weights';
+
+/** Total point swing shared across the factors — keeps scores comparable as weights move. */
+const WEIGHT_BUDGET = 71;   // sum of DEFAULT_WEIGHTS
+
+function normaliseWeights(w: ScoringWeights): ScoringWeights {
+  const sum = Object.values(w).reduce((s, v) => s + Math.max(0, v), 0);
+  if (sum <= 0) return DEFAULT_WEIGHTS;
+  const k = WEIGHT_BUDGET / sum;
+  return {
+    sma:         Math.max(0, w.sma) * k,
+    nav:         Math.max(0, w.nav) * k,
+    totalReturn: Math.max(0, w.totalReturn) * k,
+    yieldW:      Math.max(0, w.yieldW) * k,
+    maintenance: Math.max(0, w.maintenance) * k,
+    catchUp:     Math.max(0, w.catchUp) * k,
+  };
+}
+
+function loadWeights(): ScoringWeights {
+  try {
+    const raw = localStorage.getItem(WEIGHTS_KEY);
+    if (!raw) return DEFAULT_WEIGHTS;
+    const parsed = JSON.parse(raw) as Partial<ScoringWeights>;
+    return { ...DEFAULT_WEIGHTS, ...parsed };
+  } catch { return DEFAULT_WEIGHTS; }
+}
+
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
 function scoreRow(
@@ -102,51 +172,64 @@ function scoreRow(
   overweight: boolean,
   /** Yield to score on — payment-derived where available, else r.yieldPct. */
   effYieldPct: number,
+  w: ScoringWeights,
 ): { score: number; signal: Signal; tr12: number | null; tr24: number | null } {
   let score = 50;
 
-  // vs 50-day SMA — below the average is the accumulation zone.
+  // Each factor produces a −1…+1 signal, then scales by its weight. The band
+  // thresholds are unchanged from the fixed-point version; only the magnitude
+  // is now user-controlled.
+
+  // vs moving average — below the average is the accumulation zone.
+  // Fractions are exact (2/3, 1/5, …) rather than rounded decimals so that at
+  // default weights this reproduces the previous fixed-point scores exactly.
+  // Approximating them drifted results by a point, which is enough to flip a
+  // signal band at its boundary.
   if (r.vsSma50Pct !== null) {
-    if (r.vsSma50Pct <= -10)     score += 15;
-    else if (r.vsSma50Pct <= -3) score += 10;
-    else if (r.vsSma50Pct <= 3)  score += 3;
-    else if (r.vsSma50Pct <= 10) score -= 5;
-    else                         score -= 10;
+    const s = r.vsSma50Pct <= -10 ? 1
+            : r.vsSma50Pct <= -3  ? 2 / 3
+            : r.vsSma50Pct <= 3   ? 1 / 5
+            : r.vsSma50Pct <= 10  ? -1 / 3
+            :                       -2 / 3;
+    score += s * w.sma;
   }
 
   // NAV premium/discount (CEFs with data).
   if (navDiscPct !== null) {
-    if (navDiscPct <= -5)      score += 10;
-    else if (navDiscPct <= 0)  score += 5;
-    else if (navDiscPct <= 15) score += 0;
-    else if (navDiscPct <= 30) score -= 5;
-    else                       score -= 15;
+    const s = navDiscPct <= -5 ? 1
+            : navDiscPct <= 0  ? 0.5
+            : navDiscPct <= 15 ? 0
+            : navDiscPct <= 30 ? -0.5
+            :                    -1.5;
+    score += s * w.nav;
   }
 
-  // Total return incl. estimated distributions.
+  // Total return incl. estimated distributions. Split ~60/40 across the two
+  // horizons so the 12-month figure leads and 24-month confirms.
   const tr12 = r.ret12Pct !== null ? r.ret12Pct + effYieldPct : null;
   const tr24 = r.ret24Pct !== null ? r.ret24Pct + effYieldPct * 2 : null;
   if (tr12 !== null) {
-    if (tr12 > 10)       score += 8;
-    else if (tr12 > 0)   score += 4;
-    else if (tr12 > -10) score -= 4;
-    else                 score -= 10;
+    const s = tr12 > 10 ? 1 : tr12 > 0 ? 0.5 : tr12 > -10 ? -0.5 : -1.25;
+    score += s * w.totalReturn * (8 / 13);
   }
   if (tr24 !== null) {
-    if (tr24 > 20)     score += 5;
-    else if (tr24 > 0) score += 2;
-    else               score -= 5;
+    const s = tr24 > 20 ? 1 : tr24 > 0 ? 0.4 : -1;
+    score += s * w.totalReturn * (5 / 13);
   }
 
-  // Yield credit, capped at 40pp so decay traps can't buy the top rank.
-  score += (Math.min(effYieldPct, 40) / 40) * 15;
+  // Yield. The 40pp cap is deliberately NOT weight-scaled — it is the guard
+  // that stops a fund distributing 90% while its NAV bleeds from buying the
+  // top rank. Raising the yield weight increases how much yield matters, but
+  // never lets an extreme yield dominate on its own.
+  score += (Math.min(effYieldPct, 40) / 40) * w.yieldW;
 
   // Margin maintenance — low-maintenance names free more equity per dollar.
-  score += Math.max(-10, Math.min(10, ((60 - r.maintenancePct) / 60) * 10));
+  const maintSignal = Math.max(-1, Math.min(1, (60 - r.maintenancePct) / 60));
+  score += maintSignal * w.maintenance;
 
   // Catch-up: this ticker's bucket is under target → contributions belong here.
-  if (catchUp) score += 8;
-  if (overweight) score -= 8;
+  if (catchUp) score += w.catchUp;
+  if (overweight) score -= w.catchUp;
 
   score = Math.round(Math.max(0, Math.min(100, score)));
 
@@ -193,6 +276,75 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   };
 
   const [pending, setPending] = useState(0);
+
+  // ── Set Targets from Current ────────────────────────────────────────────────
+  // The shipped bucket defaults are placeholders — the P2P material prescribes
+  // no percentages. Snapshotting the live allocation gives a real starting
+  // point, which matters because every drift figure and the whole contribution
+  // planner are measured against these numbers.
+  const liveTargets = useStrategyTargets(accountHash);
+  const [snapshotState, setSnapshotState] = useState<'idle' | 'saved'>('idle');
+
+  const setTargetsFromCurrent = () => {
+    if (totalValue <= 0) return;
+    const pctOf = (pillar: string) => {
+      const v = pillarSummary
+        .filter((p) => p.pillar === pillar)
+        .reduce((s, p) => s + p.totalValue, 0);
+      return (v / totalValue) * 100;
+    };
+
+    // Round to whole points, then push any rounding residue into High Yield so
+    // the four buckets total exactly 100 — drift math assumes that.
+    const growth = Math.round(pctOf('growth'));
+    const cornerstone = Math.round(pctOf('cornerstone'));
+    const triples = Math.round(pctOf('triples'));
+    const income = 100 - growth - cornerstone - triples;
+
+    updateStrategyTargets(
+      { ...liveTargets, growthPct: growth, cornerstonePct: cornerstone, incomePct: income, triplesPct: triples },
+      accountHash,
+    );
+    setSnapshotState('saved');
+    setTimeout(() => setSnapshotState('idle'), 2500);
+  };
+
+  // ── Scoring weights ─────────────────────────────────────────────────────────
+  const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
+  const [showWeights, setShowWeights] = useState(false);
+
+  // Read from localStorage after mount — reading during initial state would
+  // diverge between server and client render.
+  useEffect(() => { setWeights(loadWeights()); }, []);
+
+  const setWeight = (key: keyof ScoringWeights, value: number) => {
+    setWeights((prev) => {
+      const next = { ...prev, [key]: value };
+      try { localStorage.setItem(WEIGHTS_KEY, JSON.stringify(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
+
+  const resetWeights = () => {
+    setWeights(DEFAULT_WEIGHTS);
+    try { localStorage.removeItem(WEIGHTS_KEY); } catch { /* ignore */ }
+  };
+
+  const normalisedWeights = useMemo(() => normaliseWeights(weights), [weights]);
+  const weightsAreDefault = useMemo(
+    () => (Object.keys(DEFAULT_WEIGHTS) as (keyof ScoringWeights)[])
+      .every((k) => weights[k] === DEFAULT_WEIGHTS[k]),
+    [weights],
+  );
+  const weightSum = useMemo(
+    () => Object.values(weights).reduce((s, v) => s + Math.max(0, v), 0),
+    [weights],
+  );
+
+  /** True while the targets still look like the untouched shipped defaults. */
+  const targetsLookDefault =
+    targets.growthPct === 20 && targets.cornerstonePct === 20 &&
+    targets.incomePct === 50 && targets.triplesPct === 10;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -298,9 +450,9 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     const effYieldPct = derived ?? r.yieldPct;
     const effYieldSource: ScoredRow['effYieldSource'] = derived !== undefined ? 'derived' : r.yieldSource;
 
-    const s = scoreRow(r, navDiscPct, catchUp, over, effYieldPct);
+    const s = scoreRow(r, navDiscPct, catchUp, over, effYieldPct, normalisedWeights);
     return { ...r, navDiscPct, catchUp, effYieldPct, effYieldSource, ...s };
-  }), [rows, navMap, underTarget, overTarget, derivedYieldBySymbol]);
+  }), [rows, navMap, underTarget, overTarget, derivedYieldBySymbol, normalisedWeights]);
 
   // Top-N scored symbols for focus mode.
   const focusedSet = useMemo(() => {
@@ -458,6 +610,31 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
           <p className="text-xs text-[#7c82a0] mt-0.5">Scored universe, bucket targets, and a whole-share contribution planner</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <button
+            onClick={() => setShowWeights((v) => !v)}
+            title="Adjust how much each factor counts toward the score"
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors border ${
+              showWeights || !weightsAreDefault
+                ? 'bg-violet-600/20 text-violet-300 border-violet-500/30'
+                : 'text-[#9aa2c0] hover:text-white border-[#2d3248] hover:border-[#3d4468]'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Weights{!weightsAreDefault && ' •'}
+          </button>
+          <button
+            onClick={setTargetsFromCurrent}
+            disabled={totalValue <= 0}
+            title="Snapshot your current bucket allocation as the target"
+            className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors border ${
+              snapshotState === 'saved'
+                ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30'
+                : 'text-[#9aa2c0] hover:text-white border-[#2d3248] hover:border-[#3d4468]'
+            } disabled:opacity-40 disabled:cursor-not-allowed`}
+          >
+            <Crosshair className="w-3.5 h-3.5" />
+            {snapshotState === 'saved' ? 'Targets set' : 'Set Targets from Current'}
+          </button>
           {focus && (
             <div className="flex items-center gap-0.5">
               {[5, 10, 15].map((n) => (
@@ -554,6 +731,64 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
         ))}
       </div>
 
+      {/* Scoring weights */}
+      {showWeights && (
+        <div className="bg-[#12151f] border border-violet-500/25 rounded-lg p-4">
+          <div className="flex items-center justify-between mb-3">
+            <div>
+              <span className="text-sm font-semibold text-white">Scoring Weights</span>
+              <p className="text-[10px] text-[#4a5070] mt-0.5">
+                Relative importance of each factor. Values normalise to a fixed total, so raising one
+                factor trades against the others instead of inflating every score.
+              </p>
+            </div>
+            <button
+              onClick={resetWeights}
+              disabled={weightsAreDefault}
+              className="text-[11px] px-2 py-1 rounded border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              Reset
+            </button>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-x-6 gap-y-3">
+            {(Object.keys(DEFAULT_WEIGHTS) as (keyof ScoringWeights)[]).map((key) => {
+              const share = weightSum > 0 ? (Math.max(0, weights[key]) / weightSum) * 100 : 0;
+              return (
+                <div key={key}>
+                  <div className="flex items-center justify-between text-xs mb-1">
+                    <span className="text-[#9aa2c0]" title={WEIGHT_HELP[key]}>{WEIGHT_LABELS[key]}</span>
+                    <span className="tabular-nums text-[#7c82a0]">
+                      {share.toFixed(0)}%
+                      {weights[key] !== DEFAULT_WEIGHTS[key] && (
+                        <span className="ml-1 text-violet-300">•</span>
+                      )}
+                    </span>
+                  </div>
+                  <input
+                    type="range" min={0} max={30} step={1}
+                    value={weights[key]}
+                    onChange={(e) => setWeight(key, Number(e.target.value))}
+                    className="w-full accent-violet-500"
+                    aria-label={WEIGHT_LABELS[key]}
+                  />
+                  <p className="text-[10px] text-[#4a5070] mt-0.5 leading-snug">{WEIGHT_HELP[key]}</p>
+                </div>
+              );
+            })}
+          </div>
+
+          {weights.yieldW >= 25 && (
+            <p className="text-[10px] text-yellow-200/80 mt-3 border-t border-[#1f2334] pt-2">
+              Yield is weighted heavily. The 40pp credit cap still applies, but note that
+              distribution yield and total return can point in opposite directions — a fund paying
+              50% while its NAV erodes scores well on yield and badly on total return. Consider
+              whether Total Return deserves comparable weight.
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Insights + calculator side by side */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4 space-y-2">
@@ -561,6 +796,20 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
             <Lightbulb className="w-4 h-4 text-yellow-300" />
             <span className="text-sm font-semibold text-white">Rebalance Insights</span>
           </div>
+          {/* Every insight below is drift measured against the targets. If those
+              are still the shipped placeholders, the drift is meaningless and
+              saying so is more useful than listing it. */}
+          {targetsLookDefault && (
+            <div className="text-xs leading-relaxed flex gap-2 text-yellow-200/90 border border-yellow-500/20 bg-yellow-500/5 rounded p-2 mb-1">
+              <span className="flex-shrink-0">⚑</span>
+              <span>
+                These are the shipped default targets, not yours — the P2P material
+                prescribes no bucket percentages. Everything below is drift against a
+                placeholder until you set real ones. &ldquo;Set Targets from Current&rdquo;
+                snapshots where you actually are.
+              </span>
+            </div>
+          )}
           {insights.map((i, idx) => (
             <div key={idx} className={`text-xs leading-relaxed flex gap-2 ${i.warn ? 'text-orange-200' : 'text-[#9aa2c0]'}`}>
               <span className="flex-shrink-0">{i.warn ? '⚠' : '•'}</span>
