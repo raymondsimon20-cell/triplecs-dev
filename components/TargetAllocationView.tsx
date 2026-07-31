@@ -16,7 +16,11 @@
  *   - Catch-up need (bucket under its target gets a boost)
  *
  * Signals: Strong Add / Add / Neutral / Hold / Trim.
- * Universe: real positions ≥ $500 — 1-share seeds are never scored.
+ *
+ * Universe: every equity position, seeds included. Sub-$500 bookmarks are
+ * scored precisely because scale-up decisions are what they exist for, but the
+ * seed convention keeps them out of Trim/Hold — they aren't harvestable
+ * positions, so a sell rating on one is not an action anyone can take.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -24,6 +28,8 @@ import { Crosshair, RefreshCw, Calculator, Lightbulb, DollarSign, Layers, Trendi
 import { StatCard as Stat } from '@/components/StatCard';
 import { useSort, SortTh } from '@/components/sortable';
 import type { AllocationRow } from '@/app/api/target-allocation/route';
+import type { DividendRecord } from '@/components/DividendsView';
+import { deriveCadence, annualiseFromHistory } from '@/lib/portfolio/dividend-cadence';
 
 const fmt$ = (n: number, dec = 2) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -31,6 +37,16 @@ const signedPct = (n: number, dec = 1) => (n >= 0 ? '+' : '') + n.toFixed(dec) +
 const plColor = (n: number) => (n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-[#9aa2c0]');
 
 type Signal = 'Strong Add' | 'Add' | 'Neutral' | 'Hold' | 'Trim';
+
+/**
+ * Sort rank for the Signal column. Sorting on raw score looks equivalent but
+ * isn't: the 30% NAV-premium rule and the seed convention both override the
+ * signal independently of score, so a forced Trim would otherwise sort as
+ * though it were still top-rated.
+ */
+const SIGNAL_RANK: Record<Signal, number> = {
+  'Strong Add': 5, 'Add': 4, 'Neutral': 3, 'Hold': 2, 'Trim': 1,
+};
 
 const SIGNAL_CLASS: Record<Signal, string> = {
   'Strong Add': 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30',
@@ -51,6 +67,9 @@ export interface ScoredRow extends AllocationRow {
   score:      number;
   signal:     Signal;
   catchUp:    boolean;
+  /** Yield actually used for scoring — derived from payments where possible. */
+  effYieldPct:   number;
+  effYieldSource: 'derived' | AllocationRow['yieldSource'];
 }
 
 interface PillarSummaryRow { pillar: string; totalValue: number }
@@ -60,11 +79,30 @@ interface Props {
   totalValue:     number;
   pillarSummary:  PillarSummaryRow[];
   targets:        { triplesPct: number; cornerstonePct: number; incomePct: number; hedgePct: number };
+  /** Dividend payment history, used to derive real yields. Optional — falls
+   *  back to Schwab's quoted yield and the static table when absent. */
+  dividends?:     DividendRecord[];
 }
+
+/**
+ * Sanity bound on derived yield. A payment-history yield can blow up when the
+ * share count grew sharply mid-window (trailing payments were earned on far
+ * fewer shares than are held now) or when a special distribution lands in the
+ * sample. Past this, trust the quoted figure instead of a number built from a
+ * distorted denominator.
+ */
+const MAX_DERIVED_YIELD_PCT = 150;
 
 // ─── Scoring ──────────────────────────────────────────────────────────────────
 
-function scoreRow(r: AllocationRow, navDiscPct: number | null, catchUp: boolean, overweight: boolean): { score: number; signal: Signal; tr12: number | null; tr24: number | null } {
+function scoreRow(
+  r: AllocationRow,
+  navDiscPct: number | null,
+  catchUp: boolean,
+  overweight: boolean,
+  /** Yield to score on — payment-derived where available, else r.yieldPct. */
+  effYieldPct: number,
+): { score: number; signal: Signal; tr12: number | null; tr24: number | null } {
   let score = 50;
 
   // vs 50-day SMA — below the average is the accumulation zone.
@@ -86,8 +124,8 @@ function scoreRow(r: AllocationRow, navDiscPct: number | null, catchUp: boolean,
   }
 
   // Total return incl. estimated distributions.
-  const tr12 = r.ret12Pct !== null ? r.ret12Pct + r.yieldPct : null;
-  const tr24 = r.ret24Pct !== null ? r.ret24Pct + r.yieldPct * 2 : null;
+  const tr12 = r.ret12Pct !== null ? r.ret12Pct + effYieldPct : null;
+  const tr24 = r.ret24Pct !== null ? r.ret24Pct + effYieldPct * 2 : null;
   if (tr12 !== null) {
     if (tr12 > 10)       score += 8;
     else if (tr12 > 0)   score += 4;
@@ -101,7 +139,7 @@ function scoreRow(r: AllocationRow, navDiscPct: number | null, catchUp: boolean,
   }
 
   // Yield credit, capped at 40pp so decay traps can't buy the top rank.
-  score += (Math.min(r.yieldPct, 40) / 40) * 15;
+  score += (Math.min(effYieldPct, 40) / 40) * 15;
 
   // Margin maintenance — low-maintenance names free more equity per dollar.
   score += Math.max(-10, Math.min(10, ((60 - r.maintenancePct) / 60) * 10));
@@ -130,7 +168,7 @@ function scoreRow(r: AllocationRow, navDiscPct: number | null, catchUp: boolean,
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function TargetAllocationView({ accountHash, totalValue, pillarSummary, targets }: Props) {
+export function TargetAllocationView({ accountHash, totalValue, pillarSummary, targets, dividends = [] }: Props) {
   const [rows, setRows]         = useState<AllocationRow[]>([]);
   const [navMap, setNavMap]     = useState<Record<string, number>>({});
   const [loading, setLoading]   = useState(true);
@@ -214,14 +252,55 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   const underTarget = useMemo(() => new Set(buckets.filter((b) => b.gapPp > 2).map((b) => b.pillar as string)), [buckets]);
   const overTarget  = useMemo(() => new Set(buckets.filter((b) => b.gapPp < -2).map((b) => b.pillar as string)), [buckets]);
 
+  // ── Payment-derived yields ──────────────────────────────────────────────────
+  // The API's yieldPct comes from Schwab's quoted divYield with a static
+  // fallback table. Both go stale — the same problem that had the YieldMax
+  // weeklies projected at a quarter of their real income. Where we have enough
+  // payment history to establish a cadence, annualising observed payments is
+  // strictly better evidence than a quoted number.
+  const derivedYieldBySymbol = useMemo(() => {
+    if (dividends.length === 0) return new Map<string, number>();
+
+    const bySymbol = new Map<string, { date: string; amount: number }[]>();
+    for (const d of dividends) {
+      const list = bySymbol.get(d.symbol) ?? [];
+      list.push({ date: d.date, amount: d.amount });
+      bySymbol.set(d.symbol, list);
+    }
+
+    const out = new Map<string, number>();
+    for (const r of rows) {
+      const history = bySymbol.get(r.symbol);
+      if (!history || history.length < 2 || r.marketValue <= 0) continue;
+
+      const cadence = deriveCadence(history.map((h) => h.date));
+      // Only trust a cadence we actually measured. A fallback cadence would
+      // just reintroduce the static table through a longer path.
+      if (!cadence.derived) continue;
+
+      const annual = annualiseFromHistory(history, cadence);
+      if (annual <= 0) continue;
+
+      const pct = (annual / r.marketValue) * 100;
+      if (!Number.isFinite(pct) || pct <= 0 || pct > MAX_DERIVED_YIELD_PCT) continue;
+      out.set(r.symbol, Math.round(pct * 100) / 100);
+    }
+    return out;
+  }, [dividends, rows]);
+
   // ── Scored rows ─────────────────────────────────────────────────────────────
   const scored: ScoredRow[] = useMemo(() => rows.map((r) => {
     const navDiscPct = navMap[r.symbol] ?? null;
     const catchUp    = underTarget.has(r.pillar);
     const over       = overTarget.has(r.pillar);
-    const s = scoreRow(r, navDiscPct, catchUp, over);
-    return { ...r, navDiscPct, catchUp, ...s };
-  }), [rows, navMap, underTarget, overTarget]);
+
+    const derived = derivedYieldBySymbol.get(r.symbol);
+    const effYieldPct = derived ?? r.yieldPct;
+    const effYieldSource: ScoredRow['effYieldSource'] = derived !== undefined ? 'derived' : r.yieldSource;
+
+    const s = scoreRow(r, navDiscPct, catchUp, over, effYieldPct);
+    return { ...r, navDiscPct, catchUp, effYieldPct, effYieldSource, ...s };
+  }), [rows, navMap, underTarget, overTarget, derivedYieldBySymbol]);
 
   // Top-N scored symbols for focus mode.
   const focusedSet = useMemo(() => {
@@ -239,11 +318,12 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     symbol: (r) => r.symbol,
     pillar: (r) => r.pillar,
     score:  (r) => r.score,
-    signal: (r) => r.score,
+    // Tie-break within a signal band by score, so the order stays meaningful.
+    signal: (r) => SIGNAL_RANK[r.signal] * 1000 + r.score,
     sma:    (r) => r.vsSma50Pct ?? Number.NEGATIVE_INFINITY,
     tr12:   (r) => r.tr12 ?? Number.NEGATIVE_INFINITY,
     tr24:   (r) => r.tr24 ?? Number.NEGATIVE_INFINITY,
-    yield:  (r) => r.yieldPct,
+    yield:  (r) => r.effYieldPct,
     nav:    (r) => r.navDiscPct ?? Number.NEGATIVE_INFINITY,
     margin: (r) => r.maintenancePct,
   }), [visibleScored, sortRows]);
@@ -251,7 +331,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   // ── Blended yield (scored universe, value-weighted) ────────────────────────
   const blended = useMemo(() => {
     let v = 0, y = 0;
-    for (const r of scored) { v += r.marketValue; y += r.marketValue * (r.yieldPct / 100); }
+    for (const r of scored) { v += r.marketValue; y += r.marketValue * (r.effYieldPct / 100); }
     return v > 0 ? (y / v) * 100 : 0;
   }, [scored]);
 
@@ -267,9 +347,14 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     const trims = scored.filter((r) => r.signal === 'Trim').map((r) => r.symbol);
     if (trims.length) out.push({ text: `Trim candidates: ${trims.join(', ')}.`, warn: true });
     for (const r of scored) {
-      if (r.navDiscPct !== null && r.navDiscPct > 30) {
-        out.push({ text: `${r.symbol} trades at a ${r.navDiscPct.toFixed(1)}% NAV premium — Vol-7 box/sell threshold (30%) breached.`, warn: true });
-      }
+      if (r.navDiscPct === null || r.navDiscPct <= 30) continue;
+      // Seeds get their Trim upgraded to Neutral in the table, so telling the
+      // user to box/sell one here would contradict the row they're looking at.
+      // The premium still matters for a seed — it argues against scaling up —
+      // so the warning stays, worded as the action actually available.
+      out.push(r.isSeed
+        ? { text: `${r.symbol} (seed) trades at a ${r.navDiscPct.toFixed(1)}% NAV premium — above the Vol-7 30% threshold, so hold off on scaling this one up.`, warn: true }
+        : { text: `${r.symbol} trades at a ${r.navDiscPct.toFixed(1)}% NAV premium — Vol-7 box/sell threshold (30%) breached.`, warn: true });
     }
     if (out.length === 0) out.push({ text: 'All buckets within 2pp of target and no signal outliers — nothing urgent.' });
     return out;
@@ -280,8 +365,8 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     const cash = Number(contribution);
     if (!Number.isFinite(cash) || cash <= 0) return null;
 
-    // 1. Split contribution across buckets proportional to positive gaps
-    //    (recomputed against the post-contribution total). Residual → income.
+    // 1. Split the contribution across buckets in proportion to how far each is
+    //    below its target, measured against the post-contribution total.
     const newTotal = totalValue + cash;
     const gaps = buckets.map((b) => ({
       pillar: b.pillar as string,
@@ -289,22 +374,31 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     }));
     const gapSum = gaps.reduce((s, g) => s + g.gap, 0);
     const bucketAlloc: Record<string, number> = {};
-    if (gapSum <= 0) {
-      bucketAlloc['income'] = cash;
-    } else {
-      let assigned = 0;
-      for (const g of gaps) {
-        const a = Math.min(g.gap, (g.gap / gapSum) * cash);
-        bucketAlloc[g.pillar] = a;
-        assigned += a;
+
+    // Every bucket at or above target. Previously this dumped the entire
+    // contribution into Income, which is an arbitrary choice that quietly
+    // overweights one bucket. Split by target weights instead, so a deposit
+    // made when you're already balanced preserves the balance.
+    const allAtTarget = gapSum <= 0;
+    if (allAtTarget) {
+      const targetSum = buckets.reduce((s, b) => s + b.targetPct, 0);
+      for (const b of buckets) {
+        if (targetSum > 0) bucketAlloc[b.pillar as string] = cash * (b.targetPct / targetSum);
       }
-      bucketAlloc['income'] = (bucketAlloc['income'] ?? 0) + (cash - assigned);
+    } else {
+      // Cap each bucket at the dollars needed to reach its target; anything
+      // left over stays unassigned rather than being forced somewhere.
+      for (const g of gaps) {
+        bucketAlloc[g.pillar] = Math.min(g.gap, (g.gap / gapSum) * cash);
+      }
     }
 
     // 2. Within each bucket: top-scored addable tickers (max 3), score-weighted,
     //    whole shares only.
     const buys = new Map<string, { shares: number; price: number; score: number; signal: Signal; pillar: string }>();
+    const bucketDetail: { pillar: string; allocated: number; deployed: number; reason?: string }[] = [];
     let spent = 0;
+
     for (const [pillar, alloc] of Object.entries(bucketAlloc)) {
       if (alloc < 1) continue;
       const candidates = scored
@@ -312,39 +406,44 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
         .filter((r) => !focus || focusedSet.has(r.symbol))
         .sort((a, b) => b.score - a.score)
         .slice(0, 3);
-      if (candidates.length === 0) continue;
+
+      if (candidates.length === 0) {
+        bucketDetail.push({
+          pillar, allocated: alloc, deployed: 0,
+          reason: focus ? 'no Add-rated candidates in focus set' : 'no Add-rated candidates',
+        });
+        continue;
+      }
+
       const wSum = candidates.reduce((s, c) => s + c.score, 0);
+      let bucketSpent = 0;
       for (const c of candidates) {
         const dollars = alloc * (c.score / wSum);
         const shares = Math.floor(dollars / c.price);
         if (shares <= 0) continue;
         const prev = buys.get(c.symbol);
         buys.set(c.symbol, { shares: (prev?.shares ?? 0) + shares, price: c.price, score: c.score, signal: c.signal, pillar });
-        spent += shares * c.price;
+        bucketSpent += shares * c.price;
       }
+      spent += bucketSpent;
+      bucketDetail.push({
+        pillar, allocated: alloc, deployed: bucketSpent,
+        reason: bucketSpent === 0 ? 'share prices exceed the bucket allocation' : undefined,
+      });
     }
 
-    // 3. Greedy sweep: keep buying single shares of the best-scored affordable
-    //    candidate until nothing fits.
-    const addable = scored
-      .filter((r) => (r.signal === 'Strong Add' || r.signal === 'Add') && r.price > 0)
-      .filter((r) => !focus || focusedSet.has(r.symbol))
-      .sort((a, b) => b.score - a.score);
-    let leftover = cash - spent;
-    let guard = 500;
-    while (guard-- > 0) {
-      const next = addable.find((r) => r.price <= leftover);
-      if (!next) break;
-      const prev = buys.get(next.symbol);
-      buys.set(next.symbol, { shares: (prev?.shares ?? 0) + 1, price: next.price, score: next.score, signal: next.signal, pillar: next.pillar });
-      spent += next.price;
-      leftover -= next.price;
-    }
-
+    // No greedy sweep. Buying single shares of the top-scored name until the
+    // cash runs out concentrates the residual into one ticker and discards the
+    // bucket split computed above — in the all-at-target case it could route the
+    // entire deposit into one symbol. Unspent cash is reported as cash.
     const list = [...buys.entries()]
       .map(([symbol, b]) => ({ symbol, ...b, cost: b.shares * b.price }))
       .sort((a, b) => b.cost - a.cost);
-    return { list, spent, leftover: cash - spent, cash };
+
+    return {
+      list, spent, leftover: cash - spent, cash, allAtTarget,
+      bucketDetail: bucketDetail.sort((a, b) => b.allocated - a.allocated),
+    };
   }, [contribution, buckets, scored, totalValue, focus, focusedSet]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
@@ -506,10 +605,42 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
                 <span className="text-[#7c82a0]">Cash remaining</span>
                 <span className="text-[#9aa2c0] tabular-nums">{fmt$(plan.leftover)}</span>
               </div>
+
+              {/* Where the money went, and why any of it didn't. Whole-share
+                  rounding always leaves a remainder; naming the cause keeps it
+                  from looking like the planner silently dropped cash. */}
+              {plan.leftover > 1 && (
+                <div className="border-t border-[#1f2334] pt-1.5 mt-1.5 space-y-1">
+                  <div className="text-[10px] text-[#7c82a0]">
+                    {fmt$(plan.leftover)} unallocated — held as cash rather than forced into whole shares.
+                  </div>
+                  {plan.bucketDetail.filter((d) => d.reason).map((d) => (
+                    <div key={d.pillar} className="text-[10px] text-[#4a5070]">
+                      {PILLAR_LABEL[d.pillar] ?? d.pillar}: {fmt$(d.allocated, 0)} allocated, none deployed — {d.reason}.
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {plan.allAtTarget && (
+                <p className="text-[10px] text-[#4a5070] pt-1">
+                  All buckets are at or above target, so this splits by target weights to preserve the
+                  current mix rather than favoring any one bucket.
+                </p>
+              )}
             </div>
           )}
           {plan && plan.list.length === 0 && (
-            <p className="text-xs text-[#4a5070]">No Add-rated tickers are affordable at this amount.</p>
+            <div className="space-y-1">
+              <p className="text-xs text-[#4a5070]">
+                Nothing to buy at {fmt$(plan.cash, 0)} — the full amount stays in cash.
+              </p>
+              {plan.bucketDetail.filter((d) => d.reason).map((d) => (
+                <p key={d.pillar} className="text-[10px] text-[#4a5070]">
+                  {PILLAR_LABEL[d.pillar] ?? d.pillar}: {fmt$(d.allocated, 0)} allocated — {d.reason}.
+                </p>
+              ))}
+            </div>
           )}
           {!plan && <p className="text-[10px] text-[#4a5070]">Enter an amount to see a score-weighted, bucket-aware buy plan. Informational only — stage orders through the normal workflow.</p>}
         </div>
@@ -536,7 +667,9 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
             <tbody>
               {loading && <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">Computing metrics (price history for the whole universe — first load takes a moment)…</td></tr>}
               {!loading && tableRows.length === 0 && !error && (
-                <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">No scoreable positions (≥ $500) found.</td></tr>
+                <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">
+                  {focus ? 'No positions in the current focus set.' : 'No equity positions found to score.'}
+                </td></tr>
               )}
               {tableRows.map((r) => (
                 <tr key={r.symbol} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
@@ -561,8 +694,17 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
                   <td className={`px-2 py-2 text-right tabular-nums ${r.tr24 !== null ? plColor(r.tr24) : 'text-[#4a5070]'}`}>
                     {r.tr24 !== null ? signedPct(r.tr24) : '—'}
                   </td>
-                  <td className="px-2 py-2 text-right tabular-nums text-emerald-400/90">
-                    {r.yieldPct > 0 ? `${r.yieldPct.toFixed(1)}%` : '—'}
+                  <td
+                    className={`px-2 py-2 text-right tabular-nums ${r.effYieldSource === 'derived' ? 'text-emerald-400/90' : 'text-emerald-400/50'}`}
+                    title={
+                      r.effYieldSource === 'derived'
+                        ? `Derived from actual payments${derivedYieldBySymbol.has(r.symbol) && r.yieldPct > 0 ? ` — quoted yield is ${r.yieldPct.toFixed(1)}%` : ''}`
+                        : r.effYieldSource === 'live' ? 'Schwab quoted yield'
+                        : r.effYieldSource === 'fallback' ? 'Static fallback table — no live or payment data'
+                        : 'No yield data'
+                    }
+                  >
+                    {r.effYieldPct > 0 ? `${r.effYieldPct.toFixed(1)}%` : '—'}
                   </td>
                   <td className={`px-2 py-2 text-right tabular-nums ${r.navDiscPct !== null ? (r.navDiscPct > 30 ? 'text-red-400' : r.navDiscPct < 0 ? 'text-emerald-400' : 'text-[#9aa2c0]') : 'text-[#4a5070]'}`}>
                     {r.navDiscPct !== null ? signedPct(r.navDiscPct) : '—'}

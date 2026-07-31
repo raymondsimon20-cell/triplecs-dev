@@ -1460,6 +1460,7 @@ export default function DashboardPage() {
             accountHash={isAll ? undefined : account.accountHash}
             totalValue={account.totalValue}
             pillarSummary={account.pillarSummary}
+            dividends={dividendRecords}
             targets={{
               triplesPct:     strategyTargets.triplesPct,
               cornerstonePct: strategyTargets.cornerstonePct,
