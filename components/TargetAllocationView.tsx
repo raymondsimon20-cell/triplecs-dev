@@ -313,6 +313,20 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   // the residual after the bucket split simply stays in cash.
   const [maximiseDeployment, setMaximiseDeployment] = useState(true);
 
+  // Percentage basis for the bucket rows. Portfolio % compares against targets;
+  // share-of-invested answers "how is my invested capital actually split",
+  // which differs whenever cash or unclassified holdings are material.
+  const [showAsPortfolioPct, setShowAsPortfolioPct] = useState(true);
+
+  // Signal filter. Empty set means no filter — the table shows everything.
+  const [signalFilter, setSignalFilter] = useState<Set<Signal>>(new Set());
+  const toggleSignal = (s: Signal) =>
+    setSignalFilter((prev) => {
+      const next = new Set(prev);
+      if (next.has(s)) next.delete(s); else next.add(s);
+      return next;
+    });
+
   // ── Scoring weights ─────────────────────────────────────────────────────────
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [showWeights, setShowWeights] = useState(false);
@@ -470,7 +484,21 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   );
 
   const { sortKey, sortDir, requestSort, sortRows } = useSort<ScoredRow>('score');
-  const tableRows = useMemo(() => sortRows(visibleScored, {
+  // Signal counts are computed off the focus-filtered set but before the signal
+  // filter itself, so the chips keep showing what is available to select rather
+  // than collapsing to the current selection.
+  const signalCounts = useMemo(() => {
+    const c = new Map<Signal, number>();
+    for (const r of visibleScored) c.set(r.signal, (c.get(r.signal) ?? 0) + 1);
+    return c;
+  }, [visibleScored]);
+
+  const signalFiltered = useMemo(
+    () => (signalFilter.size === 0 ? visibleScored : visibleScored.filter((r) => signalFilter.has(r.signal))),
+    [visibleScored, signalFilter],
+  );
+
+  const tableRows = useMemo(() => sortRows(signalFiltered, {
     symbol: (r) => r.symbol,
     pillar: (r) => r.pillar,
     score:  (r) => r.score,
@@ -482,7 +510,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     yield:  (r) => r.effYieldPct,
     nav:    (r) => r.navDiscPct ?? Number.NEGATIVE_INFINITY,
     margin: (r) => r.maintenancePct,
-  }), [visibleScored, sortRows]);
+  }), [signalFiltered, sortRows]);
 
   // ── Blended yield (scored universe, value-weighted) ────────────────────────
   const blended = useMemo(() => {
@@ -490,6 +518,66 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     for (const r of scored) { v += r.marketValue; y += r.marketValue * (r.effYieldPct / 100); }
     return v > 0 ? (y / v) * 100 : 0;
   }, [scored]);
+
+  /**
+   * Per-bucket blended yield, value-weighted within each bucket.
+   *
+   * This is where the portfolio figure gets its shape: a single blended number
+   * hides that one bucket is doing nearly all the income work while another
+   * contributes almost none. Growth in particular should read low by design —
+   * it is there to appreciate and support margin equity, not to pay.
+   */
+  const bucketYields = useMemo(() => {
+    const acc = new Map<string, { value: number; income: number }>();
+    for (const r of scored) {
+      const cur = acc.get(r.pillar) ?? { value: 0, income: 0 };
+      cur.value  += r.marketValue;
+      cur.income += r.marketValue * (r.effYieldPct / 100);
+      acc.set(r.pillar, cur);
+    }
+    return acc;
+  }, [scored]);
+
+  const yieldFor = (pillar: string) => {
+    const a = bucketYields.get(pillar);
+    return a && a.value > 0 ? (a.income / a.value) * 100 : 0;
+  };
+
+  /**
+   * A bucket's share of invested capital, as opposed to share of portfolio.
+   * The two diverge when cash or unclassified holdings are material — the
+   * portfolio figure is what targets are measured against, while this one
+   * answers how the money actually at work is split.
+   */
+  const investedTotal = useMemo(
+    () => buckets.reduce((s, b) => s + b.actual$, 0),
+    [buckets],
+  );
+  const bucketShareOf = (b: { actual$: number }) =>
+    investedTotal > 0 ? (b.actual$ / investedTotal) * 100 : 0;
+
+  /**
+   * Blended yield the portfolio would carry at the target weights, holding each
+   * bucket's current yield constant. Answers "if I rebalance to target, what
+   * happens to my income?" — which is not obvious when the underweight bucket
+   * happens to be the low-yielding one.
+   */
+  const targetBlendedYield = useMemo(() => {
+    const w: Record<string, number> = {
+      growth: targets.growthPct, cornerstone: targets.cornerstonePct,
+      income: targets.incomePct, triples: targets.triplesPct,
+    };
+    let sum = 0, weightSum = 0;
+    for (const [pillar, pct] of Object.entries(w)) {
+      const y = yieldFor(pillar);
+      // A bucket with no holdings has no observed yield; excluding it avoids
+      // dragging the projection to zero on the strength of an empty sleeve.
+      if (!bucketYields.has(pillar)) continue;
+      sum += pct * y;
+      weightSum += pct;
+    }
+    return weightSum > 0 ? sum / weightSum : 0;
+  }, [targets, bucketYields]);
 
   // ── Rebalance insights ──────────────────────────────────────────────────────
   const insights = useMemo(() => {
@@ -755,7 +843,15 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
 
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={DollarSign} label="Est. Blended Yield" value={`${blended.toFixed(2)}%`} sub="value-weighted, scored universe" valueClass="text-emerald-400" accentClass="border-t-violet-500/60" index={0} />
+        <Stat
+          icon={DollarSign}
+          label="Est. Blended Yield"
+          value={`${blended.toFixed(2)}%`}
+          sub={`at target weights: ${targetBlendedYield.toFixed(2)}%`}
+          valueClass="text-emerald-400"
+          accentClass="border-t-violet-500/60"
+          index={0}
+        />
         <Stat icon={Layers} label="Scored Tickers" value={String(scored.length)} sub="full universe · seeds never rated below Neutral" accentClass="border-t-violet-500/60" index={1} />
         <Stat icon={TrendingUp} label="Strong Add / Add" value={String(scored.filter((r) => r.signal === 'Strong Add' || r.signal === 'Add').length)} accentClass="border-t-violet-500/60" index={2} />
         <Stat icon={AlertTriangle} label="Hold / Trim" value={String(scored.filter((r) => r.signal === 'Hold' || r.signal === 'Trim').length)} iconClass="text-orange-400/60" accentClass="border-t-violet-500/60" index={3} />
@@ -763,13 +859,42 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
 
       {/* Bucket allocations */}
       <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4 space-y-3">
-        <span className="text-sm font-semibold text-white">Bucket Allocations</span>
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-semibold text-white">Bucket Allocations</span>
+          <div className="flex items-center gap-0.5 text-[10px]">
+            {([['% Portfolio', true], ['% Invested', false]] as const).map(([label, val]) => (
+              <button
+                key={label}
+                onClick={() => setShowAsPortfolioPct(val)}
+                className={`px-2 py-1 rounded transition-colors ${
+                  showAsPortfolioPct === val
+                    ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30'
+                    : 'text-[#7c82a0] hover:text-white border border-transparent'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
         {buckets.map((b) => (
           <div key={b.pillar} className="space-y-1">
             <div className="flex justify-between text-[11px]">
-              <span className="text-[#9aa2c0]">{PILLAR_LABEL[b.pillar]}</span>
+              <span className="text-[#9aa2c0]">
+                {PILLAR_LABEL[b.pillar]}
+                <span
+                  className="ml-1.5 text-[10px] text-emerald-400/80 tabular-nums"
+                  title={`Blended yield within ${PILLAR_LABEL[b.pillar]}, value-weighted`}
+                >
+                  {yieldFor(b.pillar).toFixed(1)}% yld
+                </span>
+              </span>
               <span className="tabular-nums text-[#7c82a0]">
-                {b.actualPct.toFixed(1)}% / {b.targetPct}% target ·{' '}
+                {fmt$(b.actual$, 0)} ·{' '}
+                {showAsPortfolioPct
+                  ? `${b.actualPct.toFixed(1)}% / ${b.targetPct}% target`
+                  : `${bucketShareOf(b).toFixed(1)}% of invested`}
+                {' '}·{' '}
                 <span className={b.gapPp > 2 ? 'text-emerald-400' : b.gapPp < -2 ? 'text-orange-300' : 'text-[#4a5070]'}>
                   {b.gapPp > 0 ? `${fmt$(b.gap$, 0)} to add` : b.gapPp < 0 ? `${fmt$(Math.abs(b.gap$), 0)} over` : 'on target'}
                 </span>
@@ -972,6 +1097,36 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
 
       {/* Scored table */}
       <div className="bg-[#12151f] border border-[#1f2334] rounded-lg overflow-hidden">
+        <div className="flex items-center gap-1.5 px-4 py-2.5 border-b border-[#1f2334] flex-wrap">
+          <span className="text-[10px] text-[#4a5070] mr-1">Filter:</span>
+          {(['Strong Add', 'Add', 'Neutral', 'Hold', 'Trim'] as Signal[]).map((s) => {
+            const count = signalCounts.get(s) ?? 0;
+            const active = signalFilter.has(s);
+            return (
+              <button
+                key={s}
+                onClick={() => toggleSignal(s)}
+                disabled={count === 0 && !active}
+                className={`text-[10px] px-1.5 py-0.5 rounded transition-colors disabled:opacity-30 disabled:cursor-not-allowed ${
+                  active ? SIGNAL_CLASS[s] : 'bg-[#1a1e2e] text-[#7c82a0] border border-transparent hover:text-white'
+                }`}
+              >
+                {s} <span className="tabular-nums opacity-70">{count}</span>
+              </button>
+            );
+          })}
+          {signalFilter.size > 0 && (
+            <button
+              onClick={() => setSignalFilter(new Set())}
+              className="text-[10px] px-1.5 py-0.5 rounded text-blue-400 hover:text-blue-300 ml-1"
+            >
+              Clear
+            </button>
+          )}
+          <span className="ml-auto text-[10px] text-[#4a5070] tabular-nums">
+            {tableRows.length} of {scored.length}
+          </span>
+        </div>
         <div className="overflow-x-auto">
           <table className="w-full text-xs">
             <thead>
@@ -992,7 +1147,10 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
               {loading && <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">Computing metrics (price history for the whole universe — first load takes a moment)…</td></tr>}
               {!loading && tableRows.length === 0 && !error && (
                 <tr><td colSpan={10} className="px-4 py-6 text-[#4a5070]">
-                  {focus ? 'No positions in the current focus set.' : 'No equity positions found to score.'}
+                  {signalFilter.size > 0
+                    ? 'No tickers match the selected signals.'
+                    : focus ? 'No positions in the current focus set.'
+                    : 'No equity positions found to score.'}
                 </td></tr>
               )}
               {tableRows.map((r) => (
