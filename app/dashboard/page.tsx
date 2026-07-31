@@ -23,7 +23,7 @@ import {
   RefreshCw, LogOut, AlertTriangle, AlertCircle, CheckCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
-  Inbox, X, Wallet, History, Calculator, Activity, Layers, Shuffle,
+  Inbox, X, Wallet, History, Calculator, Activity, Layers, Shuffle, Flag,
   ArrowLeftRight, CalendarCheck, Plug, Wrench, Crosshair,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -51,6 +51,7 @@ import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { DripStatusPanel } from '@/components/DripStatusPanel';
 import { PutInsurancePanel } from '@/components/PutInsurancePanel';
+import { MilestonesPanel } from '@/components/MilestonesPanel';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { OptionsCloseRecsPanel } from '@/components/OptionsCloseRecsPanel';
 import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyTargetsFor } from '@/components/SettingsPanel';
@@ -1470,6 +1471,26 @@ export default function DashboardPage() {
 
             {/* Downturn playbook — what happens if the market drops */}
             <PlaybookCard />
+
+            {/* Phase ladder, paced by observed contributions */}
+            <CollapsiblePanel
+              id="milestones"
+              title="Milestones"
+              icon={<Flag className="w-4 h-4 text-violet-400" />}
+              accentClass="border-violet-500/40"
+              iconContainerClass="bg-violet-500/10 border border-violet-500/20"
+              defaultOpen={false}
+            >
+              <div className="pt-4">
+                <MilestonesPanel
+                  portfolioValue={account.totalValue}
+                  monthlyIncome={monthlyIncome}
+                  monthlyTarget={strategyTargets.fireNumber}
+                  blendedYieldPct={account.totalValue > 0 ? (monthlyIncome * 12 / account.totalValue) * 100 : 0}
+                  transactions={scopedTransactions}
+                />
+              </div>
+            </CollapsiblePanel>
 
             {/* 4-metric strip — Equity is the headline (what's actually yours
                 after margin debt). Gross market value sits in the sub for
