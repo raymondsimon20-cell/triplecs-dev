@@ -26,7 +26,35 @@
 export const CONTRIBUTION_SOURCES: readonly string[] = [
   'PINELAND',
   'KEYWAY',
+  // External money arriving from the linked bank. Distinct from the internal
+  // register movements below, which are the same dollars being shuffled.
+  'TRANSFER FUNDS FROM SCHWAB BANK',
 ];
+
+/**
+ * Descriptions that look like inflows but are internal movements, not new money.
+ *
+ * A brokerage account keeps separate registers — cash and margin — and moving
+ * funds between them posts as a positive transaction with no external source.
+ * Counting those as contributions inflates the figure and, worse, does so by
+ * exactly the amount of a real deposit that has already been counted:
+ *
+ *   Jul 24   Pineland Propert SIGONFI   +$1,620.00     <- the actual deposit
+ *   Jul 25   TRF FUNDS FRM TYPE 1       +$1,620.00     <- the same money moving
+ *
+ * These are listed for documentation and for the duplicate check; they are not
+ * in CONTRIBUTION_SOURCES and must not be added to it.
+ */
+export const INTERNAL_TRANSFER_PATTERNS: readonly string[] = [
+  'TRF FUNDS FRM TYPE',
+  'TRF FUNDS TO TYPE',
+];
+
+export function isInternalTransfer(description: string | null | undefined): boolean {
+  if (!description) return false;
+  const upper = description.toUpperCase();
+  return INTERNAL_TRANSFER_PATTERNS.some((s) => upper.includes(s));
+}
 
 /** True when a transaction description names a known contribution source. */
 export function isKnownContributionSource(description: string | null | undefined): boolean {

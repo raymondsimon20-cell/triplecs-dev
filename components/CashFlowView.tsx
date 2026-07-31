@@ -19,6 +19,7 @@ import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, TableSkeleton } from '@/components/polish';
 import { Activity, Banknote, CreditCard, Download, PiggyBank, Plus, ShoppingCart, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
+import { findDuplicateInflows, duplicateExposure } from '@/lib/portfolio/duplicate-inflows';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -143,6 +144,7 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
 
   const manualIds = useMemo(() => new Set(manual.map((m) => m.id)), [manual]);
 
+
   const cutoff = useMemo(() => {
     const d = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
     return d.toISOString().split('T')[0];
@@ -153,6 +155,18 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
       .filter((t) => t.date >= cutoff)
       .sort((a, b) => b.date.localeCompare(a.date)),
     [transactions, manualAsTxns, cutoff],
+  );
+
+  // Same-money-twice detection. A deposit arrives and is then moved between the
+  // cash and margin registers, and both post as positive amounts — so an exact
+  // amount match a day or two apart is very likely one deposit, not two.
+  // Surfaced rather than auto-corrected: the wrong call either inflates
+  // contributions or discards a real deposit.
+  const duplicatePairs = useMemo(
+    () => findDuplicateInflows(windowTxns.map((t) => ({
+      id: t.id, date: t.date, description: t.description, amount: t.amount, category: t.category,
+    }))),
+    [windowTxns],
   );
 
   const agg = useMemo(() => {
@@ -357,6 +371,38 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
         <Stat icon={ShoppingCart} label="Capital Deployed" value={fmt$(agg.deployed)} accentClass="border-t-emerald-500/60" index={5} />
         <Stat icon={Activity} label="Net Operating" value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} accentClass="border-t-emerald-500/60" index={6} />
       </div>
+
+      {/* Possible same-money-twice inflows */}
+      {duplicatePairs.length > 0 && (
+        <div className="bg-yellow-500/5 border border-yellow-500/25 rounded-lg p-3">
+          <div className="text-xs font-semibold text-yellow-200 mb-1">
+            {duplicatePairs.length} inflow{duplicatePairs.length === 1 ? '' : 's'} may be recorded twice
+          </div>
+          <p className="text-[10px] text-[#7c82a0] mb-2">
+            A deposit arrives, then moves between the cash and margin registers — both post as
+            positive amounts. An exact match this close together is usually one deposit, not two.
+            Only the first of each pair is counted as a contribution; this is here so you can check
+            that call rather than take it on trust.
+          </p>
+          <div className="space-y-1">
+            {duplicatePairs.map((p) => (
+              <div key={p.duplicate.id} className="text-[11px] flex items-center gap-2 flex-wrap">
+                <span className="tabular-nums text-yellow-200 font-semibold w-20">{fmt$(p.amount)}</span>
+                <span className="text-[#9aa2c0]">{fmtDate(p.original.date)} {p.original.description.slice(0, 32)}</span>
+                <span className="text-[#4a5070]">↔</span>
+                <span className="text-[#7c82a0]">{fmtDate(p.duplicate.date)} {p.duplicate.description.slice(0, 32)}</span>
+                <span className="text-[10px] text-[#4a5070]">
+                  {p.daysApart}d apart{p.internalMatch ? ' · register move' : ''}
+                </span>
+              </div>
+            ))}
+          </div>
+          <div className="text-[10px] text-[#4a5070] mt-2">
+            {fmt$(duplicateExposure(duplicatePairs))} would be double-counted if both sides were
+            treated as contributions.
+          </div>
+        </div>
+      )}
 
       {/* Daily net operating chart */}
       <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4">
