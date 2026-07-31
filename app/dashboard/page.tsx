@@ -23,7 +23,7 @@ import {
   RefreshCw, LogOut, AlertTriangle, AlertCircle, CheckCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
   List, PieChart, Gauge, ClipboardList, Eye, BookOpen, Target,
-  Inbox, X, Wallet, History, Calculator, Activity, Layers,
+  Inbox, X, Wallet, History, Calculator, Activity, Layers, Shuffle,
   ArrowLeftRight, CalendarCheck, Plug, Wrench, Crosshair,
 } from 'lucide-react';
 import { motion } from 'framer-motion';
@@ -99,16 +99,19 @@ interface AccountData {
 }
 
 /**
- * 2026-07 P2P-style redesign — the 8 reference pages plus 'Tools', which
- * hosts the legacy Today / Portfolio / History views (autopilot queue,
- * rebalance workflow, AI forensics) so no trading functionality is lost.
+ * 2026-07 P2P-style redesign — the 8 reference pages plus 'Tools'.
+ *
+ * 2026-07 flatten: Tools used to nest three levels deep (Tools → Portfolio →
+ * Income), with the third level invisible until you were already two levels in.
+ * The Portfolio sub-views are now direct Tools tabs, and the near-empty Market
+ * section folded into Strategy, which is where its recommendations were acted
+ * on anyway.
  */
 type View =
   | 'dashboard' | 'positions' | 'transactions' | 'cashflow' | 'dividends'
   | 'monthclose' | 'ledgerview' | 'connections'
-  | 'today' | 'portfolio' | 'history' | 'allocation';
-const LEGACY_VIEWS: View[] = ['today', 'portfolio', 'history', 'allocation'];
-type PortfolioSub = 'positions' | 'income' | 'trades' | 'market' | 'strategy';
+  | 'today' | 'income' | 'trades' | 'strategy' | 'allocation' | 'history';
+const LEGACY_VIEWS: View[] = ['today', 'income', 'trades', 'strategy', 'allocation', 'history'];
 
 // ─── Slim metric card ─────────────────────────────────────────────────────────
 // Pre-redesign every card had a gradient text fill + colored hover glow. Now
@@ -229,7 +232,9 @@ function TopTabs({ view, onChange }: { view: View; onChange: (v: View) => void }
         <div className="max-w-7xl mx-auto px-4 flex gap-1 pb-1.5">
           {([
             { id: 'today' as View,      label: 'Today',      Icon: Zap       },
-            { id: 'portfolio' as View,  label: 'Portfolio',  Icon: Wallet    },
+            { id: 'income' as View,     label: 'Income',     Icon: Wallet    },
+            { id: 'trades' as View,     label: 'Trades',     Icon: Shuffle   },
+            { id: 'strategy' as View,   label: 'Strategy',   Icon: Zap       },
             { id: 'allocation' as View, label: 'Allocation', Icon: Crosshair },
             { id: 'history' as View,    label: 'History',    Icon: History   },
           ]).map(({ id, label, Icon }) => (
@@ -247,46 +252,6 @@ function TopTabs({ view, onChange }: { view: View; onChange: (v: View) => void }
         </div>
       )}
     </nav>
-  );
-}
-
-// ─── Portfolio sub-tabs ───────────────────────────────────────────────────────
-function PortfolioSubTabs({
-  active, onChange, counts,
-}: {
-  active: PortfolioSub;
-  onChange: (s: PortfolioSub) => void;
-  counts: { positions: number; orders: number };
-}) {
-  // 'positions' dropped 2026-07 — the top-level Positions page covers it.
-  const items: { id: PortfolioSub; label: string; count?: number }[] = [
-    { id: 'income',    label: 'Income' },
-    { id: 'trades',    label: 'Trades',    count: counts.orders },
-    { id: 'market',    label: 'Market' },
-    { id: 'strategy',  label: 'Strategy tools' },
-  ];
-  return (
-    <div className="flex items-center gap-1 flex-wrap mb-4">
-      {items.map(({ id, label, count }) => {
-        const isActive = active === id;
-        return (
-          <button
-            key={id}
-            onClick={() => onChange(id)}
-            className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors flex items-center gap-2 ${
-              isActive
-                ? 'bg-[#1a1e2e] text-white'
-                : 'text-[#7c82a0] hover:text-white hover:bg-white/[0.03]'
-            }`}
-          >
-            {label}
-            {count !== undefined && (
-              <span className={`text-[10px] ${isActive ? 'text-[#9aa2c0]' : 'text-[#4a5070]'}`}>{count}</span>
-            )}
-          </button>
-        );
-      })}
-    </div>
   );
 }
 
@@ -635,7 +600,6 @@ export default function DashboardPage() {
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
   const [view, setView]                 = useState<View>('dashboard');
-  const [portfolioSub, setPortfolioSub] = useState<PortfolioSub>('income');
 
   // Persist account selection across reloads. We store the accountHash (not
   // index, since the array order is sensitive to Schwab response ordering)
@@ -1546,7 +1510,7 @@ export default function DashboardPage() {
               positions={livePositions}
               actualMonthly={monthlyIncome}
               fireTarget={fireTarget}
-              onOpenIncomeHub={() => { setView('portfolio'); setPortfolioSub('income'); }}
+              onOpenIncomeHub={() => setView('income')}
             />
 
             {/* Daily autopilot plan — tier-classified preview of what the
@@ -1644,44 +1608,38 @@ export default function DashboardPage() {
         )}
 
         {/* ═══════════════════════════════════════════════════════════════════
-            PORTFOLIO view — deep dives, weekly rebalance.
+            INCOME — the income engine and portfolio history.
             ═══════════════════════════════════════════════════════════════════ */}
-        {view === 'portfolio' && (
+        {view === 'income' && (
           <>
-            <PortfolioSubTabs
-              active={portfolioSub}
-              onChange={setPortfolioSub}
-              counts={{ positions: account.positions.length, orders: pendingOrders.size }}
+            <IncomeHub
+              positions={account.positions}
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              pillarSummary={account.pillarSummary}
+              onProjectedMonthly={setMonthlyIncome}
+              accountHash={isAll ? undefined : account.accountHash}
             />
+            <CollapsiblePanel
+              id="portfolio-chart"
+              title="Portfolio history"
+              icon={<BarChart2 className="w-4 h-4 text-blue-400" />}
+              accentClass="border-blue-500/40"
+              iconContainerClass="bg-blue-500/10 border border-blue-500/20"
+              defaultOpen={true}
+            >
+              <div className="pt-4"><PortfolioChart accountHash={isAll ? undefined : account?.accountHash} /></div>
+            </CollapsiblePanel>
+          </>
+        )}
 
-            {/* 'positions' sub-view removed 2026-07 — duplicated the top-level
-                Positions page. PositionsTable stays imported for TradeHub use. */}
-
-            {portfolioSub === 'income' && (
-              <>
-                <IncomeHub
-                  positions={account.positions}
-                  totalValue={account.totalValue}
-                  equity={account.equity}
-                  marginBalance={account.marginBalance}
-                  pillarSummary={account.pillarSummary}
-                  onProjectedMonthly={setMonthlyIncome}
-                  accountHash={isAll ? undefined : account.accountHash}
-                />
-                <CollapsiblePanel
-                  id="portfolio-chart"
-                  title="Portfolio history"
-                  icon={<BarChart2 className="w-4 h-4 text-blue-400" />}
-                  accentClass="border-blue-500/40"
-                  iconContainerClass="bg-blue-500/10 border border-blue-500/20"
-                  defaultOpen={true}
-                >
-                  <div className="pt-4"><PortfolioChart accountHash={isAll ? undefined : account?.accountHash} /></div>
-                </CollapsiblePanel>
-              </>
-            )}
-
-            {portfolioSub === 'trades' && (
+        {/* ═══════════════════════════════════════════════════════════════════
+            TRADES — order staging and the weekly rebalance workflow.
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'trades' && (
+          <>
+            {(
               isAll ? (
                 <AggregateNotice
                   title="Trades & rebalance only run against a single account"
@@ -1728,7 +1686,18 @@ export default function DashboardPage() {
               )
             )}
 
-            {portfolioSub === 'market' && (
+          </>
+        )}
+
+        {/* ═══════════════════════════════════════════════════════════════════
+            STRATEGY — market read, cornerstone, triples, options, margin.
+            Market conditions folded in here (2026-07): it was a single panel on
+            a tab of its own, and its recommendations are acted on by the tools
+            below it.
+            ═══════════════════════════════════════════════════════════════════ */}
+        {view === 'strategy' && (
+          <>
+            {(
               <CollapsiblePanel
                 id="market"
                 title="Market conditions & recommendations"
@@ -1746,7 +1715,7 @@ export default function DashboardPage() {
               </CollapsiblePanel>
             )}
 
-            {portfolioSub === 'strategy' && (
+            {(
               <>
                 <CollapsiblePanel
                   id="cornerstone"
