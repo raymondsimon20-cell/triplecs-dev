@@ -49,6 +49,7 @@ import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
+import { DripStatusPanel } from '@/components/DripStatusPanel';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { OptionsCloseRecsPanel } from '@/components/OptionsCloseRecsPanel';
 import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyTargetsFor } from '@/components/SettingsPanel';
@@ -1725,16 +1726,22 @@ export default function DashboardPage() {
                   iconContainerClass="bg-amber-500/10 border border-amber-500/25"
                   defaultOpen={true}
                 >
-                  <div className="pt-4">
-                    {isAll ? (
-                      <AggregateNotice
-                        title="Cornerstone buys fire against a single account"
-                        message="The aggregate view shows your combined CLM / CRF position, but new buys need a real account hash. Pick an account to use the buy controls."
-                        onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
-                      />
-                    ) : (
-                      <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
-                    )}
+                  <div className="pt-4 space-y-4">
+                    {/* DRIP status sits above the buy controls deliberately —
+                        whether reinvestment is on determines what this bucket
+                        actually is, and that should be read before adding to it. */}
+                    <DripStatusPanel accountHash={isAll ? undefined : account.accountHash} />
+                    <div className="border-t border-[#1f2334] pt-4">
+                      {isAll ? (
+                        <AggregateNotice
+                          title="Cornerstone buys fire against a single account"
+                          message="The aggregate view shows your combined CLM / CRF position, but new buys need a real account hash. Pick an account to use the buy controls."
+                          onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
+                        />
+                      ) : (
+                        <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
+                      )}
+                    </div>
                   </div>
                 </CollapsiblePanel>
 

@@ -28,8 +28,8 @@ function isUsableSymbol(s: string | undefined | null): boolean {
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractDividends(txns: any[], descriptionToSymbol?: Map<string, string>): { activityId: string; date: string; description: string; amount: number; symbol: string; rawType: string }[] {
-  const results: { activityId: string; date: string; description: string; amount: number; symbol: string; rawType: string }[] = [];
+function extractDividends(txns: any[], descriptionToSymbol?: Map<string, string>): { activityId: string; date: string; description: string; amount: number; symbol: string; rawType: string; reinvested: boolean }[] {
+  const results: { activityId: string; date: string; description: string; amount: number; symbol: string; rawType: string; reinvested: boolean }[] = [];
 
   for (const t of txns) {
     const txType: string = (
@@ -99,7 +99,11 @@ function extractDividends(txns: any[], descriptionToSymbol?: Map<string, string>
     }
 
     const activityId: string = t.activityId ?? t.transactionId ?? `${date}-${symbol}-${amount}`;
-    results.push({ activityId, date, description: desc, amount, symbol, rawType: txType });
+    // `reinvested` distinguishes a DRIP delivery (cash converted straight to
+    // shares) from a cash distribution. Both were previously flattened into one
+    // stream, which made it impossible to tell whether DRIP was actually on —
+    // the mechanism the entire CEF bucket exists for.
+    results.push({ activityId, date, description: desc, amount, symbol, rawType: txType, reinvested: isDripDelivery });
   }
 
   return results;
@@ -192,7 +196,18 @@ export async function GET(req: Request) {
     const dividends = allDividends.flat().sort((a, b) => b.date.localeCompare(a.date));
     const total = dividends.reduce((sum, d) => sum + d.amount, 0);
 
-    return NextResponse.json({ dividends, total, startDate, endDate });
+    // Per-symbol reinvestment summary, so callers can see DRIP status without
+    // re-deriving it from the raw stream.
+    const dripBySymbol: Record<string, { reinvested: number; cash: number; payments: number; reinvestedPayments: number }> = {};
+    for (const d of dividends) {
+      const e = dripBySymbol[d.symbol] ?? { reinvested: 0, cash: 0, payments: 0, reinvestedPayments: 0 };
+      e.payments += 1;
+      if (d.reinvested) { e.reinvested += d.amount; e.reinvestedPayments += 1; }
+      else e.cash += d.amount;
+      dripBySymbol[d.symbol] = e;
+    }
+
+    return NextResponse.json({ dividends, total, startDate, endDate, dripBySymbol });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     console.error('Dividends API error:', msg);
