@@ -15,6 +15,7 @@ import { createClient, getAccountNumbers } from './client';
 import { getTokens } from '../storage';
 import type { CashFlowEvent } from '../storage';
 import type { SchwabTransaction } from './types';
+import { isKnownContributionSource } from '@/lib/data/contribution-sources';
 
 /**
  * Schwab transaction type strings the API exposes. Not exhaustive — these
@@ -57,12 +58,17 @@ function classifyTransaction(t: SchwabTransaction): ClassifiedFlow | null {
   const amount    = Math.abs(rawAmount);
   const direction: 'in' | 'out' = rawAmount > 0 ? 'in' : 'out';
 
-  // Deposits / withdrawals: ACH, wires, journals between accounts.
+  // Deposits / withdrawals: ACH, wires, journals between accounts, plus named
+  // contribution sources. The payer-name check has to be here as well as in the
+  // transactions route: if the two classifiers disagree, a deposit can show as
+  // a contribution on screen while TWR treats it as investment gain, which
+  // silently overstates the return.
   if (
     txType === 'ELECTRONIC_FUND' ||
     txType === 'WIRE_IN' || txType === 'WIRE_OUT' ||
     txType === 'CASH_RECEIPT' || txType === 'CASH_DISBURSEMENT' ||
     txType === 'JOURNAL' ||
+    isKnownContributionSource(desc) ||
     /deposit|withdraw|ach|wire|transfer/.test(desc)
   ) {
     if (direction === 'in')  return { direction, kind: 'deposit', amount };

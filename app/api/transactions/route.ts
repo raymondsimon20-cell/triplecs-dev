@@ -3,6 +3,7 @@ import { getStore } from '@netlify/blobs';
 import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers, getTransactions } from '@/lib/schwab/client';
 import { getTokens } from '@/lib/storage';
+import { isKnownContributionSource } from '@/lib/data/contribution-sources';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,6 +86,7 @@ function attachRealizedPnl(txns: NormalizedTransaction[], history: HistoryEntry[
 const CASH_SYMBOLS     = new Set(['CURRENCY_USD', 'USD', 'CASH']);
 const CASH_ASSET_TYPES = new Set(['CURRENCY', 'CASH_EQUIVALENT']);
 
+
 // Schwab transaction types worth showing in a ledger, split into two calls so
 // a rejected cash-movement type can't take the core TRADE/DIVIDEND data down
 // with it. MEMORANDUM and SMA_ADJUSTMENT are bookkeeping noise — skipped.
@@ -126,7 +128,17 @@ function normalize(t: any, accountHash: string): NormalizedTransaction | null {
   if (!symbol && typeof t.symbol === 'string') symbol = t.symbol;
 
   let category: string;
-  if (txType === 'TRADE') {
+  if (isKnownContributionSource(desc) && amount > 0) {
+    // Payer-name override. Schwab files these under JOURNAL or a generic type,
+    // so they were landing as "Transfer" or "Other" — which matters beyond the
+    // label: an unrecognised deposit is excluded from Contributions in the
+    // equity bridge and falls into the "Market & Other" residual instead,
+    // reading as a gain the portfolio never made.
+    //
+    // Scoped to inbound amounts only, so a payment out to the same counterparty
+    // is not mislabelled as money coming in.
+    category = 'Contribution';
+  } else if (txType === 'TRADE') {
     category = isOption ? 'Option Trade' : amount >= 0 ? 'Stock Sale' : 'Stock Purchase';
   } else if (txType.includes('DIVIDEND') || txType === 'DIVIDEND_OR_INTEREST') {
     if (/margin interest/i.test(desc)) category = 'Margin Interest';
