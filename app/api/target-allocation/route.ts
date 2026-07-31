@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers, getPriceHistory } from '@/lib/schwab/client';
 import { getTokens } from '@/lib/storage';
 import { getFundMetadata, getFallbackYieldPct } from '@/lib/data/fund-metadata';
+import type { SmaPeriod } from '@/lib/portfolio/sma';
 
 export const dynamic = 'force-dynamic';
 
@@ -38,6 +39,11 @@ export interface AllocationRow {
   price:          number;
   marketValue:    number;
   isSeed:         boolean;
+  /** Simple moving average per period; null when history is too short. */
+  sma:            Record<SmaPeriod, number | null>;
+  /** Price vs each SMA, in percent. */
+  vsSmaPct:       Record<SmaPeriod, number | null>;
+  /** @deprecated Kept so existing callers keep working; mirrors sma[50]. */
   sma50:          number | null;
   vsSma50Pct:     number | null;
   ret12Pct:       number | null;
@@ -49,7 +55,14 @@ export interface AllocationRow {
   pending:        boolean;
 }
 
-interface HistMetric { ts: number; sma50: number | null; c12: number | null; c24: number | null }
+interface HistMetric {
+  ts: number;
+  sma50:  number | null;
+  sma100: number | null;
+  sma200: number | null;
+  c12: number | null;
+  c24: number | null;
+}
 
 const SEED_MAX_DOLLARS = 500;
 
@@ -121,7 +134,10 @@ export async function GET(req: Request) {
     const now = Date.now();
     const stale = universe.filter((sym) => {
       const m = histMap[sym];
-      return !m || now - m.ts > HIST_TTL_MS;
+      if (!m || now - m.ts > HIST_TTL_MS) return true;
+      // Cache written before 100/200-day support: force a refetch instead of
+      // serving nulls indefinitely for the longer periods.
+      return !('sma200' in m);
     });
     const toFetch = stale.slice(0, HISTORY_BUDGET);
 
@@ -136,9 +152,13 @@ export async function GET(req: Request) {
             const candles = (await getPriceHistory(freshTokens!, sym, from, to))
               .map((c) => ({ datetime: c.datetime, close: c.close }));
             const closes = candles.map((c) => c.close);
+            const mean = (n: number) =>
+              closes.length >= n ? closes.slice(-n).reduce((s, v) => s + v, 0) / n : null;
             histMap[sym] = {
               ts: now,
-              sma50: closes.length >= 50 ? closes.slice(-50).reduce((s, v) => s + v, 0) / 50 : null,
+              sma50:  mean(50),
+              sma100: mean(100),
+              sma200: mean(200),
               c12: closeNear(candles, 365),
               c24: closeNear(candles, 730),
             };
@@ -146,7 +166,7 @@ export async function GET(req: Request) {
             console.warn(`[TargetAlloc] history failed for ${sym}:`, err);
             // Record the attempt with nulls so one bad symbol can't consume
             // the budget forever; TTL will retry it tomorrow.
-            histMap[sym] = { ts: now, sma50: null, c12: null, c24: null };
+            histMap[sym] = { ts: now, sma50: null, sma100: null, sma200: null, c12: null, c24: null };
           }
         }));
       }
@@ -167,9 +187,15 @@ export async function GET(req: Request) {
       const yieldPct = (typeof liveYield === 'number' && liveYield > 0) ? liveYield : (fb ?? 0);
       const meta = getFundMetadata(sym);
 
-      const sma50 = hasHist ? m.sma50 : null;
-      const c12   = hasHist ? m.c12 : null;
-      const c24   = hasHist ? m.c24 : null;
+      const sma50  = hasHist ? m.sma50  : null;
+      const sma100 = hasHist ? m.sma100 ?? null : null;
+      const sma200 = hasHist ? m.sma200 ?? null : null;
+      const c12    = hasHist ? m.c12 : null;
+      const c24    = hasHist ? m.c24 : null;
+
+      const round2 = (v: number | null) => (v !== null ? Math.round(v * 100) / 100 : null);
+      const vsPct  = (avg: number | null) =>
+        avg !== null && avg > 0 && price > 0 ? Math.round(((price / avg) - 1) * 10_000) / 100 : null;
 
       return {
         symbol:         sym,
@@ -179,8 +205,10 @@ export async function GET(req: Request) {
         price,
         marketValue:    pos.marketValue,
         isSeed:         pos.marketValue < SEED_MAX_DOLLARS,
-        sma50:          sma50 !== null ? Math.round(sma50 * 100) / 100 : null,
-        vsSma50Pct:     sma50 !== null && sma50 > 0 && price > 0 ? Math.round(((price / sma50) - 1) * 10_000) / 100 : null,
+        sma:            { 50: round2(sma50), 100: round2(sma100), 200: round2(sma200) },
+        vsSmaPct:       { 50: vsPct(sma50),  100: vsPct(sma100),  200: vsPct(sma200)  },
+        sma50:          round2(sma50),
+        vsSma50Pct:     vsPct(sma50),
         ret12Pct:       c12 !== null && c12 > 0 ? Math.round(((price - c12) / c12) * 10_000) / 100 : null,
         ret24Pct:       c24 !== null && c24 > 0 ? Math.round(((price - c24) / c24) * 10_000) / 100 : null,
         yieldPct:       Math.round(yieldPct * 100) / 100,

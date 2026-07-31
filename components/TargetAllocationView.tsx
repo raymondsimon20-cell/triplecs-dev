@@ -7,7 +7,7 @@
  * a whole-share contribution calculator, and a scored ticker table.
  *
  * Scoring inputs (per the Vol-7 playbook):
- *   - Price vs 50-day SMA (below = accumulation zone)
+ *   - Price vs a selectable 50/100/200-day SMA (below = accumulation zone)
  *   - NAV premium/discount (CLM/CRF via the cornerstone feed; 30%+ premium
  *     is the Vol-7 box/sell signal → hard Trim)
  *   - 12/24-month total return (price return + estimated distributions)
@@ -30,6 +30,7 @@ import { useSort, SortTh } from '@/components/sortable';
 import type { AllocationRow } from '@/app/api/target-allocation/route';
 import type { DividendRecord } from '@/components/DividendsView';
 import { deriveCadence, annualiseFromHistory } from '@/lib/portfolio/dividend-cadence';
+import { SMA_PERIODS, DEFAULT_SMA_PERIOD, SMA_PERIOD_HELP, type SmaPeriod } from '@/lib/portfolio/sma';
 import { useStrategyTargets, updateStrategyTargets } from '@/components/SettingsPanel';
 
 const fmt$ = (n: number, dec = 2) =>
@@ -71,6 +72,9 @@ export interface ScoredRow extends AllocationRow {
   /** Yield actually used for scoring — derived from payments where possible. */
   effYieldPct:   number;
   effYieldSource: 'derived' | AllocationRow['yieldSource'];
+  /** Price vs the *selected* moving average — the value the SMA factor scored.
+   *  Distinct from AllocationRow.vsSmaPct, which holds every period. */
+  vsSmaSelectedPct: number | null;
 }
 
 interface PillarSummaryRow { pillar: string; totalValue: number }
@@ -173,6 +177,8 @@ function scoreRow(
   /** Yield to score on — payment-derived where available, else r.yieldPct. */
   effYieldPct: number,
   w: ScoringWeights,
+  /** Price vs the selected moving average, in percent. Null when unavailable. */
+  vsSmaPct: number | null,
 ): { score: number; signal: Signal; tr12: number | null; tr24: number | null } {
   let score = 50;
 
@@ -185,12 +191,12 @@ function scoreRow(
   // default weights this reproduces the previous fixed-point scores exactly.
   // Approximating them drifted results by a point, which is enough to flip a
   // signal band at its boundary.
-  if (r.vsSma50Pct !== null) {
-    const s = r.vsSma50Pct <= -10 ? 1
-            : r.vsSma50Pct <= -3  ? 2 / 3
-            : r.vsSma50Pct <= 3   ? 1 / 5
-            : r.vsSma50Pct <= 10  ? -1 / 3
-            :                       -2 / 3;
+  if (vsSmaPct !== null) {
+    const s = vsSmaPct <= -10 ? 1
+            : vsSmaPct <= -3  ? 2 / 3
+            : vsSmaPct <= 3   ? 1 / 5
+            : vsSmaPct <= 10  ? -1 / 3
+            :                   -2 / 3;
     score += s * w.sma;
   }
 
@@ -317,6 +323,19 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   // share-of-invested answers "how is my invested capital actually split",
   // which differs whenever cash or unclassified holdings are material.
   const [showAsPortfolioPct, setShowAsPortfolioPct] = useState(true);
+
+  // Moving-average period driving the SMA scoring factor.
+  const [smaPeriod, setSmaPeriod] = useState<SmaPeriod>(DEFAULT_SMA_PERIOD);
+  useEffect(() => {
+    try {
+      const raw = Number(localStorage.getItem('triple-c-alloc-sma'));
+      if ((SMA_PERIODS as readonly number[]).includes(raw)) setSmaPeriod(raw as SmaPeriod);
+    } catch { /* ignore */ }
+  }, []);
+  const pickSmaPeriod = (n: SmaPeriod) => {
+    setSmaPeriod(n);
+    try { localStorage.setItem('triple-c-alloc-sma', String(n)); } catch { /* ignore */ }
+  };
 
   // Signal filter. Empty set means no filter — the table shows everything.
   const [signalFilter, setSignalFilter] = useState<Set<Signal>>(new Set());
@@ -468,9 +487,13 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     const effYieldPct = derived ?? r.yieldPct;
     const effYieldSource: ScoredRow['effYieldSource'] = derived !== undefined ? 'derived' : r.yieldSource;
 
-    const s = scoreRow(r, navDiscPct, catchUp, over, effYieldPct, normalisedWeights);
-    return { ...r, navDiscPct, catchUp, effYieldPct, effYieldSource, ...s };
-  }), [rows, navMap, underTarget, overTarget, derivedYieldBySymbol, normalisedWeights]);
+    // Rows served from a cache written before multi-period support carry only
+    // the legacy sma50 fields; fall back rather than scoring everything null.
+    const vsSmaSelectedPct = r.vsSmaPct?.[smaPeriod] ?? (smaPeriod === 50 ? r.vsSma50Pct ?? null : null);
+
+    const s = scoreRow(r, navDiscPct, catchUp, over, effYieldPct, normalisedWeights, vsSmaSelectedPct);
+    return { ...r, navDiscPct, catchUp, effYieldPct, effYieldSource, vsSmaSelectedPct, ...s };
+  }), [rows, navMap, underTarget, overTarget, derivedYieldBySymbol, normalisedWeights, smaPeriod]);
 
   // Top-N scored symbols for focus mode.
   const focusedSet = useMemo(() => {
@@ -504,7 +527,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     score:  (r) => r.score,
     // Tie-break within a signal band by score, so the order stays meaningful.
     signal: (r) => SIGNAL_RANK[r.signal] * 1000 + r.score,
-    sma:    (r) => r.vsSma50Pct ?? Number.NEGATIVE_INFINITY,
+    sma:    (r) => r.vsSmaSelectedPct ?? Number.NEGATIVE_INFINITY,
     tr12:   (r) => r.tr12 ?? Number.NEGATIVE_INFINITY,
     tr24:   (r) => r.tr24 ?? Number.NEGATIVE_INFINITY,
     yield:  (r) => r.effYieldPct,
@@ -753,6 +776,23 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
           <p className="text-xs text-[#7c82a0] mt-0.5">Scored universe, bucket targets, and a whole-share contribution planner</p>
         </div>
         <div className="ml-auto flex items-center gap-2">
+          <div className="flex items-center gap-0.5" title="Moving-average period used by the vs-SMA scoring factor">
+            <span className="text-[10px] text-[#4a5070] mr-1">SMA</span>
+            {SMA_PERIODS.map((n) => (
+              <button
+                key={n}
+                onClick={() => pickSmaPeriod(n)}
+                title={SMA_PERIOD_HELP[n]}
+                className={`px-2 py-1 rounded-lg text-[11px] font-medium transition-colors ${
+                  smaPeriod === n
+                    ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30'
+                    : 'text-[#7c82a0] hover:text-white border border-transparent'
+                }`}
+              >
+                {n}
+              </button>
+            ))}
+          </div>
           <button
             onClick={() => setShowWeights((v) => !v)}
             title="Adjust how much each factor counts toward the score"
@@ -1135,7 +1175,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
                 <SortTh id="pillar" label="Bucket"    sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
                 <SortTh id="score"  label="Score"     align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
                 <SortTh id="signal" label="Signal"    sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
-                <SortTh id="sma"    label="vs 50 SMA" align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
+                <SortTh id="sma"    label={`vs ${smaPeriod} SMA`} align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
                 <SortTh id="tr12"   label="12 MO"     align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
                 <SortTh id="tr24"   label="24 MO"     align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
                 <SortTh id="yield"  label="Yield"     align="right" sortKey={sortKey} sortDir={sortDir} onSort={requestSort} />
@@ -1167,8 +1207,8 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
                   <td className="px-2 py-2 whitespace-nowrap">
                     <span className={`text-[10px] px-1.5 py-0.5 rounded ${SIGNAL_CLASS[r.signal]}`}>{r.signal}</span>
                   </td>
-                  <td className={`px-2 py-2 text-right tabular-nums ${r.vsSma50Pct !== null ? plColor(-r.vsSma50Pct) : 'text-[#4a5070]'}`}>
-                    {r.vsSma50Pct !== null ? signedPct(r.vsSma50Pct) : '—'}
+                  <td className={`px-2 py-2 text-right tabular-nums ${r.vsSmaSelectedPct !== null ? plColor(-r.vsSmaSelectedPct) : 'text-[#4a5070]'}`}>
+                    {r.vsSmaSelectedPct !== null ? signedPct(r.vsSmaSelectedPct) : '—'}
                   </td>
                   <td className={`px-2 py-2 text-right tabular-nums ${r.tr12 !== null ? plColor(r.tr12) : 'text-[#4a5070]'}`}>
                     {r.tr12 !== null ? signedPct(r.tr12) : '—'}
