@@ -43,6 +43,7 @@ import { MonthCloseView } from '@/components/MonthCloseView';
 import { LedgerView } from '@/components/LedgerView';
 import { ConnectionsView } from '@/components/ConnectionsView';
 import { TargetAllocationView } from '@/components/TargetAllocationView';
+import { BusinessSpreadPanel } from '@/components/BusinessSpreadPanel';
 import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
@@ -1457,18 +1458,30 @@ export default function DashboardPage() {
             ALLOCATION view (Tools) — scored universe + rebalance calculator.
             ═══════════════════════════════════════════════════════════════════ */}
         {view === 'allocation' && (
-          <TargetAllocationView
-            accountHash={isAll ? undefined : account.accountHash}
-            totalValue={account.totalValue}
-            pillarSummary={account.pillarSummary}
-            dividends={dividendRecords}
-            targets={{
-              growthPct:      strategyTargets.growthPct,
-              cornerstonePct: strategyTargets.cornerstonePct,
-              incomePct:      strategyTargets.incomePct,
-              triplesPct:     strategyTargets.triplesPct,
-            }}
-          />
+          <>
+            <BusinessSpreadPanel
+              positions={account.positions}
+              dividends={dividendRecords}
+              totalValue={account.totalValue}
+              equity={account.equity}
+              marginBalance={account.marginBalance}
+              marginRatePct={strategyTargets.marginRatePct}
+              realizedBySymbol={realizedBySymbol}
+              dividendsBySymbol={dividendsBySymbol}
+            />
+            <TargetAllocationView
+              accountHash={isAll ? undefined : account.accountHash}
+              totalValue={account.totalValue}
+              pillarSummary={account.pillarSummary}
+              dividends={dividendRecords}
+              targets={{
+                growthPct:      strategyTargets.growthPct,
+                cornerstonePct: strategyTargets.cornerstonePct,
+                incomePct:      strategyTargets.incomePct,
+                triplesPct:     strategyTargets.triplesPct,
+              }}
+            />
+          </>
         )}
 
         {/* ═══════════════════════════════════════════════════════════════════
