@@ -319,6 +319,10 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   // the residual after the bucket split simply stays in cash.
   const [maximiseDeployment, setMaximiseDeployment] = useState(true);
 
+  // Whether scores drive within-bucket allocation. Off keeps the bucket
+  // weights but splits evenly across a wider set of Add-rated names.
+  const [applyScores, setApplyScores] = useState(true);
+
   // Percentage basis for the bucket rows. Portfolio % compares against targets;
   // share-of-invested answers "how is my invested capital actually split",
   // which differs whenever cash or unclassified holdings are material.
@@ -660,8 +664,12 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       }
     }
 
-    // 2. Within each bucket: top-scored addable tickers (max 3), score-weighted,
-    //    whole shares only.
+    // 2. Within each bucket: pick the addable tickers and split the bucket's
+    //    dollars across them. With scores applied, higher-scored names take
+    //    proportionally more and the field narrows to the top 3. With scores
+    //    off, the split is even across a wider field — useful when you want the
+    //    bucket weights honoured but don't want the scoring model deciding
+    //    which names inside the bucket get the money.
     const buys = new Map<string, { shares: number; price: number; score: number; signal: Signal; pillar: string }>();
     const bucketDetail: { pillar: string; allocated: number; deployed: number; reason?: string }[] = [];
     let spent = 0;
@@ -672,7 +680,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
         .filter((r) => r.pillar === pillar && (r.signal === 'Strong Add' || r.signal === 'Add') && r.price > 0)
         .filter((r) => !focus || focusedSet.has(r.symbol))
         .sort((a, b) => b.score - a.score)
-        .slice(0, 3);
+        .slice(0, applyScores ? 3 : 8);
 
       if (candidates.length === 0) {
         bucketDetail.push({
@@ -685,7 +693,9 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       const wSum = candidates.reduce((s, c) => s + c.score, 0);
       let bucketSpent = 0;
       for (const c of candidates) {
-        const dollars = alloc * (c.score / wSum);
+        const dollars = applyScores
+          ? alloc * (c.score / wSum)
+          : alloc / candidates.length;
         const shares = Math.floor(dollars / c.price);
         if (shares <= 0) continue;
         const prev = buys.get(c.symbol);
@@ -762,7 +772,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       deployedPct: cash > 0 ? (spent / cash) * 100 : 0,
       bucketDetail: bucketDetail.sort((a, b) => b.allocated - a.allocated),
     };
-  }, [contribution, buckets, scored, totalValue, focus, focusedSet, maximiseDeployment]);
+  }, [contribution, buckets, scored, totalValue, focus, focusedSet, maximiseDeployment, applyScores]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -1066,6 +1076,20 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
               </span>
             </label>
           </div>
+          <label className="flex items-center gap-1.5 text-[11px] text-[#9aa2c0] cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={applyScores}
+              onChange={(e) => setApplyScores(e.target.checked)}
+              className="accent-violet-500"
+            />
+            <span title="On: higher-scored tickers take proportionally more of each bucket's allocation, narrowed to the top 3. Off: bucket weights still apply, but the money splits evenly across a wider set of Add-rated names.">
+              Apply scores to allocation
+            </span>
+            <span className="text-[10px] text-[#4a5070]">
+              {applyScores ? 'score-weighted, top 3' : 'even split, top 8'}
+            </span>
+          </label>
           {plan && plan.list.length > 0 && (
             <div className="space-y-1.5">
               {plan.list.map((b) => (
