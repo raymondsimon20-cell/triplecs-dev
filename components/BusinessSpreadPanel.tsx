@@ -29,6 +29,7 @@ import type { DividendRecord } from '@/components/DividendsView';
 import { PILLAR_LABELS } from '@/lib/classify';
 import { deriveCadence, annualiseFromHistory } from '@/lib/portfolio/dividend-cadence';
 import { estimateAnnualDividend } from '@/components/IncomeHub';
+import { MarginBridgePanel } from '@/components/MarginBridgePanel';
 
 const fmt$ = (n: number, dec = 2) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -49,6 +50,8 @@ interface Props {
   equity:        number;
   marginBalance: number;
   marginRatePct: number;
+  /** Utilisation limit, passed through to the bridge projection. */
+  marginLimitPct: number;
   /** Realized P/L by symbol, for the total-return comparison. */
   realizedBySymbol?: Record<string, number>;
   /** Trailing-12M dividends actually received, by symbol. */
@@ -56,7 +59,7 @@ interface Props {
 }
 
 export function BusinessSpreadPanel({
-  positions, dividends, totalValue, equity, marginBalance, marginRatePct,
+  positions, dividends, totalValue, equity, marginBalance, marginRatePct, marginLimitPct,
   realizedBySymbol = {}, dividendsBySymbol = {},
 }: Props) {
   const analysis = useMemo(() => {
@@ -286,6 +289,20 @@ export function BusinessSpreadPanel({
               );
             })}
         </div>
+      </div>
+
+      {/* The bridge is the other half of the spread: the spread says whether
+          borrowed dollars earn their keep, the bridge says whether the balance
+          is actually being paid down. */}
+      <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4">
+        <MarginBridgePanel
+          portfolioValue={totalValue}
+          marginBalance={marginBalance}
+          yieldPct={a.blendedYield}
+          marginRatePct={marginRatePct}
+          marginLimitPct={marginLimitPct}
+          totalReturnPct={a.totalReturnPct}
+        />
       </div>
 
       <p className="text-[10px] text-[#4a5070]">

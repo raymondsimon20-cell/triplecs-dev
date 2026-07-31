@@ -1432,6 +1432,7 @@ export default function DashboardPage() {
               equity={account.equity}
               marginBalance={account.marginBalance}
               marginRatePct={strategyTargets.marginRatePct}
+              marginLimitPct={strategyTargets.marginLimitPct}
               realizedBySymbol={realizedBySymbol}
               dividendsBySymbol={dividendsBySymbol}
             />
