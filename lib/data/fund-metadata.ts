@@ -156,7 +156,19 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['CURE',  'triples', 'Direxion',  false, false],
   ['HIBL',  'triples', 'Direxion',  false, false],
 
-  // ── Cornerstone ─────────────────────────────────────────────────────────────
+  // ── CEFs (`cornerstone` key) ────────────────────────────────────────────────
+  //
+  // The bucket is closed-end funds generally, not just the Cornerstone pair.
+  // CLM/CRF are the only holdings that offer DRIP at NAV — the compounding edge
+  // the strategy is built around — but every CEF here trades at a NAV premium or
+  // discount, and that is what earns them the bucket: the NAV scoring factor and
+  // the 30%-premium trim rule only fire on this pillar. Left in High Yield they
+  // were being scored as though NAV were irrelevant to them.
+  //
+  // Judgement calls worth revisiting: OXLC and OXSQ are credit vehicles (CLO
+  // equity / BDC) and TPVG is venture debt. All three publish a NAV and trade at
+  // premiums, so the NAV factor is meaningful — but their NAV behaves nothing
+  // like an equity CEF's, so treat their scores with more suspicion.
   ['CLM',   'cornerstone', 'Cornerstone', true, true],
   ['CRF',   'cornerstone', 'Cornerstone', true, true],
 
@@ -268,28 +280,28 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['TSLL',  'income', 'Global X', false, false],
 
   // ── Income — PIMCO CEFs ─────────────────────────────────────────────────────
-  ['PDI',   'income', 'PIMCO', true,  true ],
-  ['PDO',   'income', 'PIMCO', true,  false],
-  ['PTY',   'income', 'PIMCO', true,  true ],
-  ['PCN',   'income', 'PIMCO', true,  true ],
-  ['PFL',   'income', 'PIMCO', true,  false],
-  ['PFN',   'income', 'PIMCO', true,  false],
-  ['PHK',   'income', 'PIMCO', true,  false],
+  ['PDI',   'cornerstone', 'PIMCO', true,  true ],
+  ['PDO',   'cornerstone', 'PIMCO', true,  false],
+  ['PTY',   'cornerstone', 'PIMCO', true,  true ],
+  ['PCN',   'cornerstone', 'PIMCO', true,  true ],
+  ['PFL',   'cornerstone', 'PIMCO', true,  false],
+  ['PFN',   'cornerstone', 'PIMCO', true,  false],
+  ['PHK',   'cornerstone', 'PIMCO', true,  false],
 
   // ── Income — Eaton Vance CEFs ───────────────────────────────────────────────
-  ['ETV',   'income', 'Eaton Vance', true, false],
-  ['ETB',   'income', 'Eaton Vance', true, false],
-  ['EOS',   'income', 'Eaton Vance', true, true ],
-  ['EOI',   'income', 'Eaton Vance', true, false],
-  ['EVT',   'income', 'Eaton Vance', true, false],
+  ['ETV',   'cornerstone', 'Eaton Vance', true, false],
+  ['ETB',   'cornerstone', 'Eaton Vance', true, false],
+  ['EOS',   'cornerstone', 'Eaton Vance', true, true ],
+  ['EOI',   'cornerstone', 'Eaton Vance', true, false],
+  ['EVT',   'cornerstone', 'Eaton Vance', true, false],
 
   // ── Income — BlackRock CEFs ─────────────────────────────────────────────────
-  ['BST',   'income', 'BlackRock', true, true ],
-  ['BDJ',   'income', 'BlackRock', true, true ],
-  ['ECAT',  'income', 'BlackRock', true, false],
-  ['BGY',   'income', 'BlackRock', true, false],
-  ['BCAT',  'income', 'BlackRock', true, false],
-  ['BUI',   'income', 'BlackRock', true, false],
+  ['BST',   'cornerstone', 'BlackRock', true, true ],
+  ['BDJ',   'cornerstone', 'BlackRock', true, true ],
+  ['ECAT',  'cornerstone', 'BlackRock', true, false],
+  ['BGY',   'cornerstone', 'BlackRock', true, false],
+  ['BCAT',  'cornerstone', 'BlackRock', true, false],
+  ['BUI',   'cornerstone', 'BlackRock', true, false],
 
   // ── Income — Amplify ────────────────────────────────────────────────────────
   ['DIVO',  'income', 'Amplify', false, true ],
@@ -297,20 +309,20 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['COWS',  'income', 'Amplify', false, false],
 
   // ── Income — Oxford Lane / RiverNorth / Liberty / Gabelli / Columbia ────────
-  ['OXLC',  'income', 'Oxford Lane', false, false],
-  ['OXSQ',  'income', 'Oxford Lane', false, false],
-  ['RIV',   'income', 'RiverNorth', true,  true ],
-  ['OPP',   'income', 'RiverNorth', false, false],
-  ['USA',   'income', 'Liberty',    true,  true ],
+  ['OXLC',  'cornerstone', 'Oxford Lane', false, false],
+  ['OXSQ',  'cornerstone', 'Oxford Lane', false, false],
+  ['RIV',   'cornerstone', 'RiverNorth', true,  true ],
+  ['OPP',   'cornerstone', 'RiverNorth', false, false],
+  ['USA',   'cornerstone', 'Liberty',    true,  true ],
   ['LICT',  'income', 'Liberty',    false, false],
-  ['GAB',   'income', 'Gabelli',    false, false],
-  ['GDV',   'income', 'Gabelli',    false, false],
-  ['GGT',   'income', 'Gabelli',    false, false],
-  ['STK',   'income', 'Columbia',   true,  true ],
+  ['GAB',   'cornerstone', 'Gabelli',    false, false],
+  ['GDV',   'cornerstone', 'Gabelli',    false, false],
+  ['GGT',   'cornerstone', 'Gabelli',    false, false],
+  ['STK',   'cornerstone', 'Columbia',   true,  true ],
 
   // ── Income — KraneShares / BDC / REIT ──────────────────────────────────────
   ['KMLM',  'income', 'KraneShares', false, false],
-  ['TPVG',  'income', 'BDC',         false, false],
+  ['TPVG',  'cornerstone', 'BDC',         false, false],
   ['O',     'income', 'REIT',        false, false],
 
   // ── Income — Vol 7 additions ────────────────────────────────────────────────
@@ -322,10 +334,10 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['FNGB',  'income', 'Direxion', false, false],
 
   // ── Income — Additional CEFs ────────────────────────────────────────────────
-  ['CHW',   'income', 'Other', true, false],
-  ['CSQ',   'income', 'Other', true, false],
-  ['EXG',   'income', 'Eaton Vance', true, false],
-  ['GOF',   'income', 'Other', true, true],
+  ['CHW',   'cornerstone', 'Other', true, false],
+  ['CSQ',   'cornerstone', 'Other', true, false],
+  ['EXG',   'cornerstone', 'Eaton Vance', true, false],
+  ['GOF',   'cornerstone', 'Other', true, true],
 
   // ── Income — Bond funds ─────────────────────────────────────────────────────
   ['AGG',   'income', 'iShares', false, false],
