@@ -309,6 +309,10 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     setTimeout(() => setSnapshotState('idle'), 2500);
   };
 
+  // Put as much of the contribution into whole shares as possible. Off means
+  // the residual after the bucket split simply stays in cash.
+  const [maximiseDeployment, setMaximiseDeployment] = useState(true);
+
   // ── Scoring weights ─────────────────────────────────────────────────────────
   const [weights, setWeights] = useState<ScoringWeights>(DEFAULT_WEIGHTS);
   const [showWeights, setShowWeights] = useState(false);
@@ -584,19 +588,70 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       });
     }
 
-    // No greedy sweep. Buying single shares of the top-scored name until the
-    // cash runs out concentrates the residual into one ticker and discards the
-    // bucket split computed above — in the all-at-target case it could route the
-    // entire deposit into one symbol. Unspent cash is reported as cash.
+    // 3. Residual sweep — put as much of the contribution into whole shares as
+    //    possible without recreating the original bug.
+    //
+    //    The version this replaces called find() on a score-sorted list every
+    //    iteration, so it kept selecting the same top ticker and dumped the
+    //    entire residual into one symbol. This walks the candidates round-robin
+    //    instead: one share each, highest score first, repeating while a full
+    //    pass still places something. Deployment ends up just as high, spread
+    //    across names in roughly score order.
+    let sweepSpent = 0;
+    let leftover = cash - spent;
+
+    if (maximiseDeployment) {
+      const candidates = scored
+        .filter((r) => (r.signal === 'Strong Add' || r.signal === 'Add') && r.price > 0)
+        .filter((r) => !focus || focusedSet.has(r.symbol))
+        .sort((a, b) => b.score - a.score);
+
+      const record = (c: ScoredRow) => {
+        const prev = buys.get(c.symbol);
+        buys.set(c.symbol, {
+          shares: (prev?.shares ?? 0) + 1, price: c.price,
+          score: c.score, signal: c.signal, pillar: c.pillar,
+        });
+        sweepSpent += c.price;
+        leftover -= c.price;
+      };
+
+      // Round-robin passes.
+      let guard = 2000;
+      let placedThisPass = true;
+      while (placedThisPass && guard > 0) {
+        placedThisPass = false;
+        for (const c of candidates) {
+          if (guard-- <= 0) break;
+          if (c.price <= leftover) { record(c); placedThisPass = true; }
+        }
+      }
+
+      // Final squeeze: once no full pass fits, keep taking the cheapest share
+      // that still fits. This is what actually drives leftover toward zero —
+      // without it, anything cheaper than the cheapest candidate's next share
+      // would sit idle purely because the round-robin had stalled.
+      const byPrice = [...candidates].sort((a, b) => a.price - b.price);
+      guard = 2000;
+      while (guard-- > 0) {
+        const next = byPrice.find((r) => r.price <= leftover);
+        if (!next) break;
+        record(next);
+      }
+    }
+
+    spent += sweepSpent;
+
     const list = [...buys.entries()]
       .map(([symbol, b]) => ({ symbol, ...b, cost: b.shares * b.price }))
       .sort((a, b) => b.cost - a.cost);
 
     return {
-      list, spent, leftover: cash - spent, cash, allAtTarget,
+      list, spent, leftover: cash - spent, cash, allAtTarget, sweepSpent,
+      deployedPct: cash > 0 ? (spent / cash) * 100 : 0,
       bucketDetail: bucketDetail.sort((a, b) => b.allocated - a.allocated),
     };
-  }, [contribution, buckets, scored, totalValue, focus, focusedSet]);
+  }, [contribution, buckets, scored, totalValue, focus, focusedSet, maximiseDeployment]);
 
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
@@ -834,6 +889,17 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
               placeholder="e.g. 5000"
               className="w-32 bg-[#0f1117] border border-[#1f2334] rounded-lg px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-blue-500 tabular-nums"
             />
+            <label className="ml-auto flex items-center gap-1.5 text-[11px] text-[#9aa2c0] cursor-pointer select-none">
+              <input
+                type="checkbox"
+                checked={maximiseDeployment}
+                onChange={(e) => setMaximiseDeployment(e.target.checked)}
+                className="accent-blue-500"
+              />
+              <span title="After the bucket split, keep buying single shares round-robin down the score order until nothing else fits.">
+                Max whole shares
+              </span>
+            </label>
           </div>
           {plan && plan.list.length > 0 && (
             <div className="space-y-1.5">
@@ -858,10 +924,19 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
               {/* Where the money went, and why any of it didn't. Whole-share
                   rounding always leaves a remainder; naming the cause keeps it
                   from looking like the planner silently dropped cash. */}
+              <div className="flex justify-between text-xs">
+                <span className="text-[#7c82a0]">Deployed %</span>
+                <span className={`tabular-nums ${plan.deployedPct >= 98 ? 'text-emerald-400' : 'text-[#9aa2c0]'}`}>
+                  {plan.deployedPct.toFixed(1)}%
+                </span>
+              </div>
+
               {plan.leftover > 1 && (
                 <div className="border-t border-[#1f2334] pt-1.5 mt-1.5 space-y-1">
                   <div className="text-[10px] text-[#7c82a0]">
-                    {fmt$(plan.leftover)} unallocated — held as cash rather than forced into whole shares.
+                    {maximiseDeployment
+                      ? `${fmt$(plan.leftover)} left over — less than the cheapest Add-rated share still available.`
+                      : `${fmt$(plan.leftover)} unallocated — held as cash rather than forced into whole shares.`}
                   </div>
                   {plan.bucketDetail.filter((d) => d.reason).map((d) => (
                     <div key={d.pillar} className="text-[10px] text-[#4a5070]">
