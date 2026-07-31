@@ -19,7 +19,7 @@ import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, TableSkeleton } from '@/components/polish';
 import { Activity, Banknote, CreditCard, Download, PiggyBank, Plus, ShoppingCart, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
-import { reconcileInflows } from '@/lib/portfolio/duplicate-inflows';
+import { reconcileInflows, unsweptIsSignificant } from '@/lib/portfolio/duplicate-inflows';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -399,6 +399,15 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
               </div>
             )}
           </div>
+
+          {unsweptIsSignificant(inflows) && (
+            <div className="mt-2.5 text-[11px] text-yellow-200/90 border-t border-[#1f2334] pt-2">
+              {fmt$(inflows.unswept)} more moved between registers than was recorded as arriving.
+              Register moves come from money that came in, so a gap this size suggests a deposit
+              isn&apos;t being recognised as one — check the unrecognised list, or widen the window
+              in case the deposit and its sweep fall either side of the boundary.
+            </div>
+          )}
 
           {inflows.unclassified.length > 0 && (
             <details className="mt-2.5">

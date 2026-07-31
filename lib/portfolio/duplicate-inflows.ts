@@ -45,6 +45,22 @@ export interface InflowReconciliation {
   /** Positive inflows that are neither — worth a look, they may be unclassified. */
   unclassified:      InflowLike[];
   unclassifiedTotal: number;
+  /**
+   * Internal movement minus external money in.
+   *
+   * Register moves originate from money that arrived externally, so over a long
+   * enough window the two should roughly converge — a deposit lands, then gets
+   * swept, possibly in several pieces:
+   *
+   *   $40,344.00 arrives  ->  $39,344.00 + $600.00 + $400.00 swept
+   *
+   * A materially positive gap means more money is being moved around inside the
+   * account than was recorded as arriving, which points at an external deposit
+   * that is not being recognised as one. Short windows produce noise from
+   * deposits and sweeps landing either side of the boundary, so this is a hint
+   * to investigate, not a defect count.
+   */
+  unswept:         number;
 }
 
 export function reconcileInflows(txns: InflowLike[]): InflowReconciliation {
@@ -68,9 +84,26 @@ export function reconcileInflows(txns: InflowLike[]): InflowReconciliation {
 
   const sum = (rows: InflowLike[]) => rows.reduce((s, r) => s + r.amount, 0);
 
+  const externalTotal = sum(external);
+  const internalTotal = sum(internal);
+
   return {
-    external, externalTotal: sum(external),
-    internal, internalTotal: sum(internal),
+    external, externalTotal,
+    internal, internalTotal,
     unclassified, unclassifiedTotal: sum(unclassified),
+    unswept: internalTotal - externalTotal,
   };
+}
+
+/**
+ * Threshold above which the internal/external gap is worth surfacing.
+ *
+ * Deliberately a proportion rather than a fixed dollar figure: a $700 gap on
+ * $44k of movement is boundary noise, the same gap on $2k of movement is not.
+ */
+export const UNSWEPT_SIGNIFICANCE = 0.15;
+
+export function unsweptIsSignificant(r: InflowReconciliation): boolean {
+  if (r.internalTotal <= 0) return false;
+  return r.unswept / r.internalTotal > UNSWEPT_SIGNIFICANCE;
 }
