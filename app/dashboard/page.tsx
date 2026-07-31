@@ -50,6 +50,7 @@ import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { PositionsTable } from '@/components/PositionsTable';
 import { CornerStoneCard } from '@/components/CornerStoneCard';
 import { DripStatusPanel } from '@/components/DripStatusPanel';
+import { PutInsurancePanel } from '@/components/PutInsurancePanel';
 import { CollapsiblePanel } from '@/components/CollapsiblePanel';
 import { OptionsCloseRecsPanel } from '@/components/OptionsCloseRecsPanel';
 import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyTargetsFor } from '@/components/SettingsPanel';
@@ -1788,16 +1789,26 @@ export default function DashboardPage() {
                   iconContainerClass={dangerAlerts.length > 0 ? 'bg-red-500/10 border border-red-500/20' : 'bg-orange-500/10 border border-orange-500/20'}
                   defaultOpen={true}
                 >
-                  <div className="pt-4">
-                    <MarginRiskPanel
-                      equity={account.equity}
-                      marginBalance={account.marginBalance}
-                      totalValue={account.totalValue}
+                  <div className="pt-4 space-y-4">
+                    {/* Drawdown headroom leads: it is the number the margin
+                        thresholds and the put rule both exist to protect. */}
+                    <PutInsurancePanel
                       positions={account.positions}
-                      dividendsAnnual={monthlyIncome * 12}
-                      marginRate={strategyTargets.marginRatePct / 100}
-                      familyCapPct={strategyTargets.familyCapPct}
+                      totalValue={account.totalValue}
+                      marginBalance={account.marginBalance}
+                      marginLimitPct={strategyTargets.marginLimitPct}
                     />
+                    <div className="border-t border-[#1f2334] pt-4">
+                      <MarginRiskPanel
+                        equity={account.equity}
+                        marginBalance={account.marginBalance}
+                        totalValue={account.totalValue}
+                        positions={account.positions}
+                        dividendsAnnual={monthlyIncome * 12}
+                        marginRate={strategyTargets.marginRatePct / 100}
+                        familyCapPct={strategyTargets.familyCapPct}
+                      />
+                    </div>
                   </div>
                 </CollapsiblePanel>
 
