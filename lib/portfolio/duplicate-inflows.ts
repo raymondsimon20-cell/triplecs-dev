@@ -1,21 +1,31 @@
 /**
- * duplicate-inflows — catch the same dollars counted twice.
+ * duplicate-inflows — reconcile external money against internal register moves.
  *
- * A brokerage account records both the arrival of external money and its
- * subsequent movement between the cash and margin registers. Both post as
- * positive amounts, so a naive classifier can count one deposit as two:
+ * A brokerage account posts both the arrival of external money and its later
+ * movement between the cash and margin registers as positive amounts. Counting
+ * both would double contributions.
  *
- *   Jul 24   Pineland Propert SIGONFI   +$1,620.00
- *   Jul 25   TRF FUNDS FRM TYPE 1       +$1,620.00
+ * ── Why this is reconciliation and not pairing ──────────────────────────────
+ * The first version of this matched inflows one-to-one on exact amount. That
+ * model is wrong, because a single deposit is routinely split across several
+ * register moves:
  *
- * An exact amount match within a few days is a strong signal — two unrelated
- * inflows landing on the same cent that close together is unlikely. This
- * surfaces candidates for review rather than silently reclassifying them,
- * because the wrong call either double-counts contributions or discards a real
- * deposit, and only the account holder can tell which.
+ *   Jul 27  TRANSFER FUNDS FROM SCHWAB BANK  +$40,344.00   <- one arrival
+ *   Jul 28  TRF FUNDS FRM TYPE 1             +$39,344.00   <- split across
+ *   Jul 31  TRF FUNDS FRM TYPE 2                +$440.65   <- several moves
+ *
+ * Strict pairing misses that, and — worse — reporting "2 pairs found" implies
+ * the check was exhaustive when it was not. Rather than chase subset sums for
+ * false precision, this reports the two totals and lets the size of the
+ * internal figure speak for itself.
+ *
+ * Correctness does not depend on this: internal register movements are excluded
+ * from the Contribution category by description, whether or not they can be
+ * traced to a specific deposit. This exists so the exclusion is visible and
+ * auditable rather than silent.
  */
 
-import { isInternalTransfer } from '@/lib/data/contribution-sources';
+import { isInternalTransfer, isKnownContributionSource } from '@/lib/data/contribution-sources';
 
 export interface InflowLike {
   id:          string;
@@ -25,75 +35,42 @@ export interface InflowLike {
   category:    string;
 }
 
-export interface DuplicatePair {
-  /** The transaction most likely to be the real external arrival. */
-  original:  InflowLike;
-  /** The transaction that appears to restate it. */
-  duplicate: InflowLike;
-  amount:    number;
-  daysApart: number;
-  /** True when one side looks like an internal register movement. */
-  internalMatch: boolean;
+export interface InflowReconciliation {
+  /** Inflows recognised as new external money. */
+  external:        InflowLike[];
+  externalTotal:   number;
+  /** Positive-amount movements between the account's own registers. */
+  internal:        InflowLike[];
+  internalTotal:   number;
+  /** Positive inflows that are neither — worth a look, they may be unclassified. */
+  unclassified:      InflowLike[];
+  unclassifiedTotal: number;
 }
 
-const DAY_MS = 86_400_000;
+export function reconcileInflows(txns: InflowLike[]): InflowReconciliation {
+  const external: InflowLike[] = [];
+  const internal: InflowLike[] = [];
+  const unclassified: InflowLike[] = [];
 
-/**
- * Find inflows that appear to be the same money recorded twice.
- *
- * @param windowDays How far apart two matching amounts can be and still pair.
- *                   Three days covers a weekend without reaching so far that
- *                   genuinely separate deposits of equal size get caught.
- */
-export function findDuplicateInflows(txns: InflowLike[], windowDays = 3): DuplicatePair[] {
-  const inflows = txns
-    .filter((t) => t.amount > 0)
-    .sort((a, b) => a.date.localeCompare(b.date));
+  for (const t of txns) {
+    if (t.amount <= 0) continue;
 
-  const pairs: DuplicatePair[] = [];
-  const claimed = new Set<string>();
-
-  for (let i = 0; i < inflows.length; i += 1) {
-    const a = inflows[i];
-    if (claimed.has(a.id)) continue;
-
-    for (let j = i + 1; j < inflows.length; j += 1) {
-      const b = inflows[j];
-      if (claimed.has(b.id)) continue;
-
-      // Compare to the cent — a near-match is far more likely to be two real
-      // deposits than one restated, so exactness is the point.
-      if (Math.abs(a.amount - b.amount) > 0.005) continue;
-
-      const days = Math.round(
-        (Date.parse(`${b.date}T12:00:00Z`) - Date.parse(`${a.date}T12:00:00Z`)) / DAY_MS,
-      );
-      if (days < 0 || days > windowDays) continue;
-
-      const aInternal = isInternalTransfer(a.description);
-      const bInternal = isInternalTransfer(b.description);
-
-      // The internal-looking side is the restatement; if neither looks
-      // internal, the earlier one is treated as the arrival.
-      const original  = bInternal ? a : aInternal ? b : a;
-      const duplicate = original.id === a.id ? b : a;
-
-      pairs.push({
-        original, duplicate,
-        amount: a.amount,
-        daysApart: Math.abs(days),
-        internalMatch: aInternal || bInternal,
-      });
-      claimed.add(a.id);
-      claimed.add(b.id);
-      break;
+    if (isInternalTransfer(t.description)) {
+      internal.push(t);
+    } else if (t.category === 'Contribution' || isKnownContributionSource(t.description)) {
+      external.push(t);
+    } else if (t.category === 'Transfer') {
+      // Positive, not a known payer, not a recognised register move. Could be a
+      // contribution source nobody has added yet, or an unrelated credit.
+      unclassified.push(t);
     }
   }
 
-  return pairs;
-}
+  const sum = (rows: InflowLike[]) => rows.reduce((s, r) => s + r.amount, 0);
 
-/** Total that would be double-counted if every flagged pair were counted twice. */
-export function duplicateExposure(pairs: DuplicatePair[]): number {
-  return pairs.reduce((s, p) => s + p.amount, 0);
+  return {
+    external, externalTotal: sum(external),
+    internal, internalTotal: sum(internal),
+    unclassified, unclassifiedTotal: sum(unclassified),
+  };
 }

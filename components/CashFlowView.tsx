@@ -19,7 +19,7 @@ import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, TableSkeleton } from '@/components/polish';
 import { Activity, Banknote, CreditCard, Download, PiggyBank, Plus, ShoppingCart, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
-import { findDuplicateInflows, duplicateExposure } from '@/lib/portfolio/duplicate-inflows';
+import { reconcileInflows } from '@/lib/portfolio/duplicate-inflows';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -157,13 +157,11 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
     [transactions, manualAsTxns, cutoff],
   );
 
-  // Same-money-twice detection. A deposit arrives and is then moved between the
-  // cash and margin registers, and both post as positive amounts — so an exact
-  // amount match a day or two apart is very likely one deposit, not two.
-  // Surfaced rather than auto-corrected: the wrong call either inflates
-  // contributions or discards a real deposit.
-  const duplicatePairs = useMemo(
-    () => findDuplicateInflows(windowTxns.map((t) => ({
+  // Split external money from internal register movement. Both post as
+  // positive amounts; only the former is new capital. Shown rather than merely
+  // applied, so the exclusion is auditable.
+  const inflows = useMemo(
+    () => reconcileInflows(windowTxns.map((t) => ({
       id: t.id, date: t.date, description: t.description, amount: t.amount, category: t.category,
     }))),
     [windowTxns],
@@ -372,35 +370,58 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
         <Stat icon={Activity} label="Net Operating" value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} accentClass="border-t-emerald-500/60" index={6} />
       </div>
 
-      {/* Possible same-money-twice inflows */}
-      {duplicatePairs.length > 0 && (
-        <div className="bg-yellow-500/5 border border-yellow-500/25 rounded-lg p-3">
-          <div className="text-xs font-semibold text-yellow-200 mb-1">
-            {duplicatePairs.length} inflow{duplicatePairs.length === 1 ? '' : 's'} may be recorded twice
-          </div>
-          <p className="text-[10px] text-[#7c82a0] mb-2">
-            A deposit arrives, then moves between the cash and margin registers — both post as
-            positive amounts. An exact match this close together is usually one deposit, not two.
-            Only the first of each pair is counted as a contribution; this is here so you can check
-            that call rather than take it on trust.
+      {/* Inflow reconciliation — external money vs internal register movement */}
+      {(inflows.internal.length > 0 || inflows.unclassified.length > 0) && (
+        <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-3">
+          <div className="text-xs font-semibold text-white mb-1">Inflow reconciliation</div>
+          <p className="text-[10px] text-[#4a5070] mb-2.5">
+            Money arriving and money moving between the account&apos;s cash and margin registers both
+            post as positive amounts. Only the first is new capital. One deposit is often split
+            across several register moves, so these totals will not line up one-to-one — the point
+            is that the internal figure is excluded, not that it matches.
           </p>
-          <div className="space-y-1">
-            {duplicatePairs.map((p) => (
-              <div key={p.duplicate.id} className="text-[11px] flex items-center gap-2 flex-wrap">
-                <span className="tabular-nums text-yellow-200 font-semibold w-20">{fmt$(p.amount)}</span>
-                <span className="text-[#9aa2c0]">{fmtDate(p.original.date)} {p.original.description.slice(0, 32)}</span>
-                <span className="text-[#4a5070]">↔</span>
-                <span className="text-[#7c82a0]">{fmtDate(p.duplicate.date)} {p.duplicate.description.slice(0, 32)}</span>
-                <span className="text-[10px] text-[#4a5070]">
-                  {p.daysApart}d apart{p.internalMatch ? ' · register move' : ''}
-                </span>
+          <div className="grid grid-cols-2 md:grid-cols-3 gap-3 text-xs">
+            <div>
+              <div className="text-[10px] text-[#7c82a0] mb-0.5">External money in</div>
+              <div className="text-emerald-400 tabular-nums font-semibold">{fmt$(inflows.externalTotal)}</div>
+              <div className="text-[10px] text-[#4a5070]">{inflows.external.length} counted as contributions</div>
+            </div>
+            <div>
+              <div className="text-[10px] text-[#7c82a0] mb-0.5">Internal register moves</div>
+              <div className="text-[#9aa2c0] tabular-nums font-semibold">{fmt$(inflows.internalTotal)}</div>
+              <div className="text-[10px] text-[#4a5070]">{inflows.internal.length} excluded — not new money</div>
+            </div>
+            {inflows.unclassified.length > 0 && (
+              <div>
+                <div className="text-[10px] text-[#7c82a0] mb-0.5">Unrecognised inflows</div>
+                <div className="text-yellow-300 tabular-nums font-semibold">{fmt$(inflows.unclassifiedTotal)}</div>
+                <div className="text-[10px] text-[#4a5070]">{inflows.unclassified.length} neither — worth a look</div>
               </div>
-            ))}
+            )}
           </div>
-          <div className="text-[10px] text-[#4a5070] mt-2">
-            {fmt$(duplicateExposure(duplicatePairs))} would be double-counted if both sides were
-            treated as contributions.
-          </div>
+
+          {inflows.unclassified.length > 0 && (
+            <details className="mt-2.5">
+              <summary className="cursor-pointer text-[10px] text-[#7c82a0] hover:text-white">
+                Show unrecognised inflows
+              </summary>
+              <div className="mt-1.5 space-y-1">
+                {inflows.unclassified.map((t) => (
+                  <div key={t.id} className="text-[11px] flex items-center gap-2">
+                    <span className="text-[#9aa2c0] tabular-nums w-20">{fmtDate(t.date)}</span>
+                    <span className="text-[#7c82a0] truncate flex-1">{t.description}</span>
+                    <span className="tabular-nums text-yellow-300">{fmt$(t.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <p className="text-[10px] text-[#4a5070] mt-1.5">
+                These are positive amounts that are neither a known payer nor a recognised register
+                move. If any is a real deposit, add its payer name to
+                {' '}<code className="text-[#7c82a0]">lib/data/contribution-sources.ts</code> so it
+                counts toward contributions rather than falling into the equity bridge residual.
+              </p>
+            </details>
+          )}
         </div>
       )}
 
