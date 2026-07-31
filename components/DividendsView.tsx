@@ -95,6 +95,8 @@ interface Coverage {
 
 interface SymbolRow {
   sym:         string;
+  /** Currently held. False for symbols that paid in the past but have since been sold. */
+  held:        boolean;
   cadence:     CadenceResult;
   cadenceLabel:string;
   t12m:        number;
@@ -247,6 +249,7 @@ export function DividendsView({ dividends, loading, positions }: Props) {
 
       return {
         sym,
+        held: Boolean(pos),
         cadence,
         cadenceLabel: CADENCE_LABEL[cadence.cadence],
         t12m: s.t12m,
@@ -305,6 +308,17 @@ export function DividendsView({ dividends, loading, positions }: Props) {
       derivedCount: symbolRows.filter((r) => r.cadence.derived).length,
     };
   }, [positions, symbolRows]);
+
+  // Why rows fall back, so the disclaimer can say something useful rather than
+  // just reporting a ratio the reader has to interpret.
+  const sourceStats = useMemo(() => {
+    const fallbacks = symbolRows.filter((r) => !r.cadence.derived);
+    return {
+      historicalOnly: symbolRows.filter((r) => !r.held).length,
+      // Fewer than two payments means cadence is unmeasurable, not unknown.
+      singlePayment:  fallbacks.filter((r) => r.cadence.observations <= 1).length,
+    };
+  }, [symbolRows]);
 
   const { sortKey, sortDir, requestSort, sortRows } = useSort<SymbolRow>('t12m');
   const sortedRows = useMemo(() => sortRows(symbolRows, {
@@ -384,14 +398,23 @@ export function DividendsView({ dividends, loading, positions }: Props) {
         <Stat icon={Gauge} label="Forward Yield" value={`${projection.forwardYield.toFixed(2)}%`} accentClass="border-t-emerald-500/60" index={4} />
       </div>
       <p className="text-[10px] text-[#4a5070]">
-        Projected income is an estimate. Cadence is derived from observed payment spacing for{' '}
-        {projection.derivedCount} of {symbolRows.length} symbols; the rest fall back to the static
-        frequency table and quoted yields.{' '}
+        Projected income is an estimate.{' '}
+        <strong className="text-[#7c82a0] font-medium">Cadence</strong> is derived from payment
+        history for {projection.derivedCount} of {symbolRows.length} symbols in this table
+        {sourceStats.historicalOnly > 0 && <> (which includes {sourceStats.historicalOnly} no
+        longer held)</>}
+        . The other {symbolRows.length - projection.derivedCount} fall back to the static frequency
+        table{sourceStats.singlePayment > 0 && <>, almost all because they have only one payment on
+        record — two are needed to measure spacing, so newer positions resolve on their next
+        distribution</>}
+        .{' '}
+        <strong className="text-[#7c82a0] font-medium">Ex-dates and pay dates</strong>{' '}
         {coverage
-          ? <>Ex-dates and pay dates are declared by the issuer for {coverage.withNextExDate} of{' '}
-             {coverage.requested} holdings (via Schwab fundamentals); the remainder are{' '}
+          ? <>are declared by the issuer for {coverage.withNextExDate} of your {coverage.requested}{' '}
+             current holdings (via Schwab fundamentals). A forward calendar only applies to what you
+             still own, which is why that count differs from the table above. The remainder are{' '}
              <span className="italic">estimated from cadence</span> and shown in grey italics.</>
-          : <>Ex-dates and pay dates are estimated from cadence until declared data loads.</>}
+          : <>are estimated from cadence until declared data loads.</>}
         {' '}Past distributions are not a guarantee of future distributions and actual income may
         differ materially.
       </p>
