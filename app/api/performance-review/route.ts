@@ -152,7 +152,8 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
     "<one plain-English finding per item, grounded in the numbers above>"
   ],
   "proposed": {
-    "triplesPct": 12,
+    "growthPct": 20,
+    "triplesPct": 10,
     "incomePct": 63
   },
   "rationale": "<3-5 plain-English sentences: what the data showed, what the change does, what should improve>"
@@ -183,7 +184,7 @@ Respond with ONLY a JSON object wrapped in <json></json> tags:
 
     // Sanitize: only allow known keys
     const allowedKeys: Array<keyof StrategyTargets> = [
-      'triplesPct', 'cornerstonePct', 'incomePct', 'hedgePct',
+      'growthPct', 'cornerstonePct', 'incomePct', 'triplesPct', 'hedgeSleevePct',
       'marginLimitPct', 'marginWarnPct', 'familyCapPct', 'fireNumber', 'marginRatePct',
     ];
     const cleanProposed: Partial<StrategyTargets> = {};

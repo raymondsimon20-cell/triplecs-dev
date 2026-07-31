@@ -4,10 +4,10 @@ import type { PillarSummary } from '@/lib/classify';
 import type { StrategyTargets } from '@/lib/utils';
 
 const PILLAR_COLORS: Record<string, string> = {
-  triples: '#f59e0b',
+  growth: '#0ea5e9',
   cornerstone: '#3b82f6',
   income: '#10b981',
-  hedge: '#8b5cf6',
+  triples: '#f59e0b',
   other: '#6b7280',
 };
 
@@ -20,10 +20,10 @@ function getTargetLabel(pct: number, pillar: string, targets?: StrategyTargets):
   if (!targets) return '';
 
   const pillars: Record<string, keyof StrategyTargets> = {
-    triples: 'triplesPct',
+    growth: 'growthPct',
     cornerstone: 'cornerstonePct',
     income: 'incomePct',
-    hedge: 'hedgePct',
+    triples: 'triplesPct',
   };
 
   const key = pillars[pillar];
@@ -40,10 +40,10 @@ function statusColor(pct: number, pillar: string, targets?: StrategyTargets): st
   if (!targets) return 'text-[#7c82a0]';
 
   const pillars: Record<string, keyof StrategyTargets> = {
-    triples: 'triplesPct',
+    growth: 'growthPct',
     cornerstone: 'cornerstonePct',
     income: 'incomePct',
-    hedge: 'hedgePct',
+    triples: 'triplesPct',
   };
 
   const key = pillars[pillar];

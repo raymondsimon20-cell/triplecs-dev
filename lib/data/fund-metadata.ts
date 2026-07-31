@@ -125,9 +125,12 @@ const EXPLICIT_MAINT_PCT: Record<string, number> = {
  */
 const DEFAULT_MAINT_PCT_BY_PILLAR: Record<PillarType, number> = {
   triples:     75,
-  hedge:       75,
   income:      60,
   cornerstone: 50,
+  // Growth anchors are the margin-efficient bucket — broad index and large-cap
+  // names sit near the 30% end of the maintenance range, which is a large part
+  // of why the bucket exists.
+  growth:      35,
   other:       50,
 };
 
@@ -157,19 +160,19 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['CLM',   'cornerstone', 'Cornerstone', true, true],
   ['CRF',   'cornerstone', 'Cornerstone', true, true],
 
-  // ── Hedge / inverse ─────────────────────────────────────────────────────────
-  ['SPXU',  'hedge', 'ProShares', false, false],
-  ['SQQQ',  'hedge', 'ProShares', false, false],
-  ['SDOW',  'hedge', 'ProShares', false, false],
-  ['SOXS',  'hedge', 'Direxion',  false, false],
-  ['FNGD',  'hedge', 'Direxion',  false, false],
-  ['SPXS',  'hedge', 'Direxion',  false, false],
-  ['FAZ',   'hedge', 'Direxion',  false, false],
-  ['SRTY',  'hedge', 'Direxion',  false, false],
-  ['SH',    'hedge', 'ProShares', false, false],
-  ['PSQ',   'hedge', 'ProShares', false, false],
-  ['DOG',   'hedge', 'ProShares', false, false],
-  ['UVXY',  'hedge', 'ProShares', false, false],
+  // ── Inverse / volatility (folded into Leveraged, 2026-07 P2P taxonomy) ──────
+  ['SPXU',  'triples', 'ProShares', false, false],
+  ['SQQQ',  'triples', 'ProShares', false, false],
+  ['SDOW',  'triples', 'ProShares', false, false],
+  ['SOXS',  'triples', 'Direxion',  false, false],
+  ['FNGD',  'triples', 'Direxion',  false, false],
+  ['SPXS',  'triples', 'Direxion',  false, false],
+  ['FAZ',   'triples', 'Direxion',  false, false],
+  ['SRTY',  'triples', 'Direxion',  false, false],
+  ['SH',    'triples', 'ProShares', false, false],
+  ['PSQ',   'triples', 'ProShares', false, false],
+  ['DOG',   'triples', 'ProShares', false, false],
+  ['UVXY',  'triples', 'ProShares', false, false],
 
   // ── Income — YieldMax single-stock covered-call series ──────────────────────
   ['TSLY',  'income', 'YieldMax', false, true ],
@@ -332,41 +335,41 @@ const FUND_ROWS: ReadonlyArray<Row> = [
   ['SGOV',  'income', 'iShares', false, false],
   ['USFR',  'income', 'WisdomTree', false, false],
 
-  // ── Broad index / growth anchors (income pillar in this strategy) ──────────
-  ['QQQ',   'income', 'Invesco',  false, true ],
-  ['QQQM',  'income', 'Invesco',  false, true ],
-  ['RSP',   'income', 'Invesco',  false, false],
-  ['SPY',   'income', 'iShares',  false, false],
-  ['IVV',   'income', 'iShares',  false, false],
-  ['IWM',   'income', 'iShares',  false, false],
-  ['VTI',   'income', 'Vanguard', false, false],
-  ['VOO',   'income', 'Vanguard', false, false],
-  ['VYM',   'income', 'Vanguard', false, true ],
-  ['VXUS',  'income', 'Vanguard', false, false],
-  ['SPYG',  'income', 'Individual', false, true ],
-  ['SCHD',  'income', 'Schwab',   false, true ],
-  ['SCHG',  'income', 'Schwab',   false, false],
-  ['SCHB',  'income', 'Schwab',   false, false],
-  ['ITA',   'income', 'iShares',  false, false],
-  ['VGT',   'income', 'Vanguard', false, false],
+  // ── Growth: broad index anchors ─────────────────────────────────────────────
+  ['QQQ',   'growth' , 'Invesco',  false, true ],
+  ['QQQM',  'growth' , 'Invesco',  false, true ],
+  ['RSP',   'growth' , 'Invesco',  false, false],
+  ['SPY',   'growth' , 'iShares',  false, false],
+  ['IVV',   'growth' , 'iShares',  false, false],
+  ['IWM',   'growth' , 'iShares',  false, false],
+  ['VTI',   'growth' , 'Vanguard', false, false],
+  ['VOO',   'growth' , 'Vanguard', false, false],
+  ['VYM',   'growth' , 'Vanguard', false, true ],
+  ['VXUS',  'growth' , 'Vanguard', false, false],
+  ['SPYG',  'growth' , 'Individual', false, true ],
+  ['SCHD',  'growth' , 'Schwab',   false, true ],
+  ['SCHG',  'growth' , 'Schwab',   false, false],
+  ['SCHB',  'growth' , 'Schwab',   false, false],
+  ['ITA',   'growth' , 'iShares',  false, false],
+  ['VGT',   'growth' , 'Vanguard', false, false],
 
-  // ── Individual stocks (treated as income pillar growth anchors) ────────────
-  ['NVDA',  'income', 'Individual', false, true ],
-  ['AAPL',  'income', 'Individual', false, false],
-  ['MSFT',  'income', 'Individual', false, false],
-  ['AMZN',  'income', 'Individual', false, false],
-  ['GOOGL', 'income', 'Individual', false, false],
-  ['META',  'income', 'Individual', false, false],
-  ['MCD',   'income', 'Individual', false, false],
-  ['COST',  'income', 'Individual', false, false],
-  ['BRK.B', 'income', 'Individual', false, false],
-  ['MSTR',  'income', 'Individual', false, false],
+  // ── Growth: individual large-cap anchors ────────────────────────────────────
+  ['NVDA',  'growth' , 'Individual', false, true ],
+  ['AAPL',  'growth' , 'Individual', false, false],
+  ['MSFT',  'growth' , 'Individual', false, false],
+  ['AMZN',  'growth' , 'Individual', false, false],
+  ['GOOGL', 'growth' , 'Individual', false, false],
+  ['META',  'growth' , 'Individual', false, false],
+  ['MCD',   'growth' , 'Individual', false, false],
+  ['COST',  'growth' , 'Individual', false, false],
+  ['BRK.B', 'growth' , 'Individual', false, false],
+  ['MSTR',  'growth' , 'Individual', false, false],
 
-  // ── Gold / precious metals ──────────────────────────────────────────────────
-  ['AAAU',  'income', 'Gold',       false, false],
-  ['GLD',   'income', 'Gold',       false, false],
-  ['IAU',   'income', 'Gold',       false, false],
-  ['KGC',   'income', 'Individual', false, false],
+  // ── Growth: gold / precious-metal anchors ───────────────────────────────────
+  ['AAAU',  'growth' , 'Gold',       false, false],
+  ['GLD',   'growth' , 'Gold',       false, false],
+  ['IAU',   'growth' , 'Gold',       false, false],
+  ['KGC',   'growth' , 'Individual', false, false],
 ];
 
 // ─── Fallback distribution yields ────────────────────────────────────────────

@@ -87,7 +87,7 @@ export function MarketConditionsDashboard({
       triplesPct: recommendation.suggestedChanges.triplesPct ?? currentTargets.triplesPct,
       cornerstonePct: recommendation.suggestedChanges.cornerstonePct ?? currentTargets.cornerstonePct,
       incomePct: recommendation.suggestedChanges.incomePct ?? currentTargets.incomePct,
-      hedgePct: recommendation.suggestedChanges.hedgePct ?? currentTargets.hedgePct,
+      hedgeSleevePct: recommendation.suggestedChanges.hedgeSleevePct ?? currentTargets.hedgeSleevePct,
     };
     onTargetsChange(newTargets);
     setShowApplyButton(false);
@@ -292,19 +292,19 @@ export function MarketConditionsDashboard({
                     )}
                   </div>
                 )}
-                {recommendation.suggestedChanges.hedgePct !== undefined && (
+                {recommendation.suggestedChanges.hedgeSleevePct !== undefined && (
                   <div className="bg-[#1e2139] rounded p-2 border border-red-800/30">
-                    <p className="text-xs text-gray-400">Hedge Target</p>
+                    <p className="text-xs text-gray-400">Hedge Sleeve</p>
                     <p className="text-sm font-bold text-red-400">
-                      {recommendation.suggestedChanges.hedgePct}%
+                      {recommendation.suggestedChanges.hedgeSleevePct}%
                     </p>
-                    {recommendation.suggestedChanges.hedgePct !== currentTargets.hedgePct && (
+                    {recommendation.suggestedChanges.hedgeSleevePct !== currentTargets.hedgeSleevePct && (
                       <p className={`text-xs mt-1 ${
-                        recommendation.suggestedChanges.hedgePct > currentTargets.hedgePct
+                        recommendation.suggestedChanges.hedgeSleevePct > currentTargets.hedgeSleevePct
                           ? 'text-green-400'
                           : 'text-red-400'
                       }`}>
-                        {recommendation.suggestedChanges.hedgePct > currentTargets.hedgePct ? '↑' : '↓'} from {currentTargets.hedgePct}%
+                        {recommendation.suggestedChanges.hedgeSleevePct > currentTargets.hedgeSleevePct ? '↑' : '↓'} from {currentTargets.hedgeSleevePct}%
                       </p>
                     )}
                   </div>

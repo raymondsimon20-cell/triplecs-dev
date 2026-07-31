@@ -213,7 +213,7 @@ export async function POST(req: Request) {
           triplesPct:     strategy.triplesPct,
           cornerstonePct: strategy.cornerstonePct,
           incomePct:      strategy.incomePct,
-          hedgePct:       strategy.hedgePct,
+          growthPct:       strategy.growthPct,
         },
         marginThresholds: {
           trimAbovePct:     strategy.marginLimitPct,

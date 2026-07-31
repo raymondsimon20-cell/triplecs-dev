@@ -316,8 +316,8 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
     if (scope && !overrideActive) setOverrideActive(true);
   }, [scope, overrideActive]);
 
-  type PillarKey = 'triplesPct' | 'cornerstonePct' | 'incomePct' | 'hedgePct';
-  const PILLAR_KEYS: PillarKey[] = ['triplesPct', 'cornerstonePct', 'incomePct', 'hedgePct'];
+  type PillarKey = 'triplesPct' | 'cornerstonePct' | 'incomePct' | 'growthPct';
+  const PILLAR_KEYS: PillarKey[] = ['triplesPct', 'cornerstonePct', 'incomePct', 'growthPct'];
 
   const setPillar = useCallback((key: PillarKey, value: number) => {
     setDraft((prev) => {
@@ -378,7 +378,7 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
     setTimeout(() => setSaved(false), 2000);
   }
 
-  const allocationSum = draft.triplesPct + draft.cornerstonePct + draft.incomePct + draft.hedgePct;
+  const allocationSum = draft.triplesPct + draft.cornerstonePct + draft.incomePct + draft.growthPct;
   const sumOk = allocationSum === 100;
 
   // ── Render ─────────────────────────────────────────────────────────────────
@@ -477,7 +477,7 @@ export function SettingsPanel({ accountKey, accountLabel }: SettingsPanelProps =
                 <SliderRow label="Triples"     description="3× leveraged ETFs (UPRO, TQQQ…)" value={draft.triplesPct}     min={0} max={40}  onChange={(v) => setPillar('triplesPct', v)} />
                 <SliderRow label="Cornerstone" description="CLM / CRF closed-end funds"      value={draft.cornerstonePct} min={0} max={40}  onChange={(v) => setPillar('cornerstonePct', v)} />
                 <SliderRow label="Core / Income" description="Yieldmax, Defiance, JEPI…"     value={draft.incomePct}     min={0} max={100} onChange={(v) => setPillar('incomePct', v)} />
-                <SliderRow label="Hedge"       description="Inverse ETFs, put protection"   value={draft.hedgePct}      min={0} max={30}  onChange={(v) => setPillar('hedgePct', v)} />
+                <SliderRow label="Hedge"       description="Inverse ETFs, put protection"   value={draft.growthPct}      min={0} max={30}  onChange={(v) => setPillar('growthPct', v)} />
               </section>
 
               <section className="space-y-4">

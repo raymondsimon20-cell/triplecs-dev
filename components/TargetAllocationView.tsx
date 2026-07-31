@@ -57,7 +57,7 @@ const SIGNAL_CLASS: Record<Signal, string> = {
 };
 
 const PILLAR_LABEL: Record<string, string> = {
-  triples: 'Triples', cornerstone: 'Cornerstone', income: 'Income', hedge: 'Hedge', other: 'Other',
+  growth: 'Growth', cornerstone: 'CEFs', income: 'High Yield', triples: 'Leveraged', other: 'Other',
 };
 
 export interface ScoredRow extends AllocationRow {
@@ -78,7 +78,7 @@ interface Props {
   accountHash?:   string;
   totalValue:     number;
   pillarSummary:  PillarSummaryRow[];
-  targets:        { triplesPct: number; cornerstonePct: number; incomePct: number; hedgePct: number };
+  targets:        { growthPct: number; cornerstonePct: number; incomePct: number; triplesPct: number };
   /** Dividend payment history, used to derive real yields. Optional — falls
    *  back to Schwab's quoted yield and the static table when absent. */
   dividends?:     DividendRecord[];
@@ -235,13 +235,13 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
 
   // ── Bucket state vs targets ─────────────────────────────────────────────────
   const buckets = useMemo(() => {
-    const actual: Record<string, number> = { triples: 0, cornerstone: 0, income: 0, hedge: 0, other: 0 };
+    const actual: Record<string, number> = { growth: 0, cornerstone: 0, income: 0, triples: 0, other: 0 };
     for (const p of pillarSummary) actual[p.pillar] = (actual[p.pillar] ?? 0) + p.totalValue;
     const targetPct: Record<string, number> = {
-      triples: targets.triplesPct, cornerstone: targets.cornerstonePct,
-      income: targets.incomePct, hedge: targets.hedgePct, other: 0,
+      growth: targets.growthPct, cornerstone: targets.cornerstonePct,
+      income: targets.incomePct, triples: targets.triplesPct, other: 0,
     };
-    return (['income', 'cornerstone', 'triples', 'hedge'] as const).map((pillar) => {
+    return (['income', 'cornerstone', 'growth', 'triples'] as const).map((pillar) => {
       const actual$ = actual[pillar] ?? 0;
       const actualPct = totalValue > 0 ? (actual$ / totalValue) * 100 : 0;
       const gapPp = targetPct[pillar] - actualPct;

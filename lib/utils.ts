@@ -82,29 +82,58 @@ export function clamp(value: number, min: number, max: number): number {
  * operators (e.g. targeting 40–45%) can adjust by POSTing to /api/strategy.
  */
 export interface StrategyTargets {
-  triplesPct: number;       // % of portfolio
-  cornerstonePct: number;   // % of portfolio
-  incomePct: number;        // % of portfolio
-  hedgePct: number;         // % of portfolio
+  // ── Bucket targets (P2P taxonomy). These four should sum to 100. ──────────
+  growthPct: number;        // % of portfolio — Growth anchors
+  cornerstonePct: number;   // % of portfolio — CEFs (DRIP-at-NAV engines)
+  incomePct: number;        // % of portfolio — High Yield workhorses
+  triplesPct: number;       // % of portfolio — Leveraged (3x longs + inverse)
+
+  /**
+   * Sizing for the short-hedge sleeve, as % of portfolio. This is NOT a bucket
+   * — the hedge legs live inside Leveraged. It only sizes the paired shorts
+   * (SPXU against UPRO, SQQQ against TQQQ, …) in the rebalance planner.
+   */
+  hedgeSleevePct: number;
+
+  // ── Margin guardrails ─────────────────────────────────────────────────────
   marginLimitPct: number;          // trim fires above this
   marginWarnPct: number;           // informational warn threshold
   marginTrimTargetPct: number;     // trim aims to bring margin back here
   marginNewBuyCeilingPct: number;  // PILLAR_FILL bails above this
+
   familyCapPct: number;     // max single fund family concentration
   fireNumber: number;       // monthly income FIRE target ($)
   marginRatePct: number;    // margin interest rate % (e.g. 7.75 for 7.75%)
 }
 
+/**
+ * P2P defaults (2026-07).
+ *
+ * Margin: the P2P rule is "maintain at least 50% equity", i.e. utilisation up to
+ * 50%. Schwab independently hard-rejects orders above 50% utilisation, so the
+ * app's own ceiling is deliberately set BELOW 50 — at 50 exactly, every order
+ * sits on the boundary where the broker bounces it and the guardrail would only
+ * announce itself through failed orders. 48% new-buy ceiling leaves headroom;
+ * trim fires at 45 and pulls back to 40.
+ *
+ * Bucket splits are a starting point, not a prescription — the P2P material
+ * gives no target percentages anywhere. Use "Set Targets from Current" or edit
+ * via /api/strategy.
+ */
 export const DEFAULT_TARGETS: StrategyTargets = {
-  triplesPct: 10,
+  growthPct:      20,
   cornerstonePct: 20,
-  incomePct: 65,
-  hedgePct: 5,
-  marginLimitPct: 30,
-  marginWarnPct: 20,
-  marginTrimTargetPct: 25,
-  marginNewBuyCeilingPct: 35,
+  incomePct:      50,
+  triplesPct:     10,
+
+  hedgeSleevePct: 5,
+
+  marginWarnPct:          35,
+  marginTrimTargetPct:    40,
+  marginLimitPct:         45,
+  marginNewBuyCeilingPct: 48,   // stays under Schwab's hard 50% rejection
+
   familyCapPct: 20,
   fireNumber: 10000,
-  marginRatePct: 7.75,
+  marginRatePct: 8.4,           // P2P negotiated-rate target
 };

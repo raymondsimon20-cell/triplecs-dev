@@ -9,11 +9,11 @@ export interface HealthInputs {
   marginWarnPct?: number;         // default 20
   marginLimitPct?: number;        // default 30
   /** Per-pillar drift from target in percentage points (absolute). */
-  pillarDriftPp: { triples: number; cornerstone: number; income: number; hedge: number };
+  pillarDriftPp: { growth: number; cornerstone: number; income: number; triples: number };
   /** Largest single position as % of portfolio (seeds excluded upstream). */
   maxConcentrationPct: number;
   /** Hedge pillar as % of portfolio. */
-  hedgePct: number;
+  hedgeSleevePct: number;
   killSwitchActive?: boolean;
   inDefenseMode?: boolean;
 }
@@ -62,7 +62,7 @@ export function healthScore(h: HealthInputs): HealthResult {
   }
 
   // Hedge floor: below 1% costs 10 points.
-  if (h.hedgePct < 1) {
+  if (h.hedgeSleevePct < 1) {
     deductions.push({ reason: 'Hedges are below the 1% minimum — no crash insurance', points: 10 });
   }
 

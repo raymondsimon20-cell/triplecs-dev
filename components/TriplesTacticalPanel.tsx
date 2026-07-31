@@ -17,7 +17,7 @@ import {
   ChevronDown, ChevronUp, RefreshCw, Settings, Zap, Shield,
 } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
-import { HEDGE_SYMBOLS } from '@/lib/classify';
+import { INVERSE_SYMBOLS } from '@/lib/classify';
 import { fmt$, fmtPct } from '@/lib/utils';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -599,7 +599,7 @@ function HedgePairSection({ positions }: { positions: EnrichedPosition[] }) {
   );
 
   // Also show any un-paired hedge positions
-  const hedgePositions = positions.filter((p) => HEDGE_SYMBOLS.has(p.instrument.symbol));
+  const hedgePositions = positions.filter((p) => INVERSE_SYMBOLS.has(p.instrument.symbol));
   const pairedShortSymbols = new Set(activePairs.map((p) => p.short));
   const unpairedHedges = hedgePositions.filter(
     (p) => !pairedShortSymbols.has(p.instrument.symbol),

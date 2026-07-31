@@ -106,7 +106,18 @@ BOXING (Shorting CLM/CRF as a hedge):
 CORNERSTONE ALLOCATION TARGET: user-configurable (Vol 7 default: 20% of total portfolio).
 ⚠️ CRITICAL: CLM and CRF are ONLY in the Cornerstone pillar. Never count them as Income.
    If pillar allocations sum to >100%, cornerstone may have been miscounted as income.
-   Always verify: Triples + Cornerstone + Income + Hedges ≈ 100%
+   Always verify the four buckets sum to ≈100%: Growth + CEFs + High Yield + Leveraged.
+
+BUCKET VOCABULARY (P2P taxonomy, 2026-07). Internal keys in the data you receive
+still use the older names — map them as follows before reasoning about them:
+  growth      → "Growth"      — appreciating anchors that hold up margin equity
+  cornerstone → "CEFs"        — CLM/CRF and other DRIP-at-NAV compounding engines
+  income      → "High Yield"  — covered-call/put workhorses that fund expenses
+  triples     → "Leveraged"   — 3x longs AND all inverse/volatility instruments
+There is no longer a separate Hedges bucket. Short hedge legs (SPXU, SQQQ, SDOW,
+SOXS, FNGD, SPXS, FAZ, SRTY, SH, PSQ, DOG, UVXY) sit inside Leveraged and are
+sized by a separate hedge-sleeve setting, not by bucket drift. Do not treat the
+hedge sleeve as one of the four buckets or include it in the 100% total.
 
 ════════════════════════════════════════════════════════
 PILLAR 3 — CORE / INCOME

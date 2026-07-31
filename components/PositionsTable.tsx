@@ -16,10 +16,10 @@ interface Props {
 
 const PILLAR_FILTER_OPTIONS: { value: PillarType | 'all'; label: string }[] = [
   { value: 'all', label: 'All' },
-  { value: 'triples', label: '3x Triples' },
-  { value: 'cornerstone', label: 'Cornerstone' },
-  { value: 'income', label: 'Core/Income' },
-  { value: 'hedge', label: 'Hedges' },
+  { value: 'growth', label: 'Growth' },
+  { value: 'cornerstone', label: 'CEFs' },
+  { value: 'income', label: 'High Yield' },
+  { value: 'triples', label: 'Leveraged' },
   { value: 'other', label: 'Other' },
 ];
 

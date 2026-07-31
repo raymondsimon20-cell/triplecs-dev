@@ -33,10 +33,10 @@ interface ChartPoint {
 }
 
 const PILLAR_COLOR: Record<string, string> = {
-  triples:     '#f59e0b',
+  growth:      '#0ea5e9',
   cornerstone: '#3b82f6',
   income:      '#10b981',
-  hedge:       '#8b5cf6',
+  triples:     '#f59e0b',
   other:       '#6b7280',
 };
 

@@ -73,7 +73,7 @@ function baseInputs(overrides: Partial<EngineInputs> = {}): EngineInputs {
     spyHistory: Array(25).fill(500),
     vix:        18,
     state:      defaultSignalState(),
-    pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 65, hedgePct: 5 },
+    pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 65, growthPct: 5 },
     recentSells30d:       [],
     buyingPowerAvailable: 10_000,
     ...overrides,
@@ -542,7 +542,7 @@ test('skips when per-candidate size would be sub-$100 even with budget ≥ $100'
     ],
     cash:       1_000,
     marginDebt: 0,
-    pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 6, hedgePct: 5 },
+    pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 6, growthPct: 5 },
   }));
   const fires = findSignals(result.signals, 'PILLAR_FILL');
   // With per-candidate floor, no signals when each would be sub-$100.

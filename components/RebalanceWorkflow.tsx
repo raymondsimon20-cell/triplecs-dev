@@ -56,14 +56,14 @@ const PILLAR_COLOR: Record<string, string> = {
   triples:     'text-violet-400',
   cornerstone: 'text-amber-400',
   income:      'text-emerald-400',
-  hedge:       'text-blue-400',
+  growth:       'text-blue-400',
 };
 
 const PILLAR_BAR: Record<string, string> = {
   triples:     'bg-violet-500',
   cornerstone: 'bg-amber-500',
   income:      'bg-emerald-500',
-  hedge:       'bg-blue-500',
+  growth:       'bg-blue-500',
 };
 
 function fmt$(n: number) {
@@ -237,7 +237,7 @@ export function RebalanceWorkflow({
     triplesPct:     strategyTargets.triplesPct,
     cornerstonePct: strategyTargets.cornerstonePct,
     incomePct:      strategyTargets.incomePct,
-    hedgePct:       strategyTargets.hedgePct,
+    growthPct:       strategyTargets.growthPct,
   };
 
   // ── Get AI plan ─────────────────────────────────────────────────────────────
@@ -371,7 +371,7 @@ export function RebalanceWorkflow({
 
   // Build simple drift data from pillarSummary if AI hasn't returned drifts yet
   const displayDrifts: PillarDrift[] = drifts.length > 0 ? drifts :
-    ['triples', 'cornerstone', 'income', 'hedge'].map((pillar) => {
+    ['triples', 'cornerstone', 'income', 'growth'].map((pillar) => {
       const ps     = pillarSummary.find((p) => p.pillar === pillar);
       const target = targets[`${pillar}Pct` as keyof typeof targets] ?? 0;
       const curr   = ps?.portfolioPercent ?? 0;

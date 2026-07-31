@@ -132,7 +132,26 @@ export type SchwabQuotesResponse = Record<string, { quote: SchwabQuote; referenc
 
 // ─── App-level enriched types ─────────────────────────────────────────────────
 
-export type PillarType = 'triples' | 'cornerstone' | 'income' | 'hedge' | 'other';
+/**
+ * Portfolio buckets, P2P taxonomy (2026-07).
+ *
+ * Internal keys are kept from the previous Triple-C naming to avoid churning 35
+ * files of string literals; the user-facing labels in PILLAR_LABELS carry the
+ * P2P vocabulary:
+ *
+ *   growth      → "Growth"      (anchors; appreciate and stabilise margin equity)
+ *   cornerstone → "CEFs"        (DRIP-at-NAV compounding engines)
+ *   income      → "High Yield"  (covered-call/put workhorses that pay the bills)
+ *   triples     → "Leveraged"   (3x longs AND all inverse/volatility instruments)
+ *
+ * `hedge` was retired here. The P2P taxonomy has no hedge bucket, and its former
+ * members (SPXU/SQQQ/SH/PSQ/DOG/UVXY/FAZ/FNGD/SOXS…) are all inverse or
+ * volatility instruments, which belong with Leveraged. They were deliberately
+ * NOT moved into Growth: Growth exists to appreciate and hold up margin equity,
+ * and an inverse ETF does the opposite by construction — filing them there would
+ * corrupt both the bucket's meaning and its blended-yield figure.
+ */
+export type PillarType = 'growth' | 'triples' | 'cornerstone' | 'income' | 'other';
 
 export interface EnrichedPosition extends SchwabPosition {
   pillar: PillarType;

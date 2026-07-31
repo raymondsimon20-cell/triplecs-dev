@@ -18,7 +18,8 @@
  *       triplesPct:     number,
  *       cornerstonePct: number,
  *       incomePct:      number,
- *       hedgePct:       number,
+ *       growthPct:      number,
+ *       hedgeSleevePct: number,
  *     }
  *   }
  *
@@ -55,10 +56,12 @@ interface PillarSummary {
 }
 
 interface Targets {
-  triplesPct:     number;
+  growthPct:      number;
   cornerstonePct: number;
   incomePct:      number;
-  hedgePct:       number;
+  triplesPct:     number;
+  /** Sizes the paired short-hedge legs; not a bucket. */
+  hedgeSleevePct: number;
 }
 
 export interface RebalanceOrder {
@@ -189,10 +192,10 @@ async function handlePost(req: Request) {
   // ── 1. Calculate pillar drifts ─────────────────────────────────────────────
 
   const targetMap: Record<string, number> = {
-    triples:     targets.triplesPct,
+    growth:      targets.growthPct,
     cornerstone: targets.cornerstonePct,
     income:      targets.incomePct,
-    hedge:       targets.hedgePct,
+    triples:     targets.triplesPct,
   };
 
   const drifts: PillarDrift[] = pillarSummary
@@ -258,11 +261,16 @@ async function handlePost(req: Request) {
     'FNGU': 'FNGD',
   };
 
-  // Target size for each short hedge = hedge pillar target split evenly across active pairs
+  // Short hedge legs used to be identified by the `hedge` pillar. That pillar was
+  // retired with the P2P taxonomy change and its members now sit in Leveraged
+  // alongside the 3x longs — so pillar alone no longer distinguishes a hedge leg
+  // from the long it hedges. Identify them by membership in the pair table
+  // instead, which is what actually defines a hedge leg here.
+  const HEDGE_LEGS = new Set(Object.values(HEDGE_PAIRS));
   const activePairs = equityPositions
-    .filter((p) => Number(p.shortQuantity) > 0 && p.pillar === 'hedge')
+    .filter((p) => Number(p.shortQuantity) > 0 && HEDGE_LEGS.has(p.instrument.symbol.toUpperCase()))
     .map((p) => p.instrument.symbol);
-  const hedgeTargetDollars = (targets.hedgePct / 100) * totalValue;
+  const hedgeTargetDollars = (targets.hedgeSleevePct / 100) * totalValue;
   const perPairTargetDollars = activePairs.length > 0
     ? hedgeTargetDollars / activePairs.length
     : hedgeTargetDollars;

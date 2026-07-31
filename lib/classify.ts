@@ -21,7 +21,13 @@ export const CORNERSTONE_SYMBOLS = new Set([
 ]);
 
 /** Short / inverse ETFs and put hedges */
-export const HEDGE_SYMBOLS = new Set([
+/**
+ * Inverse and volatility instruments. Formerly the `hedge` pillar; folded into
+ * Leveraged with the 2026-07 P2P taxonomy change. Kept as a named set because
+ * several call sites still need to identify "this is a short/inverse position"
+ * independently of which bucket it is filed under.
+ */
+export const INVERSE_SYMBOLS = new Set([
   'SPXU', 'SQQQ', 'SDOW', 'FAZ', 'SRTY', 'SPXS',
   'SH', 'PSQ', 'DOG', 'UVXY', 'SOXS', 'FNGD',
 ]);
@@ -122,18 +128,22 @@ export function classifySymbol(symbol: string): PillarType {
 
   if (TRIPLES_SYMBOLS.has(s))      return 'triples';
   if (CORNERSTONE_SYMBOLS.has(s))  return 'cornerstone';
-  if (HEDGE_SYMBOLS.has(s))        return 'hedge';
-  if (INCOME_SYMBOLS.has(s) || GROWTH_ANCHORS.has(s)) return 'income';
+  // Inverse and volatility instruments live in Leveraged under the P2P
+  // taxonomy — they are leveraged directional bets, not growth anchors.
+  if (INVERSE_SYMBOLS.has(s))      return 'triples';
+  if (GROWTH_ANCHORS.has(s))       return 'growth';
+  if (INCOME_SYMBOLS.has(s))       return 'income';
   // Options: classify based on instrument asset type downstream
   return 'other';
 }
 
+/** User-facing bucket names, P2P vocabulary. */
 export const PILLAR_LABELS: Record<PillarType, string> = {
-  triples: 'Triple Leveraged ETFs',
-  cornerstone: 'Cornerstone (CLM/CRF)',
-  income: 'Core / Income',
-  hedge: 'Hedges / Shorts',
-  other: 'Other',
+  growth:      'Growth',
+  cornerstone: 'CEFs',
+  income:      'High Yield',
+  triples:     'Leveraged',
+  other:       'Other',
 };
 
 // ─── Position enrichment ──────────────────────────────────────────────────────
@@ -168,7 +178,10 @@ export function enrichPositions(
         const isLongPut  = pos.longQuantity  > 0 && symbol.toUpperCase().includes('P');
         const isShortPos = pos.shortQuantity > 0;
         if (isLongPut) {
-          pillar = 'hedge';      // long puts are hedges
+          // Protective puts are the insurance layer. With `hedge` retired they
+          // sit in Leveraged, which is where the other directional-protection
+          // instruments now live.
+          pillar = 'triples';
         } else if (isShortPos) {
           pillar = 'income';     // short puts/calls = premium income
         } else {
@@ -226,7 +239,7 @@ export function summarizeByPillar(
 ): PillarSummary[] {
   const map = new Map<PillarType, PillarSummary>();
 
-  const pillars: PillarType[] = ['triples', 'cornerstone', 'income', 'hedge', 'other'];
+  const pillars: PillarType[] = ['growth', 'cornerstone', 'income', 'triples', 'other'];
   for (const p of pillars) {
     map.set(p, {
       pillar: p,

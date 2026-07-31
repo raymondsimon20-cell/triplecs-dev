@@ -114,7 +114,7 @@ export async function POST(req: Request) {
       triplesPct:     body.pillarTargets?.triplesPct     ?? strategy.triplesPct,
       cornerstonePct: body.pillarTargets?.cornerstonePct ?? strategy.cornerstonePct,
       incomePct:      body.pillarTargets?.incomePct      ?? strategy.incomePct,
-      hedgePct:       body.pillarTargets?.hedgePct       ?? strategy.hedgePct,
+      growthPct:       body.pillarTargets?.growthPct       ?? strategy.growthPct,
     };
 
     // Apply CONFIG overrides by mutating a copy of the engine config in

@@ -275,7 +275,7 @@ function getMaintenanceScore(symbol: string) {
 const SIM_PILLAR_MAP: Record<string, PillarType> = {
   UPRO: 'triples', TQQQ: 'triples', SPXL: 'triples', UDOW: 'triples', UMDD: 'triples', URTY: 'triples',
   CLM: 'cornerstone', CRF: 'cornerstone',
-  SQQQ: 'hedge', SPXS: 'hedge', UVXY: 'hedge',
+  SQQQ: 'triples', SPXS: 'triples', UVXY: 'triples',
 };
 
 const WARN_MARGIN_PCT = 30;
@@ -284,10 +284,10 @@ const MAX_MARGIN_PCT  = 50;
 function fmtPct(n: number) { return `${n.toFixed(1)}%`; }
 
 const PILLAR_COLORS: Record<PillarType, string> = {
-  triples:     'text-violet-400',
+  growth:      'text-sky-400',
   cornerstone: 'text-amber-400',
   income:      'text-emerald-400',
-  hedge:       'text-blue-400',
+  triples:     'text-violet-400',
   other:       'text-[#7c82a0]',
 };
 

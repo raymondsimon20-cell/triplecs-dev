@@ -132,12 +132,12 @@ function summarisePillars(slice: AccountSlice): PillarSummary[] {
   }));
 }
 
-function targetMapFor(strategy: { triplesPct: number; cornerstonePct: number; incomePct: number; hedgePct: number }): Record<string, number> {
+function targetMapFor(strategy: { growthPct: number; cornerstonePct: number; incomePct: number; triplesPct: number }): Record<string, number> {
   return {
-    triples:     strategy.triplesPct,
+    growth:      strategy.growthPct,
     cornerstone: strategy.cornerstonePct,
     income:      strategy.incomePct,
-    hedge:       strategy.hedgePct,
+    triples:     strategy.triplesPct,
   };
 }
 

@@ -622,10 +622,10 @@ async function runSignalsAndStageInner(runStartedAt: number): Promise<RunResult>
         // PILLAR_FILL) now drift / size against this account's allocation,
         // not the household sum.
         pillarTargets: {
-          triplesPct:     strategy.triplesPct,
+          growthPct:      strategy.growthPct,
           cornerstonePct: strategy.cornerstonePct,
           incomePct:      strategy.incomePct,
-          hedgePct:       strategy.hedgePct,
+          triplesPct:     strategy.triplesPct,
         },
         marginThresholds: {
           trimAbovePct:     strategy.marginLimitPct,

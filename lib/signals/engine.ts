@@ -100,10 +100,10 @@ export interface EnginePosition {
  * if the user hasn't overridden anything.
  */
 export interface PillarTargets {
-  triplesPct:     number;
+  growthPct:      number;
   cornerstonePct: number;
   incomePct:      number;
-  hedgePct:       number;
+  triplesPct:     number;
 }
 
 /**
@@ -1094,7 +1094,7 @@ function evalMaintenanceRankedTrim(
   // (we'd be guessing).
   const candidates = positions
     .filter((p) => p.marketValue > 0)
-    .filter((p) => p.pillar !== 'triples' && p.pillar !== 'hedge' && p.pillar !== 'cornerstone')
+    .filter((p) => p.pillar !== 'triples' && p.pillar !== 'cornerstone')
     .filter((p) => typeof p.maintenancePct === 'number')
     .map((p) => ({
       pos:   p,

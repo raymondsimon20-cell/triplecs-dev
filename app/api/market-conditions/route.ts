@@ -6,6 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
+import { DEFAULT_TARGETS } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,7 +29,8 @@ interface AllocationRecommendation {
     triplesPct?: number;
     cornerstonePct?: number;
     incomePct?: number;
-    hedgePct?: number;
+    growthPct?: number;
+    hedgeSleevePct?: number;
   };
   confidence: number;
   riskLevel: 'low' | 'medium' | 'high';
@@ -134,10 +136,20 @@ async function fetchMarketData(): Promise<{ data: MarketData; fetchError?: strin
   }
 }
 
-/** Normalize allocations so they always sum to exactly 100, adjusting income as the flex bucket. */
-function normalize(t: number, c: number, i: number, h: number) {
-  const adj = 100 - (t + c + i + h);
-  return { triplesPct: t, cornerstonePct: c, incomePct: i + adj, hedgePct: h };
+/**
+ * Normalize allocations so they always sum to exactly 100, with income as the
+ * flex bucket.
+ *
+ * `h` is the hedge SLEEVE, not a bucket — it sizes the paired shorts and is not
+ * part of the 100% split. Growth absorbs whatever the caller does not assign,
+ * so the four buckets still total 100.
+ */
+function normalize(t: number, c: number, i: number, h: number, g = DEFAULT_TARGETS.growthPct) {
+  const adj = 100 - (t + c + i + g);
+  return {
+    triplesPct: t, cornerstonePct: c, incomePct: i + adj, growthPct: g,
+    hedgeSleevePct: h,
+  };
 }
 
 /**

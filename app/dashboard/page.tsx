@@ -704,7 +704,7 @@ export default function DashboardPage() {
       const targets = loadStrategyTargetsFor(a.accountHash);
       const targetMap: Record<string, number> = {
         triples: targets.triplesPct, cornerstone: targets.cornerstonePct,
-        income:  targets.incomePct,  hedge:       targets.hedgePct,
+        income:  targets.incomePct,  growth:       targets.growthPct,
       };
       const drift = Math.max(
         ...(a.pillarSummary ?? [])
@@ -969,7 +969,7 @@ export default function DashboardPage() {
         triples:     targets.triplesPct,
         cornerstone: targets.cornerstonePct,
         income:      targets.incomePct,
-        hedge:       targets.hedgePct,
+        growth:       targets.growthPct,
       };
       const drifts = acct.pillarSummary
         .filter((p) => p.pillar !== 'other')
@@ -1061,7 +1061,7 @@ export default function DashboardPage() {
       triples:     strategyTargets.triplesPct,
       cornerstone: strategyTargets.cornerstonePct,
       income:      strategyTargets.incomePct,
-      hedge:       strategyTargets.hedgePct,
+      growth:       strategyTargets.growthPct,
     };
     return Math.max(
       ...account.pillarSummary
@@ -1128,11 +1128,12 @@ export default function DashboardPage() {
     marginWarnPct:  strategyTargets.marginWarnPct,
     marginLimitPct: strategyTargets.marginLimitPct,
     pillarDriftPp: {
-      triples:     pillarPct('triples')     - strategyTargets.triplesPct,
+      growth:      pillarPct('growth')      - strategyTargets.growthPct,
       cornerstone: pillarPct('cornerstone') - strategyTargets.cornerstonePct,
       income:      pillarPct('income')      - strategyTargets.incomePct,
-      hedge:       pillarPct('hedge')       - strategyTargets.hedgePct,
+      triples:     pillarPct('triples')     - strategyTargets.triplesPct,
     },
+    hedgeSleevePct: strategyTargets.hedgeSleevePct,
     maxConcentrationPct: account.totalValue > 0
       ? Math.max(
           0,
@@ -1141,7 +1142,7 @@ export default function DashboardPage() {
             .map((p) => (Math.abs(p.marketValue) / account.totalValue) * 100),
         )
       : 0,
-    hedgePct: pillarPct('hedge'),
+    growthPct: pillarPct('growth'),
   };
 
   // ── Daily pulse handler — switches to History and triggers AI deep-dive ───
@@ -1462,10 +1463,10 @@ export default function DashboardPage() {
             pillarSummary={account.pillarSummary}
             dividends={dividendRecords}
             targets={{
-              triplesPct:     strategyTargets.triplesPct,
+              growthPct:      strategyTargets.growthPct,
               cornerstonePct: strategyTargets.cornerstonePct,
               incomePct:      strategyTargets.incomePct,
-              hedgePct:       strategyTargets.hedgePct,
+              triplesPct:     strategyTargets.triplesPct,
             }}
           />
         )}

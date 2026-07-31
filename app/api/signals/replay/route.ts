@@ -169,7 +169,7 @@ export async function GET(req: Request) {
           triplesPct:     strategy.triplesPct,
           cornerstonePct: strategy.cornerstonePct,
           incomePct:      strategy.incomePct,
-          hedgePct:       strategy.hedgePct,
+          growthPct:       strategy.growthPct,
         },
         recentSells30d:      [],   // replay doesn't reconstruct trade history per day
         buyingPowerAvailable: cash,
