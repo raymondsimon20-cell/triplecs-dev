@@ -29,6 +29,7 @@ import { getStore } from '@netlify/blobs';
 
 import { getTokens }       from '../storage';
 import { placeOrders, type OrderRequest } from '../schwab/orders';
+import { autoExecutionAllowed } from './master-switch';
 import {
   markExecuted,
   markFailed,
@@ -305,6 +306,35 @@ export async function autoExecute(
   portfolioValue: number,
   perAccountValues?: Map<string, number>,
 ): Promise<AutoExecuteResult> {
+  // ── Master switch: hard stop before anything can reach placeOrders ────────
+  // This is the sole unattended caller of placeOrders, so gating here covers
+  // every entry point — the cron, POST /api/signals, and anything added
+  // later. Previously the switch lived only in the cron function, leaving the
+  // API route to fall back on auto-config.mode being 'manual' — a UI-editable
+  // setting rather than an actual lock.
+  //
+  // Items stay staged in the inbox for manual approval; only the automatic
+  // firing is suppressed.
+  if (!autoExecutionAllowed()) {
+    console.log(
+      `[auto-execute] suppressed by master switch — ${stagedItems.length} item(s) ` +
+      `left staged for manual approval, no orders placed.`,
+    );
+    return {
+      mode:           'manual',
+      considered:     stagedItems.length,
+      executed:       0,
+      rejected:       stagedItems.map((it) => ({
+        symbol:      it.symbol,
+        instruction: it.instruction,
+        reason:      'signal engine disabled (master switch)',
+      })),
+      breakerTripped: false,
+      breakerReason:  '',
+      dryRun:         false,
+    };
+  }
+
   // Tokens still resolved for downstream order placement; primary-account
   // fallback removed — untagged items are now rejected up-front instead of
   // being silently fired into the first account.

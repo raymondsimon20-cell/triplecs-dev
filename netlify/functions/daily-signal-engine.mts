@@ -18,6 +18,7 @@
 import type { Config } from '@netlify/functions';
 import { runSignalsAndStage } from '../../lib/signals/run';
 import { recordHeartbeat } from '../../lib/signals/cron-health';
+import { SIGNAL_ENGINE_ENABLED } from '../../lib/signals/master-switch';
 
 /**
  * 2026-07 — MASTER SWITCH. Engine disabled at the user's request after its
@@ -25,11 +26,16 @@ import { recordHeartbeat } from '../../lib/signals/cron-health';
  * buys, nothing. The weekly drift rebalance (daily-rebalance.mts) is now the
  * only automated trading path, and it stages for manual approval.
  *
- * Flip to true (and redeploy) to re-enable. Manual runs via /api/signals and
- * the shadow/backtest endpoints still work for evaluation — only this cron
- * is gated.
+ * The flag now lives in lib/signals/master-switch.ts rather than as a local
+ * const here. It was previously local, which gated THIS cron and nothing
+ * else — POST /api/signals calls the same runSignalsAndStage() and could
+ * still reach autoExecute(). See that module for the full reasoning.
+ *
+ * Flip it there (and redeploy) to re-enable. Manual runs via /api/signals and
+ * the shadow/backtest endpoints still compute and stage signals for
+ * evaluation; what the switch now guarantees is that nothing places a real
+ * order without a human, regardless of entry point.
  */
-const SIGNAL_ENGINE_ENABLED = false;
 
 export default async (): Promise<Response> => {
   const startedAt = Date.now();
