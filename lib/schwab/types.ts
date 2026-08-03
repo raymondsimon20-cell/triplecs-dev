@@ -40,9 +40,19 @@ export interface SchwabPosition {
   marketValue: number;
   maintenanceRequirement: number;
   averageLongPrice: number;
+  averageShortPrice?: number;
   taxLotAverageLongPrice: number;
+  /**
+   * Schwab's authoritative unrealized P/L for the LONG side of a position.
+   * Already dollar-denominated (option contract multiplier applied) and
+   * already net of the correct tax-lot basis — prefer this over recomputing
+   * from `averagePrice`. Schwab returns 0 here for pure short positions.
+   */
   longOpenProfitLoss: number;
+  /** Same, for the SHORT side. Schwab returns 0 for pure long positions. */
+  shortOpenProfitLoss?: number;
   previousSessionLongQuantity: number;
+  previousSessionShortQuantity?: number;
   currentDayCost: number;
 }
 
@@ -157,10 +167,23 @@ export interface EnrichedPosition extends SchwabPosition {
   pillar: PillarType;
   quote?: SchwabQuote;
   currentValue: number;
+  /**
+   * Signed cost basis in DOLLARS. Positive = capital deployed (long),
+   * negative = credit received (short). Option contract multiplier (×100) is
+   * already applied, so this is directly comparable to `marketValue`.
+   * Use `Math.abs(costBasis)` when summing a denominator for return %.
+   */
+  costBasis: number;
   gainLoss: number;
   gainLossPercent: number;
   portfolioPercent: number;
   todayGainLoss: number;
+  /**
+   * True when `gainLoss` came from Schwab's own open-P/L fields rather than
+   * being derived from `averagePrice`. Derived values are approximations
+   * (average cost, not tax lots).
+   */
+  gainLossFromSchwab: boolean;
   /**
    * Fund family — issuer / concentration bucket. 'Other' for unknowns,
    * 'Individual' for single stocks, 'Gold' for physical-gold ETFs.

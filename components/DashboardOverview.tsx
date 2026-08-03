@@ -82,19 +82,35 @@ export function DashboardOverview({
     for (const p of positions) {
       dayGL     += p.todayGainLoss ?? 0;
       totalGain += p.gainLoss ?? 0;
-      const qty = p.longQuantity ?? 0;
-      costBasis += (p.averagePrice ?? 0) * qty;
+      // `p.costBasis` is signed and already dollar-denominated (option ×100
+      // applied) — see enrichPositions. Summing the magnitude keeps short
+      // credits from cancelling long capital in the return denominator.
+      costBasis += Math.abs(p.costBasis ?? 0);
     }
     return { dayGL, totalGain, costBasis };
   }, [positions]);
 
-  const dayPct       = totalValue > 0 ? (dayGL / totalValue) * 100 : 0;
+  // Day % is the move relative to where the portfolio STARTED the day, not
+  // where it ended it. Using the post-move value understates a gain and
+  // overstates a loss.
+  const priorValue   = totalValue - dayGL;
+  const dayPct       = priorValue > 0 ? (dayGL / priorValue) * 100 : 0;
   const gainPct      = costBasis > 0 ? (totalGain / costBasis) * 100 : 0;
   // Realized P/L from app-placed sales (matched against captured cost basis).
-  const realizedTotal = useMemo(
-    () => recentTransactions.reduce((s, t) => s + (typeof t.realizedPnl === 'number' ? t.realizedPnl : 0), 0),
-    [recentTransactions],
-  );
+  // Explicitly windowed to the trailing 365 days so this component agrees with
+  // `dividends12mo` regardless of what window the caller happened to fetch —
+  // previously it summed whatever transactions were loaded while the card
+  // claimed "12mo".
+  const realizedTotal = useMemo(() => {
+    const cutoff = Date.now() - 365 * 24 * 60 * 60 * 1000;
+    return recentTransactions.reduce((s, t) => {
+      if (typeof t.realizedPnl !== 'number') return s;
+      const ts = Date.parse(t.date);
+      if (Number.isFinite(ts) && ts < cutoff) return s;
+      return s + t.realizedPnl;
+    }, 0);
+  }, [recentTransactions]);
+
   const totalReturn  = totalGain + dividends12mo + realizedTotal;
   const returnPct    = costBasis > 0 ? (totalReturn / costBasis) * 100 : 0;
 
@@ -138,8 +154,12 @@ export function DashboardOverview({
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {([
           { label: 'Day Change',   v: dayGL,       pct: dayPct,    sub: undefined },
-          { label: 'Total Gain',   v: totalGain,   pct: gainPct,   sub: undefined },
-          { label: 'Total Return', v: totalReturn, pct: returnPct, sub: 'incl. dividends & realized (12mo)' },
+          { label: 'Total Gain',   v: totalGain,   pct: gainPct,   sub: 'unrealized, since purchase' },
+          // Deliberately explicit: the unrealized leg is all-time (it is the
+          // open P/L of what you hold today) while dividends and realized are
+          // trailing-12-month. Mixed windows by construction — the label says
+          // so rather than implying the whole figure is a 12-month number.
+          { label: 'Total Return', v: totalReturn, pct: returnPct, sub: 'unrealized + 12mo dividends & realized' },
         ]).map(({ label, v, pct, sub }, i) => {
           const Trend = v >= 0 ? TrendingUp : TrendingDown;
           const accent = v > 0 ? 'border-t-emerald-500/60' : v < 0 ? 'border-t-red-500/50' : 'border-t-[#2d3248]';

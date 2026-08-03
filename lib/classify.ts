@@ -157,9 +157,45 @@ export function enrichPositions(
     const symbol = pos.instrument.symbol;
     const quote = quotes[symbol]?.quote;
     const currentValue = pos.marketValue;
-    const costBasis = (pos.averagePrice || pos.averageLongPrice) * pos.longQuantity;
-    const gainLoss = currentValue - costBasis;
-    const gainLossPercent = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+
+    // ─── Cost basis & unrealized P/L ────────────────────────────────────────
+    // Two failure modes this replaces:
+    //   1. Options were basis'd as `averagePrice × quantity` with no ×100
+    //      contract multiplier, while `marketValue` IS multiplied — so every
+    //      option leg's P/L was off by ~100×.
+    //   2. Short positions have `longQuantity === 0`, so basis came out 0 and
+    //      gainLoss collapsed to `marketValue` (negative for a short) — every
+    //      short leg booked a phantom 100% loss.
+    // Sign convention matches lib/options/afw-close-recs.ts: long basis is
+    // positive (capital out), short basis is negative (credit in), and
+    // gainLoss = marketValue − costBasis works for both directions.
+    const isOption   = pos.instrument.assetType === 'OPTION';
+    const multiplier = isOption ? 100 : 1;
+    const longQty    = pos.longQuantity  ?? 0;
+    const shortQty   = pos.shortQuantity ?? 0;
+    const netQty     = longQty - shortQty;
+
+    const longAvg  = pos.averageLongPrice || pos.averagePrice || 0;
+    const shortAvg = pos.averageShortPrice || pos.averagePrice || 0;
+    const costBasis = (longQty * longAvg - shortQty * shortAvg) * multiplier;
+
+    // Prefer Schwab's own open-P/L fields — they are dollar-denominated,
+    // multiplier-applied, and computed off real tax lots rather than a blended
+    // average. Gate each on having quantity on that side, because Schwab
+    // returns a literal 0 for the side you don't hold.
+    const schwabLongPL  = longQty  > 0 && typeof pos.longOpenProfitLoss  === 'number' ? pos.longOpenProfitLoss  : undefined;
+    const schwabShortPL = shortQty > 0 && typeof pos.shortOpenProfitLoss === 'number' ? pos.shortOpenProfitLoss : undefined;
+    const schwabPL =
+      schwabLongPL !== undefined || schwabShortPL !== undefined
+        ? (schwabLongPL ?? 0) + (schwabShortPL ?? 0)
+        : undefined;
+
+    const gainLossFromSchwab = schwabPL !== undefined;
+    const gainLoss = schwabPL ?? (currentValue - costBasis);
+    // Denominator is |basis| so a short's credit produces a positive,
+    // meaningful percentage instead of a negative or divide-by-zero.
+    const basisMagnitude = Math.abs(costBasis);
+    const gainLossPercent = basisMagnitude > 0 ? (gainLoss / basisMagnitude) * 100 : 0;
     const portfolioPercent = totalPortfolioValue > 0
       ? (currentValue / totalPortfolioValue) * 100
       : 0;
@@ -190,10 +226,24 @@ export function enrichPositions(
       }
     }
 
-    // Compute today's gain/loss from quote (more reliable than Schwab's field)
-    const qty = pos.longQuantity || pos.shortQuantity || 0;
-    const todayGainLoss = quote
-      ? (quote.lastPrice - quote.closePrice) * qty * (pos.shortQuantity > 0 ? -1 : 1)
+    // ─── Today's gain/loss ──────────────────────────────────────────────────
+    // Quote math ((last − prevClose) × qty) is preferred for positions held
+    // unchanged since the previous session: Schwab's `currentDayProfitLoss`
+    // can lag intraday and goes stale out of hours.
+    //
+    // But it is WRONG for anything opened or resized today — shares bought
+    // this morning did not earn the move from yesterday's close, and a
+    // position opened today has no previous-session quantity at all. For
+    // those, Schwab's field is the only correct source. Options additionally
+    // need the ×100 multiplier the old code omitted.
+    const prevLongQty  = pos.previousSessionLongQuantity  ?? 0;
+    const prevShortQty = pos.previousSessionShortQuantity ?? 0;
+    const quantityChangedToday = prevLongQty !== longQty || prevShortQty !== shortQty;
+
+    const todayGainLoss = (quote && !quantityChangedToday)
+      // netQty is already signed: a short position yields a negative quantity,
+      // so a price rise correctly registers as a loss.
+      ? (quote.lastPrice - quote.closePrice) * netQty * multiplier
       : pos.currentDayProfitLoss ?? 0;
 
     // Pull family + maintenance from the canonical metadata table. Options
@@ -207,8 +257,10 @@ export function enrichPositions(
       pillar,
       quote,
       currentValue,
+      costBasis,
       gainLoss,
       gainLossPercent,
+      gainLossFromSchwab,
       portfolioPercent,
       todayGainLoss,
       ...(meta

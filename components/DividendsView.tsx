@@ -277,7 +277,8 @@ export function DividendsView({ dividends, loading, positions }: Props) {
 
     for (const p of positions) {
       if (p.instrument?.assetType === 'OPTION' || p.instrument.symbol.includes(' ')) continue;
-      costBasis += (p.averagePrice ?? 0) * (p.longQuantity ?? 0);
+      // Single source of truth — see enrichPositions.
+      costBasis += Math.abs(p.costBasis ?? 0);
 
       const row = rowBySym.get(p.instrument.symbol);
       const est = row ? row.projAnnual : estimateAnnualDividend(p);

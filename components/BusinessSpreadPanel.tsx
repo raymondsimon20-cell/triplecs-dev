@@ -123,7 +123,9 @@ export function BusinessSpreadPanel({
     for (const p of positions) {
       if (p.instrument?.assetType === 'OPTION' || p.instrument.symbol.includes(' ')) continue;
       unrealized += p.gainLoss ?? 0;
-      costBasis  += (p.averagePrice ?? 0) * (p.longQuantity ?? 0);
+      // Single source of truth — see enrichPositions. Signed and already
+      // dollar-denominated; take the magnitude for a return denominator.
+      costBasis  += Math.abs(p.costBasis ?? 0);
     }
     const dividendsReceived = Object.values(dividendsBySymbol).reduce((s, v) => s + v, 0);
     const realized = Object.values(realizedBySymbol).reduce((s, v) => s + v, 0);
