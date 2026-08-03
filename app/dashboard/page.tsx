@@ -729,11 +729,29 @@ export default function DashboardPage() {
     const updated = positions.map((p) => {
       const livePrice = liveQuotes.get(p.instrument.symbol);
       if (!livePrice) return p;
-      const qty = p.longQuantity || p.shortQuantity || 0;
-      const newMarketValue = livePrice * qty;
-      return { ...p, marketValue: newMarketValue };
+      // Signed quantity and the option ×100 multiplier. Previously this was
+      // `longQuantity || shortQuantity`, which dropped the short sign and
+      // repriced a liability as an asset.
+      const netQty = (p.longQuantity ?? 0) - (p.shortQuantity ?? 0);
+      const multiplier = p.instrument.assetType === 'OPTION' ? 100 : 1;
+      const newMarketValue = livePrice * netQty * multiplier;
+      // Carry the price move into the derived figures too. Updating
+      // marketValue alone left Value drifting live while Gain and Day stayed
+      // frozen at the server snapshot, so the columns disagreed with each
+      // other. Applying the delta preserves Schwab's basis-accurate gainLoss
+      // rather than recomputing it from average cost.
+      const delta = newMarketValue - (p.marketValue ?? 0);
+      return {
+        ...p,
+        marketValue:   newMarketValue,
+        currentValue:  newMarketValue,
+        gainLoss:      (p.gainLoss ?? 0) + delta,
+        todayGainLoss: (p.todayGainLoss ?? 0) + delta,
+      };
     });
-    const liveTotalValue = updated.reduce((sum, p) => sum + Math.abs(p.marketValue), 0) || (resolvedAccount?.totalValue ?? 0);
+    // Signed sum, matching the totalValue convention in the accounts route:
+    // a short is a liability and must reduce the total, not inflate it.
+    const liveTotalValue = updated.reduce((sum, p) => sum + p.marketValue, 0) || (resolvedAccount?.totalValue ?? 0);
     return updated.map((p) => ({
       ...p,
       portfolioPercent: liveTotalValue > 0 ? (Math.abs(p.marketValue) / liveTotalValue) * 100 : p.portfolioPercent,

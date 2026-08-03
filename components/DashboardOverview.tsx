@@ -169,7 +169,13 @@ export function DashboardOverview({
       {/* Performance cards */}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         {([
-          { label: 'Day Change',   v: dayGL,       pct: dayPct,    sub: undefined },
+          // Deliberately NOT Schwab's headline "Total day change". Schwab's
+          // figure is the change in ACCOUNT VALUE, which folds in the day's
+          // movement of the cash/margin line — on 2026-08-03 that was
+          // -$3,954.99 of margin drawn to buy securities, dwarfing the
+          // +$1,174.93 the securities actually moved. Borrowing money is not
+          // a loss, so this card reports market P/L on positions only.
+          { label: 'Day Change',   v: dayGL,       pct: dayPct,    sub: 'market moves only, excl. cash & margin' },
           { label: 'Total Gain',   v: totalGain,   pct: gainPct,   sub: 'unrealized, since purchase' },
           // Deliberately explicit: the unrealized leg is all-time (it is the
           // open P/L of what you hold today) while dividends and realized are

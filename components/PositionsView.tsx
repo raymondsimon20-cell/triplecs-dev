@@ -33,30 +33,40 @@ interface Props {
 export function PositionsView({ positions, totalValue, lastUpdated, dividendsBySymbol, realizedBySymbol = {} }: Props) {
   const [symbolFilter, setSymbolFilter] = useState('');
 
-  const equities = useMemo(
-    () => positions.filter((p) => !p.instrument.symbol.includes(' ')),
-    [positions],
-  );
-
+  // Options were previously filtered out with `!symbol.includes(' ')`, which
+  // hid short puts from both the table and the CSV export while the dashboard
+  // counted them — so the two totals could never agree. Verified against the
+  // Schwab export of 2026-08-03: two short puts carrying -$180.66 unrealized
+  // and -$159.78 of day change were invisible here.
   const rows = useMemo(() => {
-    return equities
+    return positions
       .map((p) => {
         const sym  = p.instrument.symbol;
         const v    = p.currentValue ?? 0;
-        const qty  = p.longQuantity ?? 0;
-        const price = qty > 0 ? v / qty : 0;
+        // Signed quantity, so a short position reads negative the way Schwab
+        // prints it (their export shows the put quantities as -1 and -3).
+        const qty  = (p.longQuantity ?? 0) - (p.shortQuantity ?? 0);
+        // Per-CONTRACT price for options: marketValue already has the ×100
+        // multiplier baked in, so dividing by bare quantity would report a
+        // price 100× too high.
+        const multiplier = p.instrument.assetType === 'OPTION' ? 100 : 1;
+        const price = qty !== 0 ? v / (qty * multiplier) : 0;
         const day  = p.todayGainLoss ?? 0;
-        const dayPct = v - day > 0 ? (day / (v - day)) * 100 : 0;
         const gain = p.gainLoss ?? 0;
-        const cost = (p.averagePrice ?? 0) * qty;
+        // `costBasis` is signed and dollar-denominated (see enrichPositions).
+        // A short's basis is negative — the credit received — which is exactly
+        // how Schwab reports it, so percentages need the magnitude.
+        const cost = Math.abs(p.costBasis ?? 0);
+        const prior = v - day;
+        const dayPct = Math.abs(prior) > 0 ? (day / Math.abs(prior)) * 100 : 0;
         const divs = dividendsBySymbol[sym] ?? 0;
         const realized = realizedBySymbol[sym] ?? 0;
         const ret  = gain + divs + realized;
         const retPct = cost > 0 ? (ret / cost) * 100 : 0;
-        return { sym, qty, price, day, dayPct, gain, gainPct: p.gainLossPercent ?? 0, ret, retPct, value: v };
+        return { sym, qty, price, day, dayPct, gain, gainPct: p.gainLossPercent ?? 0, ret, retPct, value: v, cost };
       })
       .sort((a, b) => b.value - a.value);
-  }, [equities, dividendsBySymbol, realizedBySymbol]);
+  }, [positions, dividendsBySymbol, realizedBySymbol]);
 
   const { sortKey, sortDir, requestSort, sortRows } = useSort<typeof rows[number]>('value');
 
@@ -79,13 +89,14 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
   }, [rows, symbolFilter, sortRows]);
 
   const totals = useMemo(() => {
-    let day = 0, gain = 0, ret = 0, value = 0;
-    for (const r of rows) { day += r.day; gain += r.gain; ret += r.ret; value += r.value; }
+    let day = 0, gain = 0, ret = 0, value = 0, cost = 0;
+    // Sum the real per-position cost basis rather than back-solving it from
+    // value minus gain, which broke on any row where gainPct happened to be 0.
+    for (const r of rows) { day += r.day; gain += r.gain; ret += r.ret; value += r.value; cost += r.cost; }
     const dayPct  = value - day > 0 ? (day / (value - day)) * 100 : 0;
-    const cost    = rows.reduce((s, r) => s + (r.gainPct !== 0 ? r.value - r.gain : r.value), 0);
     const gainPct = cost > 0 ? (gain / cost) * 100 : 0;
     const retPct  = cost > 0 ? (ret / cost) * 100 : 0;
-    return { day, dayPct, gain, gainPct, ret, retPct, value };
+    return { day, dayPct, gain, gainPct, ret, retPct, value, cost };
   }, [rows]);
 
   const top = rows[0];
@@ -96,17 +107,20 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
   // Exports what is currently on screen — filter and sort included — so the file
   // matches what the user is looking at rather than a hidden full set.
   const exportCsv = () => {
-    const header = ['Symbol', 'Shares', 'Price', 'Day Chg $', 'Day Chg %', 'Total Gain $', 'Total Gain %', 'Total Return $', 'Total Return %', 'Value', '% Portfolio'];
+    // Cost Basis is included so this file can be joined directly against
+    // Schwab's own Positions export, which carries a "Cost Basis" column.
+    // That diff is the only practical way to chase a reconciliation gap.
+    const header = ['Symbol', 'Shares', 'Price', 'Day Chg $', 'Day Chg %', 'Total Gain $', 'Total Gain %', 'Total Return $', 'Total Return %', 'Cost Basis', 'Value', '% Portfolio'];
     const pct = (v: number) => (totalValue > 0 ? (v / totalValue) * 100 : 0);
     const body = filtered.map((r) => [
       r.sym, String(r.qty), r.price.toFixed(2), r.day.toFixed(2), r.dayPct.toFixed(2),
       r.gain.toFixed(2), r.gainPct.toFixed(2), r.ret.toFixed(2), r.retPct.toFixed(2),
-      r.value.toFixed(2), pct(r.value).toFixed(2),
+      r.cost.toFixed(2), r.value.toFixed(2), pct(r.value).toFixed(2),
     ]);
     const totalRow = [
       'PORTFOLIO TOTAL', '', '', totals.day.toFixed(2), totals.dayPct.toFixed(2),
       totals.gain.toFixed(2), totals.gainPct.toFixed(2), totals.ret.toFixed(2), totals.retPct.toFixed(2),
-      totals.value.toFixed(2), '100.00',
+      totals.cost.toFixed(2), totals.value.toFixed(2), '100.00',
     ];
     const csv = [header, ...body, totalRow]
       .map((row) => row.map((c) => (/[",\n]/.test(c) ? `"${c.replace(/"/g, '""')}"` : c)).join(','))
