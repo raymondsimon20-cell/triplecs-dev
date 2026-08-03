@@ -84,9 +84,14 @@ const boughtToday = pos({
   currentDayProfitLoss: 100,
 });
 
+// `lastPrice` here is deliberately an EXTENDED-HOURS print that disagrees with
+// the regular session, to prove we follow Schwab's regularMarketNetChange
+// rather than subtracting lastPrice - closePrice ourselves.
+//   UPRO: regular session closed +$2.00/sh; after hours it drifted to $70.90.
+//         Schwab shows +$200 on 100 shares. Manual subtraction would say +$290.
 const quotes = {
-  UPRO: { quote: { lastPrice: 70, closePrice: 68 } },
-  SCHD: { quote: { lastPrice: 96, closePrice: 90 } },
+  UPRO: { quote: { lastPrice: 70.9, closePrice: 68, netChange: 2.9, regularMarketNetChange: 2 } },
+  SCHD: { quote: { lastPrice: 96, closePrice: 90, netChange: 6, regularMarketNetChange: 6 } },
 } as unknown as SchwabQuotesResponse;
 
 const [a, b, c, d] = enrichPositions([longEquity, shortPut, longCall, boughtToday], quotes, 100_000);
@@ -104,8 +109,10 @@ check('long call P/L',    c.gainLoss,  500);       // was +1292 before the fix
 check('bought-today P/L', d.gainLoss,  100);
 
 console.log('\n--- day change ---');
-check('long equity day (quote math)',   a.todayGainLoss, 200);
-check('bought-today day (Schwab field)', d.todayGainLoss, 100); // NOT 600
+// 200, not 290: we follow the regular session like Schwab's UI does, and
+// ignore the after-hours drift baked into lastPrice.
+check('long equity day (regular session)', a.todayGainLoss, 200);
+check('bought-today day (Schwab field)',   d.todayGainLoss, 100); // NOT 600
 
 console.log('\n--- portfolio total ---');
 const totalGain = [a, b, c, d].reduce((s, p) => s + p.gainLoss, 0);

@@ -240,10 +240,31 @@ export function enrichPositions(
     const prevShortQty = pos.previousSessionShortQuantity ?? 0;
     const quantityChangedToday = prevLongQty !== longQty || prevShortQty !== shortQty;
 
-    const todayGainLoss = (quote && !quantityChangedToday)
+    // Per-share move for the day. We take Schwab's own figure rather than
+    // subtracting `lastPrice - closePrice` ourselves, because those two fields
+    // are drawn from different sessions: `lastPrice` includes pre- and
+    // post-market prints, while `closePrice` is the prior REGULAR close. Doing
+    // the subtraction manually therefore reports an extended-hours move that
+    // Schwab's own UI does not show, and the app disagrees with the website
+    // every morning and every evening.
+    //
+    // `regularMarketNetChange` is the field that matches Schwab's display in
+    // both regimes: it tracks live during 9:30–16:00 ET and then holds the
+    // closing change afterwards. Fall back to `netChange`, then to the old
+    // subtraction, for instruments where Schwab omits it.
+    //
+    // Note the explicit `typeof` guards: 0 is a legitimate value for an
+    // unchanged position, so `??`/`||` chaining would wrongly skip past it.
+    const perShareChange =
+      typeof quote?.regularMarketNetChange === 'number' ? quote.regularMarketNetChange
+      : typeof quote?.netChange === 'number'            ? quote.netChange
+      : quote                                           ? quote.lastPrice - quote.closePrice
+      : undefined;
+
+    const todayGainLoss = (perShareChange !== undefined && !quantityChangedToday)
       // netQty is already signed: a short position yields a negative quantity,
       // so a price rise correctly registers as a loss.
-      ? (quote.lastPrice - quote.closePrice) * netQty * multiplier
+      ? perShareChange * netQty * multiplier
       : pos.currentDayProfitLoss ?? 0;
 
     // Pull family + maintenance from the canonical metadata table. Options

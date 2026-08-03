@@ -93,8 +93,14 @@ export function DashboardOverview({
   // Day % is the move relative to where the portfolio STARTED the day, not
   // where it ended it. Using the post-move value understates a gain and
   // overstates a loss.
-  const priorValue   = totalValue - dayGL;
-  const dayPct       = priorValue > 0 ? (dayGL / priorValue) * 100 : 0;
+  //
+  // Denominator is NET liquidation value (equity), not gross. Schwab quotes
+  // day change against account value, and a $1.5K move on $85K of equity is
+  // 1.81% — not the 1.43% you get by dividing into $106K of gross exposure.
+  // Dividing by gross silently credits the margin balance with absorbing part
+  // of the move, which makes every day look calmer than Schwab reports it.
+  const priorEquity  = equity - dayGL;
+  const dayPct       = priorEquity > 0 ? (dayGL / priorEquity) * 100 : 0;
   const gainPct      = costBasis > 0 ? (totalGain / costBasis) * 100 : 0;
   // Realized P/L from app-placed sales (matched against captured cost basis).
   // Explicitly windowed to the trailing 365 days so this component agrees with
