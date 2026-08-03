@@ -42,10 +42,14 @@ export async function fetchAccountState(accountHash: string): Promise<FetchedAcc
 
   const quotes = symbols.length > 0 ? await client.getQuotes(symbols) : {};
 
-  // Gross market value (longs + shorts) — see accounts route for rationale
+  // Total market value, matching Schwab's "Total market value" on the
+  // Positions page. Short market value is ADDED, not Math.abs'd: Schwab
+  // reports it as a negative number because a short is a liability, and
+  // taking the absolute value booked that liability as an asset — it moved
+  // the total the wrong way by 2× the short exposure.
   const totalValue =
     (acct.currentBalances.longMarketValue ?? 0) +
-    Math.abs(acct.currentBalances.shortMarketValue ?? 0);
+    (acct.currentBalances.shortMarketValue ?? 0);
 
   const enriched      = enrichPositions(positions, quotes, totalValue);
   const pillarSummary = summarizeByPillar(enriched, totalValue);

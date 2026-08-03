@@ -240,32 +240,35 @@ export function enrichPositions(
     const prevShortQty = pos.previousSessionShortQuantity ?? 0;
     const quantityChangedToday = prevLongQty !== longQty || prevShortQty !== shortQty;
 
-    // Per-share move for the day. We take Schwab's own figure rather than
-    // subtracting `lastPrice - closePrice` ourselves, because those two fields
-    // are drawn from different sessions: `lastPrice` includes pre- and
-    // post-market prints, while `closePrice` is the prior REGULAR close. Doing
-    // the subtraction manually therefore reports an extended-hours move that
-    // Schwab's own UI does not show, and the app disagrees with the website
-    // every morning and every evening.
+    // Schwab's `currentDayProfitLoss` is PRIMARY. The website's "Total day
+    // change" is precisely the sum of this field across positions, so using it
+    // makes the dashboard agree with the account page by construction.
     //
-    // `regularMarketNetChange` is the field that matches Schwab's display in
-    // both regimes: it tracks live during 9:30–16:00 ET and then holds the
-    // closing change afterwards. Fall back to `netChange`, then to the old
-    // subtraction, for instruments where Schwab omits it.
+    // This deliberately reverses an older assumption that quote math was "more
+    // reliable than Schwab's field". Measured against a real account on
+    // 2026-08-03, quote math returned +$1,259 while Schwab reported -$2,732 —
+    // wrong magnitude AND wrong sign. Three compounding reasons:
+    //   • `regularMarketNetChange` is not in the `quote` object at all. It
+    //     lives in a top-level `regular` block that `fields=quote,reference`
+    //     never requests, so that branch was always undefined.
+    //   • `netChange` / `lastPrice` include extended-hours prints; after 16:00
+    //     ET Schwab also rolls `closePrice` forward to the session that just
+    //     ended, so the two operands stop describing the same interval.
+    //   • Options are filtered out of the quote fetch entirely, so any option
+    //     leg contributed nothing to the quote-derived total.
+    // Schwab's own field has none of these problems.
     //
-    // Note the explicit `typeof` guards: 0 is a legitimate value for an
-    // unchanged position, so `??`/`||` chaining would wrongly skip past it.
-    const perShareChange =
-      typeof quote?.regularMarketNetChange === 'number' ? quote.regularMarketNetChange
-      : typeof quote?.netChange === 'number'            ? quote.netChange
-      : quote                                           ? quote.lastPrice - quote.closePrice
+    // Quote math survives only as a fallback for positions where Schwab omits
+    // the field. `netQty` is signed (short → negative), so a price rise
+    // correctly registers as a loss, and `multiplier` applies the option ×100.
+    const quoteDerived = (quote && !quantityChangedToday)
+      ? (quote.lastPrice - quote.closePrice) * netQty * multiplier
       : undefined;
 
-    const todayGainLoss = (perShareChange !== undefined && !quantityChangedToday)
-      // netQty is already signed: a short position yields a negative quantity,
-      // so a price rise correctly registers as a loss.
-      ? perShareChange * netQty * multiplier
-      : pos.currentDayProfitLoss ?? 0;
+    const todayGainLoss =
+      typeof pos.currentDayProfitLoss === 'number' ? pos.currentDayProfitLoss
+      : quoteDerived !== undefined                 ? quoteDerived
+      : 0;
 
     // Pull family + maintenance from the canonical metadata table. Options
     // borrow the underlying's metadata where possible; unknowns fall through

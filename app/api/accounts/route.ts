@@ -84,12 +84,17 @@ export async function GET(req: Request) {
           ? await client.getQuotes(symbols)
           : {};
 
-        // Use gross market value (longs + shorts) so pillar % are based on
-        // total position exposure, not net equity. liquidationValue is net of
-        // margin debt and causes pillars to sum to >100% in margin accounts.
+        // Total market value of positions, matching Schwab's "Total market
+        // value". Deliberately NOT liquidationValue: that is net of margin
+        // debt and makes pillar percentages sum to >100% in margin accounts.
+        //
+        // Short market value is ADDED rather than Math.abs'd — Schwab returns
+        // it negative because a short is a liability, and the absolute value
+        // booked that liability as an asset, overstating the total by 2× the
+        // short exposure (and flowing straight through to Net Portfolio Value).
         const totalValue =
           (acct.currentBalances.longMarketValue ?? 0) +
-          Math.abs(acct.currentBalances.shortMarketValue ?? 0);
+          (acct.currentBalances.shortMarketValue ?? 0);
 
         const enrichedPositions = enrichPositions(
           positions,
@@ -132,6 +137,13 @@ export async function GET(req: Request) {
           type: acct.type,
           totalValue,
           equity: acct.currentBalances.equity,
+          // Schwab's "Total accounts value" on the Positions page is
+          // `liquidationValue`, NOT `equity` — the two differ in a margin
+          // account holding shorts (equity treats short market value as a
+          // positive). Surfaced separately so display can match the website
+          // while margin rules keep using `equity`, which is the field
+          // Schwab's own maintenance requirements are defined against.
+          liquidationValue: acct.currentBalances.liquidationValue ?? acct.currentBalances.equity,
           marginBalance: acct.currentBalances.marginBalance ?? 0,
           buyingPower: acct.currentBalances.buyingPower,
           dayGainLoss,

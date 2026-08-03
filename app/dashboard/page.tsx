@@ -97,8 +97,18 @@ interface AccountData {
   positions: EnrichedPosition[];
   pillarSummary: { pillar: PillarType; label: string; totalValue: number; portfolioPercent: number; positionCount: number; dayGainLoss: number }[];
   marginAlerts: RuleAlert[];
-  /** Raw Schwab currentBalances passthrough — cashBalance for the dashboard. */
-  balances?: { cashBalance?: number } & Record<string, unknown>;
+  /**
+   * Raw Schwab currentBalances passthrough. The fields the dashboard reads are
+   * named explicitly so they type as `number` rather than falling into the
+   * `unknown` index signature:
+   *   • liquidationValue — Schwab's "Total accounts value"
+   *   • cashBalance + moneyMarketFund — "Total cash & cash investments"
+   */
+  balances?: {
+    cashBalance?: number;
+    liquidationValue?: number;
+    moneyMarketFund?: number;
+  } & Record<string, unknown>;
 }
 
 /**
@@ -500,6 +510,10 @@ function buildAggregateAccount(accounts: AccountData[]): AccountData {
   const unrealizedGainLoss   = accounts.reduce((s, a) => s + (a.unrealizedGainLoss   || 0), 0);
   const availableForWithdrawal = accounts.reduce((s, a) => s + (a.availableForWithdrawal || 0), 0);
   const cashBalance            = accounts.reduce((s, a) => s + (a.balances?.cashBalance ?? 0), 0);
+  // Roll these up too, otherwise the "All accounts" view silently falls back to
+  // `equity` for net value and drops money-market cash from the cash figure.
+  const moneyMarketFund        = accounts.reduce((s, a) => s + (a.balances?.moneyMarketFund ?? 0), 0);
+  const liquidationValue       = accounts.reduce((s, a) => s + (a.balances?.liquidationValue ?? a.equity ?? 0), 0);
 
   // Concatenate positions; recompute portfolioPercent against aggregate value
   // so the per-position % still represents share of the household, not of any
@@ -551,7 +565,7 @@ function buildAggregateAccount(accounts: AccountData[]): AccountData {
     positions,
     pillarSummary,
     marginAlerts,
-    balances: { cashBalance },
+    balances: { cashBalance, moneyMarketFund, liquidationValue },
   };
 }
 
@@ -1300,8 +1314,18 @@ export default function DashboardPage() {
               ownerName={accountLabel}
               totalValue={account.totalValue}
               equity={account.equity}
+              // Schwab's "Total accounts value" — see the accounts route.
+              liquidationValue={account.balances?.liquidationValue ?? account.equity}
               marginBalance={account.marginBalance}
-              availableCash={account.balances?.cashBalance ?? 0}
+              // Schwab's "Total cash & cash invest". In a margin account the
+              // debit sits in `marginBalance`, not `cashBalance` (which reads
+              // 0), so summing them reproduces the website's figure instead of
+              // showing a flat $0 against a five-figure margin balance.
+              availableCash={
+                (account.balances?.cashBalance ?? 0) +
+                (account.balances?.moneyMarketFund ?? 0) +
+                Math.min(0, account.marginBalance ?? 0)
+              }
               positions={livePositions}
               lastUpdated={lastUpdated}
               dividends12mo={dividendsTotal}

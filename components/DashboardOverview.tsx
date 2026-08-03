@@ -38,6 +38,12 @@ interface Props {
   ownerName?:      string;
   totalValue:      number;
   equity:          number;
+  /**
+   * Schwab's "Total accounts value" (`liquidationValue`). Differs from
+   * `equity` in a margin account holding shorts. Optional so callers that
+   * haven't been updated fall back to `equity` rather than rendering NaN.
+   */
+  liquidationValue?: number;
   marginBalance:   number;
   availableCash:   number;
   positions:       EnrichedPosition[];
@@ -52,11 +58,14 @@ interface Props {
 }
 
 export function DashboardOverview({
-  accountLabel, accountNumber, ownerName = '', totalValue, equity, marginBalance,
-  availableCash, positions, lastUpdated, dividends12mo, recentTransactions,
+  accountLabel, accountNumber, ownerName = '', totalValue, equity, liquidationValue,
+  marginBalance, availableCash, positions, lastUpdated, dividends12mo, recentTransactions,
   transactionsLoading = false, onViewPositions, onViewTransactions,
 }: Props) {
   const marginUsed = Math.abs(marginBalance);
+  // Net worth of the account as Schwab states it. Falls back to `equity` when
+  // the caller hasn't plumbed liquidationValue through.
+  const netValue   = liquidationValue ?? equity;
   const equityPct  = totalValue > 0 ? (equity / totalValue) * 100 : 0;
 
   // 30-day snapshot series for the hero sparklines.
@@ -94,13 +103,13 @@ export function DashboardOverview({
   // where it ended it. Using the post-move value understates a gain and
   // overstates a loss.
   //
-  // Denominator is NET liquidation value (equity), not gross. Schwab quotes
-  // day change against account value, and a $1.5K move on $85K of equity is
-  // 1.81% — not the 1.43% you get by dividing into $106K of gross exposure.
-  // Dividing by gross silently credits the margin balance with absorbing part
-  // of the move, which makes every day look calmer than Schwab reports it.
-  const priorEquity  = equity - dayGL;
-  const dayPct       = priorEquity > 0 ? (dayGL / priorEquity) * 100 : 0;
+  // Denominator is prior NET account value, not gross. Verified against the
+  // Schwab statement of 2026-08-03: -$2,732.49 on a $84,930.01 account is the
+  // -3.12% Schwab printed, i.e. -2732.49 / (84930.01 + 2732.49). Dividing into
+  // gross exposure instead credits the margin balance with absorbing part of
+  // the move and makes every day look calmer than Schwab reports it.
+  const priorNetValue = netValue - dayGL;
+  const dayPct        = priorNetValue > 0 ? (dayGL / priorNetValue) * 100 : 0;
   const gainPct      = costBasis > 0 ? (totalGain / costBasis) * 100 : 0;
   // Realized P/L from app-placed sales (matched against captured cost basis).
   // Explicitly windowed to the trailing 365 days so this component agrees with
@@ -144,13 +153,14 @@ export function DashboardOverview({
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
         <Stat icon={Layers} label="Gross Portfolio Value" value={fmt$(totalValue)} rawValue={totalValue} format={money0}
               accentClass="border-t-blue-500/60" spark={spark.gross} index={0} />
-        <Stat icon={Wallet} label="Net Portfolio Value" value={fmt$(equity)} rawValue={equity} format={money0}
+        <Stat icon={Wallet} label="Net Portfolio Value" value={fmt$(netValue)} rawValue={netValue} format={money0}
               accentClass="border-t-blue-500/60" spark={spark.net} sparkColor="#5DCAA5" index={1} />
         <Stat icon={CreditCard} label="Margin Used" value={fmt$(marginUsed)} rawValue={marginUsed} format={money0}
               valueClass={marginUsed > 0 ? 'text-orange-300' : 'text-white'} accentClass="border-t-blue-500/60" index={2} />
         <Stat icon={Percent} label="Equity %" value={`${equityPct.toFixed(1)}%`} accentClass="border-t-blue-500/60" index={3} />
         <Stat icon={List} label="Unique Positions" value={String(positions.length)} accentClass="border-t-blue-500/60" index={4} />
-        <Stat icon={Banknote} label="Available Cash (incl. unsettled)" value={fmt$(availableCash)} rawValue={availableCash} format={money0}
+        <Stat icon={Banknote} label="Cash & Cash Investments" value={fmt$(availableCash)} rawValue={availableCash} format={money0}
+              valueClass={availableCash < 0 ? 'text-orange-300' : 'text-white'}
               accentClass="border-t-blue-500/60" index={5} />
         <Stat icon={Clock} label="Last Sync" value={ago(lastUpdated)} accentClass="border-t-blue-500/60" index={6} />
         <div className="hidden md:block" />

@@ -42,12 +42,15 @@ function check(label: string, actual: number, expected: number, tol = 0.01) {
 }
 
 // ── Case 1: plain long equity, held since yesterday, up $2/share today ───────
+// Schwab says the position is DOWN $310 today. The quote fields, polluted by
+// an after-hours print, would imply +$290. We must follow Schwab.
 const longEquity = pos({
   instrument: { assetType: 'EQUITY', symbol: 'UPRO' },
   longQuantity: 100, previousSessionLongQuantity: 100,
   averageLongPrice: 50, averagePrice: 50,
   marketValue: 7000,          // 100 × $70
   longOpenProfitLoss: 2000,
+  currentDayProfitLoss: -310,
 });
 
 // ── Case 2: SHORT put, 5 contracts sold at $3.00, now worth $1.20 ───────────
@@ -109,10 +112,24 @@ check('long call P/L',    c.gainLoss,  500);       // was +1292 before the fix
 check('bought-today P/L', d.gainLoss,  100);
 
 console.log('\n--- day change ---');
-// 200, not 290: we follow the regular session like Schwab's UI does, and
-// ignore the after-hours drift baked into lastPrice.
-check('long equity day (regular session)', a.todayGainLoss, 200);
-check('bought-today day (Schwab field)',   d.todayGainLoss, 100); // NOT 600
+// Schwab's currentDayProfitLoss wins over quote math in BOTH cases. On
+// 2026-08-03 the quote path produced +$1,259 against Schwab's -$2,732 for the
+// real account — wrong magnitude and wrong sign — so it is fallback only now.
+check('held position (Schwab field beats quote)', a.todayGainLoss, -310); // NOT +290
+check('bought-today (Schwab field)',              d.todayGainLoss,  100); // NOT +600
+
+// Fallback path: no currentDayProfitLoss at all → quote math, with the option
+// multiplier and signed quantity still applied.
+const [noField] = enrichPositions(
+  [pos({
+    instrument: { assetType: 'EQUITY', symbol: 'UPRO' },
+    longQuantity: 100, previousSessionLongQuantity: 100,
+    averageLongPrice: 50, averagePrice: 50, marketValue: 7000,
+    currentDayProfitLoss: undefined as unknown as number,
+  })],
+  quotes, 100_000,
+);
+check('fallback to quote math', noField.todayGainLoss, 290); // (70.9 − 68) × 100
 
 console.log('\n--- portfolio total ---');
 const totalGain = [a, b, c, d].reduce((s, p) => s + p.gainLoss, 0);
