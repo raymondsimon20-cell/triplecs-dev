@@ -735,19 +735,22 @@ export default function DashboardPage() {
       const netQty = (p.longQuantity ?? 0) - (p.shortQuantity ?? 0);
       const multiplier = p.instrument.assetType === 'OPTION' ? 100 : 1;
       const newMarketValue = livePrice * netQty * multiplier;
-      // Carry the price move into the derived figures too. Updating
-      // marketValue alone left Value drifting live while Gain and Day stayed
-      // frozen at the server snapshot, so the columns disagreed with each
-      // other. Applying the delta preserves Schwab's basis-accurate gainLoss
-      // rather than recomputing it from average cost.
-      const delta = newMarketValue - (p.marketValue ?? 0);
-      return {
-        ...p,
-        marketValue:   newMarketValue,
-        currentValue:  newMarketValue,
-        gainLoss:      (p.gainLoss ?? 0) + delta,
-        todayGainLoss: (p.todayGainLoss ?? 0) + delta,
-      };
+      // ── Why the derived figures are NOT updated here ────────────────────
+      // A previous revision carried the live-price delta into gainLoss and
+      // todayGainLoss so the columns would stop disagreeing with each other.
+      // That was wrong: it moved Total Return from +$1,503 to +$3,857
+      // overnight, because this WebSocket feed sits roughly +2.2% above the
+      // marks Schwab reports on the account endpoint.
+      //
+      // The account endpoint is the reconciled source of truth — it ties to
+      // Schwab's own Positions export to within ~$69 across 162 symbols. The
+      // stream has never been validated against anything. Until it is, it
+      // moves the displayed Value only; every money figure the user might
+      // compare against Schwab stays anchored to the server snapshot.
+      //
+      // The columns will disagree slightly between syncs. That is the correct
+      // trade: a stale-but-correct Gain beats a live-but-wrong one.
+      return { ...p, marketValue: newMarketValue };
     });
     // Signed sum, matching the totalValue convention in the accounts route:
     // a short is a liability and must reduce the total, not inflate it.
