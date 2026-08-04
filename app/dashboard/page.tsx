@@ -610,6 +610,8 @@ export default function DashboardPage() {
   const [error, setError]               = useState<string | null>(null);
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
+  /** Time-weighted return for the Total Return card — see /api/performance. */
+  const [twr, setTwr] = useState<{ twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean } | null>(null);
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
   const [dividendRecords, setDividendRecords] = useState<DividendRecord[]>([]);
   const [dividendsLoading, setDividendsLoading] = useState(true);
@@ -650,6 +652,22 @@ export default function DashboardPage() {
 
   const nicknames    = useAccountNicknames();
   const accountKey   = isAll ? AGGREGATE_HASH : (resolvedAccount?.accountHash ?? AGGREGATE_HASH);
+
+  // Time-weighted return for the Total Return card. limit=365 so the window is
+  // a full year where snapshot history allows — retention keeps 365 days.
+  // Refetches on account switch so the household and per-account views don't
+  // show each other's numbers. Pure read endpoint, no Schwab call.
+  useEffect(() => {
+    const scope = isAll ? 'all' : (resolvedAccount?.accountHash ?? 'all');
+    let cancelled = false;
+    fetch(`/api/performance?limit=365&accountHash=${encodeURIComponent(scope)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d) => { if (!cancelled) setTwr(d?.twr ?? null); })
+      // Total Return falls back to the legacy figure on failure — never break
+      // the dashboard over a performance read.
+      .catch(() => { if (!cancelled) setTwr(null); });
+    return () => { cancelled = true; };
+  }, [isAll, resolvedAccount?.accountHash]);
 
   // Transactions carry accountHash per row — scope client-side, no refetch.
   const scopedTransactions = useMemo(
@@ -1356,6 +1374,7 @@ export default function DashboardPage() {
               positions={livePositions}
               lastUpdated={lastUpdated}
               dividends12mo={dividendsTotal}
+              twr={twr}
               recentTransactions={scopedTransactions}
               transactionsLoading={transactionsLoading}
               onViewPositions={() => setView('positions')}

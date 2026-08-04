@@ -48,8 +48,14 @@ interface Props {
   availableCash:   number;
   positions:       EnrichedPosition[];
   lastUpdated:     Date | null;
-  /** Trailing-12-month dividend total (for the total-return card). */
+  /** Trailing-12-month dividend total (fallback total-return card only). */
   dividends12mo:   number;
+  /**
+   * Time-weighted return from /api/performance. Preferred source for the
+   * Total Return card — measures a defined window and nets out contributions.
+   * Null when there aren't yet two real snapshots to chain.
+   */
+  twr?: { twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean } | null;
   /** Most recent normalized transactions (dividends, trades) for the table. */
   recentTransactions: NormalizedTransaction[];
   transactionsLoading?: boolean;
@@ -59,8 +65,8 @@ interface Props {
 
 export function DashboardOverview({
   accountLabel, accountNumber, ownerName = '', totalValue, equity, liquidationValue,
-  marginBalance, availableCash, positions, lastUpdated, dividends12mo, recentTransactions,
-  transactionsLoading = false, onViewPositions, onViewTransactions,
+  marginBalance, availableCash, positions, lastUpdated, dividends12mo, twr = null,
+  recentTransactions, transactionsLoading = false, onViewPositions, onViewTransactions,
 }: Props) {
   const marginUsed = Math.abs(marginBalance);
   // Net worth of the account as Schwab states it. Falls back to `equity` when
@@ -129,6 +135,46 @@ export function DashboardOverview({
   const totalReturn  = totalGain + dividends12mo + realizedTotal;
   const returnPct    = costBasis > 0 ? (totalReturn / costBasis) * 100 : 0;
 
+  // ─── Total Return card ──────────────────────────────────────────────────
+  // Prefer time-weighted return from lib/performance.ts. The hand-rolled
+  // `totalReturn` above sums three different measurement windows — unrealized
+  // is since-purchase (potentially years), dividends and realized are trailing
+  // 12 months, and the denominator is original cost. That is not a return over
+  // any period; on a three-year holding the price change gets three years of
+  // runway while the income gets one.
+  //
+  // TWR fixes both problems: it measures a defined window, and it nets out
+  // deposits and withdrawals so contributions don't read as performance —
+  // which matters here because this account is actively funded.
+  //
+  // Falls back to the legacy figure when TWR is unavailable (needs ≥2 real,
+  // non-synthetic snapshots), with a label that admits what it is.
+  const returnCard = useMemo(() => {
+    if (twr && twr.daysCovered > 0) {
+      const pct = twr.twrPct * 100;
+      const months = twr.daysCovered / 30.44;
+      // Say what was actually measured rather than claiming "12mo" — snapshot
+      // history may be shorter than a year, and gaps skip periods entirely.
+      const window = months >= 11.5 ? '12mo'
+        : months >= 1 ? `${Math.round(months)}mo`
+        : `${Math.round(twr.daysCovered)}d`;
+      return {
+        label:    'Total Return',
+        v:        pct,
+        pct,
+        headline: signedPct(pct),
+        sub:      `time-weighted, ${window}, net of contributions${twr.hasGaps ? ' · gaps in history' : ''}`,
+      };
+    }
+    return {
+      label:    'Total Return',
+      v:        totalReturn,
+      pct:      returnPct,
+      headline: undefined as string | undefined,
+      sub:      'unrealized + 12mo dividends & realized · mixed windows',
+    };
+  }, [twr, totalReturn, returnPct]);
+
   const topPositions = useMemo(
     () => [...positions]
       .filter((p) => !p.instrument.symbol.includes(' '))
@@ -175,14 +221,12 @@ export function DashboardOverview({
           // -$3,954.99 of margin drawn to buy securities, dwarfing the
           // +$1,174.93 the securities actually moved. Borrowing money is not
           // a loss, so this card reports market P/L on positions only.
-          { label: 'Day Change',   v: dayGL,       pct: dayPct,    sub: 'market moves only, excl. cash & margin' },
-          { label: 'Total Gain',   v: totalGain,   pct: gainPct,   sub: 'unrealized, since purchase' },
-          // Deliberately explicit: the unrealized leg is all-time (it is the
-          // open P/L of what you hold today) while dividends and realized are
-          // trailing-12-month. Mixed windows by construction — the label says
-          // so rather than implying the whole figure is a 12-month number.
-          { label: 'Total Return', v: totalReturn, pct: returnPct, sub: 'unrealized + 12mo dividends & realized' },
-        ]).map(({ label, v, pct, sub }, i) => {
+          // `headline` is undefined on the dollar-denominated cards — only the
+          // TWR card overrides it, since a rate has no dollar equivalent.
+          { label: 'Day Change', v: dayGL,     pct: dayPct,  sub: 'market moves only, excl. cash & margin', headline: undefined as string | undefined },
+          { label: 'Total Gain', v: totalGain, pct: gainPct, sub: 'unrealized, since purchase',             headline: undefined as string | undefined },
+          returnCard,
+        ]).map(({ label, v, pct, sub, headline }, i) => {
           const Trend = v >= 0 ? TrendingUp : TrendingDown;
           const accent = v > 0 ? 'border-t-emerald-500/60' : v < 0 ? 'border-t-red-500/50' : 'border-t-[#2d3248]';
           return (
@@ -192,8 +236,13 @@ export function DashboardOverview({
                 <Trend className={`w-3.5 h-3.5 flex-shrink-0 ${plColor(v)}`} />
               </div>
               <div className="flex items-baseline gap-2">
-                <span className={`text-2xl font-bold tabular-nums leading-tight ${plColor(v)}`}>{signed$(v)}</span>
-                <PlChip value={pct} pct />
+                {/* TWR is a rate, not an amount — there is no honest dollar
+                    figure to put beside it, so that card sets `headline` and
+                    renders the percentage large instead of a fabricated $. */}
+                <span className={`text-2xl font-bold tabular-nums leading-tight ${plColor(v)}`}>
+                  {headline ?? signed$(v)}
+                </span>
+                {headline ? null : <PlChip value={pct} pct />}
               </div>
               {sub && <div className="text-[10px] text-[#4a5070] mt-0.5">{sub}</div>}
             </div>
