@@ -226,7 +226,16 @@ function estimateShares(
   const maxShares = pos ? (pos.longQuantity || pos.shortQuantity || 999_999) : 999_999;
 
   if (safe.action === 'BUY' && safe.dollar_amount && safe.dollar_amount > 0) {
-    const heldPrice = pos ? pos.marketValue / (pos.longQuantity || 1) : 0;
+    // Prefer the live quote. The old derivation, marketValue/(longQuantity||1),
+    // was 100× high for options (marketValue carries the contract multiplier)
+    // and returned the ENTIRE market value as a "price" for short positions
+    // (longQuantity 0 → ||1). A wrong price here becomes a wrong share count
+    // on a real BUY order, so refuse rather than approximate.
+    const netQty = pos ? (pos.longQuantity ?? 0) - (pos.shortQuantity ?? 0) : 0;
+    const mult   = pos?.instrument?.assetType === 'OPTION' ? 100 : 1;
+    const heldPrice = pos
+      ? (pos.quote?.lastPrice ?? (netQty !== 0 ? pos.marketValue / (netQty * mult) : 0))
+      : 0;
     const price = heldPrice > 0 ? heldPrice : (extraPrices[symbol] ?? 0);
     if (price <= 0) return 0; // unknown price for a new position — refuse to guess
     return Math.min(999_999, Math.max(1, Math.floor(safe.dollar_amount / price)));

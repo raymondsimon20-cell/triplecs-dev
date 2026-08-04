@@ -252,7 +252,7 @@ export function detectProtectiveGap(
   const triplesDollars = equityPositions
     .filter((p) => p.symbol === 'UPRO' || p.symbol === 'TQQQ')
     .reduce((s, p) => s + (p.marketValue || 0), 0);
-  const triplesPct = triplesDollars / totalValue;
+  const triplesPct = totalValue > 0 ? triplesDollars / totalValue : 0;
   if (triplesPct < CONFIG.PROTECT_TRIPLES_THRESHOLD) return [];
 
   // Check whether ANY long put on SPY or QQQ already exists.

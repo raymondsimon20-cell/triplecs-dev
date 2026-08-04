@@ -238,7 +238,8 @@ export function DividendsView({ dividends, loading, positions }: Props) {
       const datesDeclared = Boolean(dec?.nextExDate || dec?.nextPayDate);
 
       const pos = posBySym.get(sym);
-      const cost = pos ? (pos.averagePrice ?? 0) * (pos.longQuantity ?? 0) : 0;
+      // Single source of truth — see enrichPositions (missed in the first sweep).
+      const cost = pos ? Math.abs(pos.costBasis ?? 0) : 0;
       const value = pos ? Math.abs(pos.marketValue ?? 0) : 0;
 
       // Prefer history-derived annualisation once we have a real cadence and at

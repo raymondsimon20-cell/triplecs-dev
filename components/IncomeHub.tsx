@@ -70,12 +70,20 @@ const FREQ_MAP: Record<string, Frequency> = {
   XDTE: 'weekly', QDTE: 'weekly', RDTE: 'weekly', WDTE: 'weekly', MDTE: 'weekly',
   TOPW: 'weekly', BRKW: 'weekly', WEEK: 'weekly',
 
-  // Monthly — YieldMax
-  TSLY: 'monthly', NVDY: 'monthly', AMZY: 'monthly', GOOGY: 'monthly',
-  MSFO: 'monthly', CONY: 'monthly', JPMO: 'monthly', NFLXY: 'monthly',
+  // Weekly — YieldMax moved these to weekly distributions (2025-03 for
+  // YMAX/YMAG/ULTY/TSLY/NVDY/CONY…). The old 'monthly' entries understated
+  // projected income 4.3× — the exact staleness lib/portfolio/dividend-cadence.ts
+  // was written to catch. History-derived cadence still wins when available;
+  // this map is the fallback for symbols with thin history.
+  TSLY: 'weekly', NVDY: 'weekly', CONY: 'weekly', ULTY: 'weekly',
+  YMAX: 'weekly', YMAG: 'weekly',
+
+  // Monthly — YieldMax (single-name funds still on monthly cadence)
+  AMZY: 'monthly', GOOGY: 'monthly',
+  MSFO: 'monthly', JPMO: 'monthly', NFLXY: 'monthly',
   AMDY: 'monthly', PYPLY: 'monthly', AIYY: 'monthly', OILY: 'monthly',
   CVNY: 'monthly', MRNY: 'monthly', SNOY: 'monthly', BIOY: 'monthly',
-  DISO: 'monthly', ULTY: 'monthly', YMAX: 'monthly', YMAG: 'monthly',
+  DISO: 'monthly',
   FBY: 'monthly', GDXY: 'monthly', XOMO: 'monthly', TSMY: 'monthly',
   APLY: 'monthly', OARK: 'monthly', DIPS: 'monthly', CRSH: 'monthly',
   KLIP: 'monthly', MSTY: 'monthly', PLTY: 'monthly',
@@ -765,7 +773,13 @@ function MarginTab({
     () => positions.find((p) => p.instrument?.symbol?.toUpperCase() === simSymbol.toUpperCase()),
     [positions, simSymbol]
   );
-  const knownPrice = knownPos ? (knownPos.marketValue / (knownPos.longQuantity || 1)) : null;
+  // Quote first; the marketValue/quantity fallback needs signed quantity and
+  // the option ×100, or it misprices options 100× and shorts absurdly.
+  const knownNetQty = knownPos ? (knownPos.longQuantity ?? 0) - (knownPos.shortQuantity ?? 0) : 0;
+  const knownMult   = knownPos?.instrument?.assetType === 'OPTION' ? 100 : 1;
+  const knownPrice  = knownPos
+    ? (knownPos.quote?.lastPrice ?? (knownNetQty !== 0 ? knownPos.marketValue / (knownNetQty * knownMult) : null))
+    : null;
   const effectivePrice = simManualPrice ? parseFloat(simManualPrice) : (knownPrice ?? 0);
   const simShares = parseInt(simSharesStr) || 0;
   const tradeValue = effectivePrice * simShares;

@@ -177,7 +177,10 @@ function tradeNotional(t: ProposedTrade): number {
  * for the utilization-ratio check.
  *
  * Equity:
- *   - BUY:               max(0, notional − availableCash)   (margin draw above cash)
+ *   - BUY:               0.5 × notional  (Reg-T initial requirement — margin
+ *                        is buying power up to the 50% wall, per the user's
+ *                        operating model, and each dollar of stock bought
+ *                        reserves ~50¢ of AFW)
  *   - SELL:              0 (releases collateral)
  *
  * Options (one contract = 100 shares of underlying):
@@ -223,8 +226,19 @@ export function projectAfwImpact(t: ProposedTrade, ctx: GuardrailContext): numbe
 
   // Equity.
   if (isBuy(t.instruction)) {
-    const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
-    return Math.max(0, tradeNotional(t) - availableCash);
+    // Reg-T initial requirement: a marginable equity BUY consumes ~50% of its
+    // notional in AFW — margin is buying power up to Schwab's 50% wall, so
+    // each borrowed dollar of stock reserves fifty cents of headroom. This
+    // matches how Schwab's own availableFunds responds to a purchase.
+    //
+    // Previous formula was max(0, notional − (equity − marginBalance)).
+    // `equity − marginBalance` is not cash — it's net-liq minus debt, ~$64K
+    // on an account holding zero actual cash — so every buy under that figure
+    // projected ZERO AFW impact and sailed past the $10K floor. Verified
+    // 2026-08-05: eight $5K buys ($40K of margin draw) all passed with AFW at
+    // $11K. True cash, when needed, is equity − totalValue (positions net of
+    // shorts), NOT equity − marginBalance.
+    return 0.5 * tradeNotional(t);
   }
   return 0;   // equity SELL releases collateral
 }
@@ -275,8 +289,13 @@ export function projectMarginIncrease(t: ProposedTrade, ctx: GuardrailContext): 
 
   // Equity.
   if (isBuy(t.instruction)) {
-    const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
-    return Math.max(0, tradeNotional(t) - availableCash);
+    // True cash = equity − position value (net of shorts). In a margin
+    // account carrying a debit this is ≤ 0, so the entire notional lands on
+    // the margin balance. The old `equity − marginBalance` formula manufactured
+    // ~$64K of phantom cash and projected zero margin increase for any buy
+    // under it, killing the utilization check for equity buys entirely.
+    const trueCash = Math.max(0, ctx.equity - ctx.totalValue);
+    return Math.max(0, tradeNotional(t) - trueCash);
   }
   return 0;
 }

@@ -79,7 +79,14 @@ function attachRealizedPnl(txns: NormalizedTransaction[], history: HistoryEntry[
     );
     if (!match) continue;
     match.used = true;
-    t.realizedPnl = Math.round((t.amount - (match.costBasisPerShare as number) * shares) * 100) / 100;
+    // `amount` is broker dollars — for options the ×100 contract multiplier is
+    // already applied. `costBasisPerShare` is per-SHARE (it comes from position
+    // averages), and `units` for an option trade counts CONTRACTS, so the
+    // basis leg needs the same ×100 or a losing option close books as a gain:
+    // 1 contract opened at $6.00, closed for $425 → old math said +$419
+    // (425 − 6×1); actual is −$175 (425 − 6×100).
+    const multiplier = t.category === 'Option Trade' ? 100 : 1;
+    t.realizedPnl = Math.round((t.amount - (match.costBasisPerShare as number) * shares * multiplier) * 100) / 100;
   }
 }
 

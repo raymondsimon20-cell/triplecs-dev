@@ -297,7 +297,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       const v = pillarSummary
         .filter((p) => p.pillar === pillar)
         .reduce((s, p) => s + p.totalValue, 0);
-      return (v / totalValue) * 100;
+      return totalValue > 0 ? (v / totalValue) * 100 : 0;
     };
 
     // Round to whole points, then push any rounding residue into High Yield so
