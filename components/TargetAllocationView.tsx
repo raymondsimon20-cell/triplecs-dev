@@ -6,6 +6,19 @@
  * Blended yield, bucket (pillar) allocations vs targets, rebalance insights,
  * a whole-share contribution calculator, and a scored ticker table.
  *
+ * Bucket targets are editable inline. Edits live in a draft that every figure
+ * on the page reads, so drift, insights and the contribution plan all preview
+ * the change before it's saved; Save writes at the current account scope (or
+ * global on the combined view) via updateStrategyTargets.
+ *
+ * The calculator's suggestions can be placed as MARKET buys through
+ * /api/orders — same path RebalanceWorkflow uses — after unchecking names,
+ * adjusting share counts, and passing an explicit review step. That review
+ * runs the batch through /api/orders/preflight first, so the guardrail layer
+ * (post-trade AFW floor, concentration, margin, wash-sale) applies here even
+ * though /api/orders itself doesn't enforce it. Blocked orders are dropped
+ * from the batch; warnings must be acknowledged before placing.
+ *
  * Scoring inputs (per the Vol-7 playbook):
  *   - Price vs a selectable 50/100/200-day SMA (below = accumulation zone)
  *   - NAV premium/discount (CLM/CRF via the cornerstone feed; 30%+ premium
@@ -24,7 +37,7 @@
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { Crosshair, RefreshCw, Calculator, Lightbulb, DollarSign, Layers, TrendingUp, AlertTriangle, Focus } from 'lucide-react';
+import { Crosshair, RefreshCw, Calculator, Lightbulb, DollarSign, Layers, TrendingUp, AlertTriangle, Focus, SlidersHorizontal, ShoppingCart } from 'lucide-react';
 import { StatCard as Stat } from '@/components/StatCard';
 import { useSort, SortTh } from '@/components/sortable';
 import type { AllocationRow } from '@/app/api/target-allocation/route';
@@ -62,6 +75,16 @@ const PILLAR_LABEL: Record<string, string> = {
   growth: 'Growth', cornerstone: 'CEFs', income: 'High Yield', triples: 'Leveraged', other: 'Other',
 };
 
+/** The four bucket target fields, and the pillar each one governs. */
+type TargetKey = 'growthPct' | 'cornerstonePct' | 'incomePct' | 'triplesPct';
+type BucketTargets = Record<TargetKey, number>;
+
+const TARGET_KEYS: TargetKey[] = ['incomePct', 'cornerstonePct', 'growthPct', 'triplesPct'];
+
+const PILLAR_TARGET_KEY: Record<string, TargetKey> = {
+  growth: 'growthPct', cornerstone: 'cornerstonePct', income: 'incomePct', triples: 'triplesPct',
+};
+
 export interface ScoredRow extends AllocationRow {
   navDiscPct: number | null;   // positive = premium, negative = discount
   tr12:       number | null;   // total return incl. est. distributions
@@ -79,11 +102,40 @@ export interface ScoredRow extends AllocationRow {
 
 interface PillarSummaryRow { pillar: string; totalValue: number }
 
+// ─── Guardrail preflight ──────────────────────────────────────────────────────
+// Response shape of POST /api/orders/preflight. See that route for why manual
+// placements have to opt into the guardrail layer explicitly.
+
+interface PreflightViolation {
+  code:     string;
+  message:  string;
+  severity: 'block' | 'warn';
+}
+
+interface PreflightRow {
+  symbol:     string;
+  allowed:    boolean;
+  violations: PreflightViolation[];
+}
+
+interface PreflightResponse {
+  results:      PreflightRow[];
+  allowedCount: number;
+  blockedCount: number;
+  warnCount:    number;
+  context: {
+    afwDollars:          number;
+    projectedAfwDollars: number;
+    totalValue:          number;
+    marginBalance:       number;
+  };
+}
+
 interface Props {
   accountHash?:   string;
   totalValue:     number;
   pillarSummary:  PillarSummaryRow[];
-  targets:        { growthPct: number; cornerstonePct: number; incomePct: number; triplesPct: number };
+  targets:        BucketTargets;
   /** Dividend payment history, used to derive real yields. Optional — falls
    *  back to Schwab's quoted yield and the static table when absent. */
   dividends?:     DividendRecord[];
@@ -291,6 +343,78 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
   const liveTargets = useStrategyTargets(accountHash);
   const [snapshotState, setSnapshotState] = useState<'idle' | 'saved'>('idle');
 
+  // ── Inline target editing ───────────────────────────────────────────────────
+  // Targets can also be edited in the Settings modal, but drift, the insights
+  // list and the whole contribution planner are all measured against them —
+  // so editing them here, next to the numbers they move, is where the feedback
+  // actually is. `draftTargets` is non-null exactly while editing, and every
+  // downstream calculation reads `effTargets`, so the page previews the draft
+  // live and nothing is written until Save.
+  const [draftTargets, setDraftTargets] = useState<BucketTargets | null>(null);
+  const editing = draftTargets !== null;
+  const effTargets: BucketTargets = draftTargets ?? targets;
+  const draftSum = useMemo(
+    () => TARGET_KEYS.reduce((s, k) => s + effTargets[k], 0),
+    [effTargets],
+  );
+
+  const beginEdit = () => {
+    setDraftTargets({ ...targets });
+    // The target column only exists in the "% Portfolio" basis — editing while
+    // showing share-of-invested would hide the fields being edited.
+    setShowAsPortfolioPct(true);
+  };
+  const cancelEdit = () => setDraftTargets(null);
+
+  const setDraftPillar = (key: TargetKey, raw: number) => {
+    setDraftTargets((prev) => {
+      const base = prev ?? { ...targets };
+      const value = Math.max(0, Math.min(100, Math.round(Number.isFinite(raw) ? raw : 0)));
+      const next: BucketTargets = { ...base, [key]: value };
+
+      // Same give-way rule as the Settings sliders: if the four now exceed 100,
+      // pull the excess from the largest other buckets first. Without it you
+      // can't raise a bucket without lowering another one first, which makes
+      // the sliders feel stuck at the top end.
+      let sum = TARGET_KEYS.reduce((s, k) => s + next[k], 0);
+      if (sum > 100) {
+        const others = TARGET_KEYS
+          .filter((k) => k !== key)
+          .sort((a, b) => next[b] - next[a]);
+        for (const other of others) {
+          const reduction = Math.min(next[other], sum - 100);
+          next[other] -= reduction;
+          sum -= reduction;
+          if (sum <= 100) break;
+        }
+      }
+      return next;
+    });
+  };
+
+  /** Push whatever is unallocated into the largest bucket so the four hit 100. */
+  const balanceDraft = () => {
+    setDraftTargets((prev) => {
+      const base = prev ?? { ...targets };
+      const sum = TARGET_KEYS.reduce((s, k) => s + base[k], 0);
+      if (sum === 100) return base;
+      const biggest = [...TARGET_KEYS].sort((a, b) => base[b] - base[a])[0];
+      return { ...base, [biggest]: Math.max(0, base[biggest] + (100 - sum)) };
+    });
+  };
+
+  const saveTargets = () => {
+    // Drift math, the gap-weighted contribution split and the target blended
+    // yield all assume the four buckets total 100. Saving anything else would
+    // quietly corrupt every figure on this page, so it's blocked rather than
+    // auto-corrected — auto-correcting would move a number the user just set.
+    if (!draftTargets || draftSum !== 100) return;
+    updateStrategyTargets({ ...liveTargets, ...draftTargets }, accountHash);
+    setDraftTargets(null);
+    setSnapshotState('saved');
+    setTimeout(() => setSnapshotState('idle'), 2500);
+  };
+
   const setTargetsFromCurrent = () => {
     if (totalValue <= 0) return;
     const pctOf = (pillar: string) => {
@@ -306,11 +430,18 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     const cornerstone = Math.round(pctOf('cornerstone'));
     const triples = Math.round(pctOf('triples'));
     const income = 100 - growth - cornerstone - triples;
+    const snapshot: BucketTargets = {
+      growthPct: growth, cornerstonePct: cornerstone, incomePct: income, triplesPct: triples,
+    };
 
-    updateStrategyTargets(
-      { ...liveTargets, growthPct: growth, cornerstonePct: cornerstone, incomePct: income, triplesPct: triples },
-      accountHash,
-    );
+    // Mid-edit, the snapshot seeds the draft instead of committing — otherwise
+    // this button would silently discard the edit in progress.
+    if (editing) {
+      setDraftTargets(snapshot);
+      return;
+    }
+
+    updateStrategyTargets({ ...liveTargets, ...snapshot }, accountHash);
     setSnapshotState('saved');
     setTimeout(() => setSnapshotState('idle'), 2500);
   };
@@ -384,8 +515,8 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
 
   /** True while the targets still look like the untouched shipped defaults. */
   const targetsLookDefault =
-    targets.growthPct === 20 && targets.cornerstonePct === 20 &&
-    targets.incomePct === 50 && targets.triplesPct === 10;
+    effTargets.growthPct === 20 && effTargets.cornerstonePct === 20 &&
+    effTargets.incomePct === 50 && effTargets.triplesPct === 10;
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -431,8 +562,8 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     const actual: Record<string, number> = { growth: 0, cornerstone: 0, income: 0, triples: 0, other: 0 };
     for (const p of pillarSummary) actual[p.pillar] = (actual[p.pillar] ?? 0) + p.totalValue;
     const targetPct: Record<string, number> = {
-      growth: targets.growthPct, cornerstone: targets.cornerstonePct,
-      income: targets.incomePct, triples: targets.triplesPct, other: 0,
+      growth: effTargets.growthPct, cornerstone: effTargets.cornerstonePct,
+      income: effTargets.incomePct, triples: effTargets.triplesPct, other: 0,
     };
     return (['income', 'cornerstone', 'growth', 'triples'] as const).map((pillar) => {
       const actual$ = actual[pillar] ?? 0;
@@ -440,7 +571,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       const gapPp = targetPct[pillar] - actualPct;
       return { pillar, actual$, actualPct, targetPct: targetPct[pillar], gapPp, gap$: (gapPp / 100) * totalValue };
     });
-  }, [pillarSummary, targets, totalValue]);
+  }, [pillarSummary, effTargets, totalValue]);
 
   const underTarget = useMemo(() => new Set(buckets.filter((b) => b.gapPp > 2).map((b) => b.pillar as string)), [buckets]);
   const overTarget  = useMemo(() => new Set(buckets.filter((b) => b.gapPp < -2).map((b) => b.pillar as string)), [buckets]);
@@ -591,8 +722,8 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
    */
   const targetBlendedYield = useMemo(() => {
     const w: Record<string, number> = {
-      growth: targets.growthPct, cornerstone: targets.cornerstonePct,
-      income: targets.incomePct, triples: targets.triplesPct,
+      growth: effTargets.growthPct, cornerstone: effTargets.cornerstonePct,
+      income: effTargets.incomePct, triples: effTargets.triplesPct,
     };
     let sum = 0, weightSum = 0;
     for (const [pillar, pct] of Object.entries(w)) {
@@ -604,7 +735,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       weightSum += pct;
     }
     return weightSum > 0 ? sum / weightSum : 0;
-  }, [targets, bucketYields]);
+  }, [effTargets, bucketYields]);
 
   // ── Rebalance insights ──────────────────────────────────────────────────────
   const insights = useMemo(() => {
@@ -774,6 +905,165 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
     };
   }, [contribution, buckets, scored, totalValue, focus, focusedSet, maximiseDeployment, applyScores]);
 
+  // ── Staging plan rows into real orders ──────────────────────────────────────
+  // The plan is a suggestion; these turn a chosen subset of it into MARKET buys
+  // via /api/orders — the same path RebalanceWorkflow and the cornerstone card
+  // use. Nothing reaches Schwab without an explicit review step.
+  const [excluded, setExcluded]           = useState<Set<string>>(new Set());
+  const [shareOverride, setShareOverride] = useState<Record<string, number>>({});
+  const [confirming, setConfirming]       = useState(false);
+  const [placing, setPlacing]             = useState(false);
+  const [placeError, setPlaceError]       = useState<string | null>(null);
+  const [orderResults, setOrderResults]   = useState<Record<string, { ok: boolean; text: string }> | null>(null);
+
+  // Guardrail preflight. /api/orders places straight to Schwab, so the
+  // guardrail layer (post-trade AFW floor, concentration, margin, wash-sale)
+  // only runs if we ask for it — /api/orders/preflight dry-runs the batch
+  // cumulatively and reports what would be blocked.
+  const [preflight, setPreflight]         = useState<PreflightResponse | null>(null);
+  const [preflighting, setPreflighting]   = useState(false);
+  const [warnOverride, setWarnOverride]   = useState(false);
+
+  /** Identity of the current plan. Any change means the staged edits below
+   *  describe a plan that no longer exists, so they're discarded. */
+  const planKey = plan ? plan.list.map((b) => `${b.symbol}:${b.shares}`).join(',') : '';
+  useEffect(() => {
+    setExcluded(new Set());
+    setShareOverride({});
+    setConfirming(false);
+    setPlaceError(null);
+    setOrderResults(null);
+    setPreflight(null);
+    setWarnOverride(false);
+  }, [planKey]);
+
+  const toggleExcluded = (symbol: string) =>
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(symbol)) next.delete(symbol); else next.add(symbol);
+      return next;
+    });
+
+  const stagedOrders = useMemo(() => {
+    if (!plan) return [];
+    return plan.list
+      .filter((b) => !excluded.has(b.symbol))
+      .map((b) => {
+        const shares = shareOverride[b.symbol] ?? b.shares;
+        return { ...b, shares, cost: shares * b.price };
+      })
+      .filter((b) => b.shares > 0);
+  }, [plan, excluded, shareOverride]);
+
+  const stagedCost = useMemo(() => stagedOrders.reduce((s, b) => s + b.cost, 0), [stagedOrders]);
+
+  const blockedSymbols = useMemo(
+    () => new Set((preflight?.results ?? []).filter((r) => !r.allowed).map((r) => r.symbol)),
+    [preflight],
+  );
+
+  /** Staged orders that cleared the guardrails — the only ones that get placed. */
+  const clearedOrders = useMemo(
+    () => stagedOrders.filter((b) => !blockedSymbols.has(b.symbol)),
+    [stagedOrders, blockedSymbols],
+  );
+  const clearedCost = useMemo(() => clearedOrders.reduce((s, b) => s + b.cost, 0), [clearedOrders]);
+
+  /** Allowed-but-flagged orders. Warnings don't block, but must be acknowledged. */
+  const pendingWarnings = useMemo(
+    () => (preflight?.results ?? []).filter((r) => r.allowed && r.violations.some((v) => v.severity === 'warn')),
+    [preflight],
+  );
+
+  /** Orders need a specific Schwab account; the "All" view has no hash to place against. */
+  const canReview  = Boolean(accountHash) && stagedOrders.length > 0 && !placing && !preflighting;
+  const canConfirm = Boolean(accountHash) && preflight !== null && clearedOrders.length > 0
+    && !placing && (pendingWarnings.length === 0 || warnOverride);
+
+  /**
+   * Run the guardrail dry-run, then open the confirm panel. Fails closed: if
+   * the check itself errors we surface it and stay out of the confirm step
+   * rather than letting unvalidated orders through on a network blip.
+   */
+  const runPreflight = async () => {
+    if (!accountHash || stagedOrders.length === 0) return;
+    setPreflighting(true);
+    setPlaceError(null);
+    setPreflight(null);
+    setWarnOverride(false);
+    try {
+      const res = await fetch('/api/orders/preflight', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountHash,
+          orders: stagedOrders.map((b) => ({
+            symbol:      b.symbol,
+            instruction: 'BUY',
+            quantity:    b.shares,
+            price:       b.price,
+            pillar:      b.pillar,
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+      setPreflight(data as PreflightResponse);
+      setConfirming(true);
+    } catch (e) {
+      setPlaceError(e instanceof Error ? e.message : 'Guardrail check failed — orders not placed.');
+    } finally {
+      setPreflighting(false);
+    }
+  };
+
+  const placeStagedOrders = async () => {
+    if (!accountHash || clearedOrders.length === 0 || !preflight) return;
+    setPlacing(true);
+    setPlaceError(null);
+    try {
+      const res = await fetch('/api/orders', {
+        method:  'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          accountHash,
+          orders: clearedOrders.map((b) => ({
+            symbol:      b.symbol,
+            instruction: 'BUY',
+            quantity:    b.shares,
+            orderType:   'MARKET',
+            rationale:   `Allocation planner: ${b.signal} (score ${b.score}) in ${PILLAR_LABEL[b.pillar] ?? b.pillar}`,
+            aiMode:      'target_allocation',
+          })),
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error ?? `HTTP ${res.status}`);
+
+      // Results come back positionally, in the order the orders were sent.
+      const list = (data.equityResults ?? data.results ?? []) as { status?: string; orderId?: string | null; message?: string }[];
+      const map: Record<string, { ok: boolean; text: string }> = {};
+      // Blocked orders never reached Schwab; record why so the row explains
+      // itself rather than just going quiet.
+      for (const r of preflight.results) {
+        if (r.allowed) continue;
+        map[r.symbol] = { ok: false, text: r.violations.find((v) => v.severity === 'block')?.message ?? 'Blocked by guardrails' };
+      }
+      clearedOrders.forEach((b, i) => {
+        const r = list[i];
+        map[b.symbol] = r?.status === 'placed'
+          ? { ok: true,  text: r.orderId ? `Placed · ${r.orderId}` : 'Placed' }
+          : { ok: false, text: r?.message ?? 'Rejected' };
+      });
+      setOrderResults(map);
+      setConfirming(false);
+    } catch (e) {
+      setPlaceError(e instanceof Error ? e.message : 'Order submission failed');
+    } finally {
+      setPlacing(false);
+    }
+  };
+
   // ── Render ──────────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
@@ -818,7 +1108,9 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
           <button
             onClick={setTargetsFromCurrent}
             disabled={totalValue <= 0}
-            title="Snapshot your current bucket allocation as the target"
+            title={editing
+              ? 'Load your current allocation into the draft below'
+              : 'Snapshot your current bucket allocation as the target'}
             className={`flex items-center gap-1.5 text-xs px-2.5 py-1.5 rounded-lg transition-colors border ${
               snapshotState === 'saved'
                 ? 'bg-emerald-600/20 text-emerald-300 border-emerald-500/30'
@@ -826,7 +1118,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
             } disabled:opacity-40 disabled:cursor-not-allowed`}
           >
             <Crosshair className="w-3.5 h-3.5" />
-            {snapshotState === 'saved' ? 'Targets set' : 'Set Targets from Current'}
+            {snapshotState === 'saved' ? 'Targets set' : editing ? 'Use Current' : 'Set Targets from Current'}
           </button>
           {focus && (
             <div className="flex items-center gap-0.5">
@@ -908,57 +1200,158 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
       </div>
 
       {/* Bucket allocations */}
-      <div className="bg-[#12151f] border border-[#1f2334] rounded-lg p-4 space-y-3">
-        <div className="flex items-center justify-between">
-          <span className="text-sm font-semibold text-white">Bucket Allocations</span>
-          <div className="flex items-center gap-0.5 text-[10px]">
-            {([['% Portfolio', true], ['% Invested', false]] as const).map(([label, val]) => (
-              <button
-                key={label}
-                onClick={() => setShowAsPortfolioPct(val)}
-                className={`px-2 py-1 rounded transition-colors ${
-                  showAsPortfolioPct === val
-                    ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30'
-                    : 'text-[#7c82a0] hover:text-white border border-transparent'
+      <div className={`bg-[#12151f] border rounded-lg p-4 space-y-3 transition-colors ${
+        editing ? 'border-violet-500/40' : 'border-[#1f2334]'
+      }`}>
+        <div className="flex items-center justify-between gap-2 flex-wrap">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-semibold text-white">Bucket Allocations</span>
+            {editing && (
+              <span
+                className={`text-[10px] tabular-nums px-1.5 py-0.5 rounded border ${
+                  draftSum === 100
+                    ? 'text-emerald-300 border-emerald-500/30 bg-emerald-500/10'
+                    : 'text-yellow-300 border-yellow-500/30 bg-yellow-500/10'
                 }`}
               >
-                {label}
-              </button>
-            ))}
+                {draftSum}% allocated
+                {draftSum < 100 && ` · ${100 - draftSum}pp unassigned`}
+                {draftSum > 100 && ` · ${draftSum - 100}pp over`}
+              </span>
+            )}
+          </div>
+
+          <div className="flex items-center gap-2">
+            {editing ? (
+              <>
+                {draftSum !== 100 && (
+                  <button
+                    onClick={balanceDraft}
+                    title="Move the unassigned points into the largest bucket so the four total 100"
+                    className="text-[11px] px-2 py-1 rounded border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] transition-colors"
+                  >
+                    Balance to 100
+                  </button>
+                )}
+                <button
+                  onClick={cancelEdit}
+                  className="text-[11px] px-2 py-1 rounded border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={saveTargets}
+                  disabled={draftSum !== 100}
+                  title={draftSum === 100
+                    ? `Save to ${accountHash ? 'this account' : 'global targets'}`
+                    : 'Buckets must total exactly 100% — drift and the contribution planner assume it'}
+                  className="text-[11px] px-2 py-1 rounded border bg-violet-600/20 text-violet-200 border-violet-500/40 hover:bg-violet-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                >
+                  Save targets
+                </button>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center gap-0.5 text-[10px]">
+                  {([['% Portfolio', true], ['% Invested', false]] as const).map(([label, val]) => (
+                    <button
+                      key={label}
+                      onClick={() => setShowAsPortfolioPct(val)}
+                      className={`px-2 py-1 rounded transition-colors ${
+                        showAsPortfolioPct === val
+                          ? 'bg-violet-600/20 text-violet-300 border border-violet-500/30'
+                          : 'text-[#7c82a0] hover:text-white border border-transparent'
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={beginEdit}
+                  title="Set your bucket targets here — drift and the calculator update as you drag"
+                  className="flex items-center gap-1.5 text-[11px] px-2 py-1 rounded border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] transition-colors"
+                >
+                  <SlidersHorizontal className="w-3 h-3" />
+                  Edit targets
+                </button>
+              </>
+            )}
           </div>
         </div>
-        {buckets.map((b) => (
-          <div key={b.pillar} className="space-y-1">
-            <div className="flex justify-between text-[11px]">
-              <span className="text-[#9aa2c0]">
-                {PILLAR_LABEL[b.pillar]}
-                <span
-                  className="ml-1.5 text-[10px] text-emerald-400/80 tabular-nums"
-                  title={`Blended yield within ${PILLAR_LABEL[b.pillar]}, value-weighted`}
-                >
-                  {yieldFor(b.pillar).toFixed(1)}% yld
+
+        {editing && (
+          <p className="text-[10px] text-violet-200/70 leading-snug">
+            Previewing unsaved targets — drift, insights and the contribution plan below all reflect
+            these numbers. Saving writes to {accountHash ? 'this account only' : 'your global targets'}.
+          </p>
+        )}
+
+        {buckets.map((b) => {
+          const key = PILLAR_TARGET_KEY[b.pillar];
+          return (
+            <div key={b.pillar} className="space-y-1">
+              <div className="flex justify-between items-center text-[11px] gap-2">
+                <span className="text-[#9aa2c0]">
+                  {PILLAR_LABEL[b.pillar]}
+                  <span
+                    className="ml-1.5 text-[10px] text-emerald-400/80 tabular-nums"
+                    title={`Blended yield within ${PILLAR_LABEL[b.pillar]}, value-weighted`}
+                  >
+                    {yieldFor(b.pillar).toFixed(1)}% yld
+                  </span>
                 </span>
-              </span>
-              <span className="tabular-nums text-[#7c82a0]">
-                {fmt$(b.actual$, 0)} ·{' '}
-                {showAsPortfolioPct
-                  ? `${b.actualPct.toFixed(1)}% / ${b.targetPct}% target`
-                  : `${bucketShareOf(b).toFixed(1)}% of invested`}
-                {' '}·{' '}
-                <span className={b.gapPp > 2 ? 'text-emerald-400' : b.gapPp < -2 ? 'text-orange-300' : 'text-[#4a5070]'}>
-                  {b.gapPp > 0 ? `${fmt$(b.gap$, 0)} to add` : b.gapPp < 0 ? `${fmt$(Math.abs(b.gap$), 0)} over` : 'on target'}
+                <span className="tabular-nums text-[#7c82a0] flex items-center gap-1">
+                  <span>{fmt$(b.actual$, 0)} ·</span>
+                  {showAsPortfolioPct ? (
+                    <>
+                      <span>{b.actualPct.toFixed(1)}% /</span>
+                      {editing ? (
+                        <input
+                          type="number"
+                          min={0}
+                          max={100}
+                          step={1}
+                          value={effTargets[key]}
+                          onChange={(e) => setDraftPillar(key, Number(e.target.value))}
+                          aria-label={`${PILLAR_LABEL[b.pillar]} target percent`}
+                          className="w-12 bg-[#0f1117] border border-violet-500/40 rounded px-1 py-0.5 text-[11px] text-white text-right tabular-nums focus:outline-none focus:border-violet-400"
+                        />
+                      ) : (
+                        <span>{b.targetPct}%</span>
+                      )}
+                      <span>target ·</span>
+                    </>
+                  ) : (
+                    <span>{bucketShareOf(b).toFixed(1)}% of invested ·</span>
+                  )}
+                  <span className={b.gapPp > 2 ? 'text-emerald-400' : b.gapPp < -2 ? 'text-orange-300' : 'text-[#4a5070]'}>
+                    {b.gapPp > 0 ? `${fmt$(b.gap$, 0)} to add` : b.gapPp < 0 ? `${fmt$(Math.abs(b.gap$), 0)} over` : 'on target'}
+                  </span>
                 </span>
-              </span>
+              </div>
+              <div className="relative w-full h-2.5 bg-[#1f2334] rounded-full overflow-hidden">
+                <div
+                  className={`h-full rounded-full ${b.gapPp < -2 ? 'bg-orange-500/80' : 'bg-blue-500/80'}`}
+                  style={{ width: `${Math.min((b.actualPct / Math.max(b.targetPct, 1)) * 100, 100)}%` }}
+                />
+                <div className="absolute top-0 bottom-0 w-px bg-white/40" style={{ left: '100%' }} />
+              </div>
+              {editing && (
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  step={1}
+                  value={effTargets[key]}
+                  onChange={(e) => setDraftPillar(key, Number(e.target.value))}
+                  aria-label={`${PILLAR_LABEL[b.pillar]} target slider`}
+                  className="w-full accent-violet-500"
+                />
+              )}
             </div>
-            <div className="relative w-full h-2.5 bg-[#1f2334] rounded-full overflow-hidden">
-              <div
-                className={`h-full rounded-full ${b.gapPp < -2 ? 'bg-orange-500/80' : 'bg-blue-500/80'}`}
-                style={{ width: `${Math.min((b.actualPct / Math.max(b.targetPct, 1)) * 100, 100)}%` }}
-              />
-              <div className="absolute top-0 bottom-0 w-px bg-white/40" style={{ left: '100%' }} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
 
       {/* Scoring weights */}
@@ -1092,15 +1485,71 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
           </label>
           {plan && plan.list.length > 0 && (
             <div className="space-y-1.5">
-              {plan.list.map((b) => (
-                <div key={b.symbol} className="flex items-center gap-2 text-xs">
-                  <span className="w-14 font-mono font-semibold text-white">{b.symbol}</span>
-                  <span className="text-[10px] text-[#4a5070] w-20">{PILLAR_LABEL[b.pillar]}</span>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${SIGNAL_CLASS[b.signal]}`}>{b.signal}</span>
-                  <span className="ml-auto tabular-nums text-[#9aa2c0]">{b.shares} × {fmt$(b.price)}</span>
-                  <span className="w-20 text-right tabular-nums text-white">{fmt$(b.cost)}</span>
-                </div>
-              ))}
+              {plan.list.map((b) => {
+                const result   = orderResults?.[b.symbol];
+                const staged   = !excluded.has(b.symbol);
+                const shares   = shareOverride[b.symbol] ?? b.shares;
+                const locked   = Boolean(orderResults) || confirming || placing || preflighting;
+                const check    = preflight?.results.find((r) => r.symbol === b.symbol);
+                const blocker  = check && !check.allowed
+                  ? check.violations.find((v) => v.severity === 'block')
+                  : undefined;
+                const warning  = check?.allowed
+                  ? check.violations.find((v) => v.severity === 'warn')
+                  : undefined;
+                return (
+                  <div key={b.symbol} className={`flex items-center gap-2 text-xs ${staged ? '' : 'opacity-40'}`}>
+                    <input
+                      type="checkbox"
+                      checked={staged}
+                      disabled={locked}
+                      onChange={() => toggleExcluded(b.symbol)}
+                      aria-label={`Include ${b.symbol} in the order`}
+                      className="accent-blue-500 disabled:opacity-50"
+                    />
+                    <span className="w-14 font-mono font-semibold text-white">{b.symbol}</span>
+                    <span className="text-[10px] text-[#4a5070] w-20">{PILLAR_LABEL[b.pillar]}</span>
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded ${SIGNAL_CLASS[b.signal]}`}>{b.signal}</span>
+                    <span className="ml-auto flex items-center gap-1 tabular-nums text-[#9aa2c0]">
+                      {locked ? (
+                        <span>{shares}</span>
+                      ) : (
+                        <input
+                          type="number"
+                          min={0}
+                          step={1}
+                          value={shares}
+                          onChange={(e) => {
+                            const n = Math.max(0, Math.floor(Number(e.target.value) || 0));
+                            setShareOverride((prev) => ({ ...prev, [b.symbol]: n }));
+                          }}
+                          aria-label={`${b.symbol} share count`}
+                          className="w-14 bg-[#0f1117] border border-[#1f2334] rounded px-1 py-0.5 text-right text-xs text-white tabular-nums focus:outline-none focus:border-blue-500"
+                        />
+                      )}
+                      <span>× {fmt$(b.price)}</span>
+                    </span>
+                    <span className={`w-20 text-right tabular-nums ${blocker ? 'text-[#4a5070] line-through' : 'text-white'}`}>
+                      {fmt$(shares * b.price)}
+                    </span>
+                    {result ? (
+                      <span className={`w-32 text-right text-[10px] truncate ${result.ok ? 'text-emerald-400' : 'text-red-400'}`} title={result.text}>
+                        {result.ok ? '✓' : '✗'} {result.text}
+                      </span>
+                    ) : blocker ? (
+                      <span className="w-32 text-right text-[10px] text-red-400 truncate cursor-help" title={blocker.message}>
+                        ⛔ {blocker.code.replace(/_/g, ' ')}
+                      </span>
+                    ) : warning ? (
+                      <span className="w-32 text-right text-[10px] text-yellow-300 truncate cursor-help" title={warning.message}>
+                        ⚠ {warning.code.replace(/_/g, ' ')}
+                      </span>
+                    ) : preflight ? (
+                      <span className="w-32 text-right text-[10px] text-emerald-400/70">✓ cleared</span>
+                    ) : null}
+                  </div>
+                );
+              })}
               <div className="border-t border-[#1f2334] pt-1.5 flex justify-between text-xs font-semibold">
                 <span className="text-[#7c82a0]">Deployed</span>
                 <span className="text-white tabular-nums">{fmt$(plan.spent)}</span>
@@ -1141,6 +1590,149 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
                   current mix rather than favoring any one bucket.
                 </p>
               )}
+
+              {/* ── Place the plan ───────────────────────────────────────────
+                  Suggestions become real MARKET buys here. The review step is
+                  deliberate: the plan recomputes on every weight, focus and
+                  contribution change, so the list can shift under you between
+                  reading it and acting on it. */}
+              <div className="border-t border-[#1f2334] pt-2 mt-2 space-y-2">
+                {placeError && (
+                  <div className="flex items-start gap-2 text-[11px] text-red-300 bg-red-500/10 border border-red-500/25 rounded p-2">
+                    <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-px" />
+                    <span>{placeError}</span>
+                  </div>
+                )}
+
+                {orderResults ? (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] text-[#9aa2c0]">
+                      {Object.values(orderResults).filter((r) => r.ok).length} placed
+                      {Object.values(orderResults).some((r) => !r.ok) &&
+                        ` · ${Object.values(orderResults).filter((r) => !r.ok).length} failed`}
+                      {' '}— check Trade Hub for fills.
+                    </span>
+                    <button
+                      onClick={() => { setOrderResults(null); setExcluded(new Set()); setShareOverride({}); }}
+                      className="ml-auto text-[11px] px-2 py-1 rounded border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] transition-colors"
+                    >
+                      Start over
+                    </button>
+                  </div>
+                ) : confirming && preflight ? (
+                  <div className="space-y-2 bg-blue-500/5 border border-blue-500/25 rounded p-2.5">
+                    <div className="text-[11px] text-blue-200 leading-snug">
+                      Placing <span className="font-semibold">{clearedOrders.length}</span> market buy
+                      {clearedOrders.length === 1 ? '' : 's'} for <span className="font-semibold tabular-nums">{fmt$(clearedCost)}</span>.
+                      Market orders fill at the going price, so the actual cost will differ from this estimate.
+                    </div>
+
+                    {clearedOrders.length > 0 && (
+                      <div className="text-[10px] text-[#9aa2c0] tabular-nums leading-relaxed">
+                        {clearedOrders.map((b) => `${b.shares} ${b.symbol}`).join(' · ')}
+                      </div>
+                    )}
+
+                    {/* AFW is the number the guardrail floor is defending —
+                        showing the projected landing point makes the block
+                        (or the near-miss) legible rather than abstract. */}
+                    <div className="text-[10px] text-[#7c82a0] tabular-nums border-t border-[#1f2334] pt-1.5">
+                      AFW after these fills: {fmt$(preflight.context.projectedAfwDollars, 0)}{' '}
+                      <span className="text-[#4a5070]">(from {fmt$(preflight.context.afwDollars, 0)})</span>
+                    </div>
+
+                    {preflight.blockedCount > 0 && (
+                      <div className="space-y-1 bg-red-500/10 border border-red-500/25 rounded p-2">
+                        <div className="flex items-center gap-1.5 text-[11px] font-semibold text-red-300">
+                          <AlertTriangle className="w-3.5 h-3.5" />
+                          {preflight.blockedCount} order{preflight.blockedCount === 1 ? '' : 's'} blocked by guardrails
+                        </div>
+                        {preflight.results.filter((r) => !r.allowed).map((r) => (
+                          <div key={r.symbol} className="text-[10px] text-red-200/90 leading-snug">
+                            <span className="font-mono font-semibold">{r.symbol}</span>{' '}
+                            {r.violations.find((v) => v.severity === 'block')?.message}
+                          </div>
+                        ))}
+                        <p className="text-[10px] text-red-200/60 pt-0.5">
+                          These are dropped from the order — the rest can still go through.
+                        </p>
+                      </div>
+                    )}
+
+                    {pendingWarnings.length > 0 && (
+                      <div className="space-y-1 bg-yellow-500/10 border border-yellow-500/25 rounded p-2">
+                        {pendingWarnings.map((r) => (
+                          <div key={r.symbol} className="text-[10px] text-yellow-100/90 leading-snug">
+                            <span className="font-mono font-semibold">{r.symbol}</span>{' '}
+                            {r.violations.filter((v) => v.severity === 'warn').map((v) => v.message).join(' ')}
+                          </div>
+                        ))}
+                        <label className="flex items-center gap-1.5 text-[10px] text-yellow-200 cursor-pointer select-none pt-0.5">
+                          <input
+                            type="checkbox"
+                            checked={warnOverride}
+                            onChange={(e) => setWarnOverride(e.target.checked)}
+                            className="accent-yellow-500"
+                          />
+                          I&rsquo;ve read the warnings and want to proceed
+                        </label>
+                      </div>
+                    )}
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => { setConfirming(false); setPreflight(null); setWarnOverride(false); }}
+                        disabled={placing}
+                        className="text-[11px] px-2 py-1 rounded border border-[#2d3248] text-[#9aa2c0] hover:text-white hover:border-[#3d4468] disabled:opacity-40 transition-colors"
+                      >
+                        Back
+                      </button>
+                      <button
+                        onClick={placeStagedOrders}
+                        disabled={!canConfirm}
+                        title={clearedOrders.length === 0
+                          ? 'Every staged order was blocked by guardrails'
+                          : pendingWarnings.length > 0 && !warnOverride
+                            ? 'Acknowledge the warnings first'
+                            : 'Send these orders to Schwab'}
+                        className="ml-auto flex items-center gap-1.5 text-[11px] px-3 py-1 rounded border bg-emerald-600/20 text-emerald-200 border-emerald-500/40 hover:bg-emerald-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                      >
+                        {placing && <div className="w-3 h-3 border-2 border-emerald-300/30 border-t-emerald-300 rounded-full animate-spin" />}
+                        {placing ? 'Placing…' : `Confirm ${clearedOrders.length} buy${clearedOrders.length === 1 ? '' : 's'}`}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] text-[#7c82a0] tabular-nums">
+                      {stagedOrders.length} selected · {fmt$(stagedCost)}
+                    </span>
+                    {stagedCost > plan.cash && (
+                      <span className="text-[10px] text-yellow-300/80 tabular-nums">
+                        {fmt$(stagedCost - plan.cash)} over your contribution — the difference draws on margin.
+                      </span>
+                    )}
+                    {!accountHash && (
+                      <span className="text-[10px] text-yellow-300/80">
+                        Pick a single account to place orders — the combined view has no account to trade in.
+                      </span>
+                    )}
+                    <button
+                      onClick={runPreflight}
+                      disabled={!canReview}
+                      title={accountHash ? 'Run the guardrail check, then review before anything goes to Schwab' : 'Select a single account first'}
+                      className="ml-auto flex items-center gap-1.5 text-[11px] px-3 py-1 rounded border bg-blue-600/20 text-blue-200 border-blue-500/40 hover:bg-blue-600/30 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                    >
+                      {preflighting
+                        ? <div className="w-3 h-3 border-2 border-blue-300/30 border-t-blue-300 rounded-full animate-spin" />
+                        : <ShoppingCart className="w-3 h-3" />}
+                      {preflighting
+                        ? 'Checking guardrails…'
+                        : `Review ${stagedOrders.length} order${stagedOrders.length === 1 ? '' : 's'}`}
+                    </button>
+                  </div>
+                )}
+              </div>
             </div>
           )}
           {plan && plan.list.length === 0 && (
@@ -1155,7 +1747,7 @@ export function TargetAllocationView({ accountHash, totalValue, pillarSummary, t
               ))}
             </div>
           )}
-          {!plan && <p className="text-[10px] text-[#4a5070]">Enter an amount to see a score-weighted, bucket-aware buy plan. Informational only — stage orders through the normal workflow.</p>}
+          {!plan && <p className="text-[10px] text-[#4a5070]">Enter an amount to see a score-weighted, bucket-aware buy plan. You can then uncheck names, adjust share counts, and place the rest as market buys.</p>}
         </div>
       </div>
 

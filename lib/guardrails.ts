@@ -568,6 +568,96 @@ export function validateBatch<T extends ProposedTrade>(
   return { allowed, blocked };
 }
 
+/**
+ * Validate a batch where the trades will all be placed together.
+ *
+ * `validateBatch` measures every trade against the same opening snapshot,
+ * which is the right question for one order and the wrong one for a plan:
+ * five buys each sized to individually clear the AFW floor can jointly go
+ * straight through it. Here each accepted trade is folded back into a working
+ * context — AFW down by its projected draw, margin balance up by its projected
+ * increase, position and portfolio value up by its notional, pillar
+ * percentages recomputed, and the trade counted against the daily cap —
+ * before the next is measured. Blocked trades are not folded in, since they
+ * wouldn't be placed.
+ *
+ * Order matters: the caller's ordering decides who gets the remaining
+ * headroom. The input context is copied, never mutated.
+ */
+export function validateBatchCumulative<T extends ProposedTrade>(
+  trades: T[],
+  ctx: GuardrailContext,
+): {
+  results: Array<T & { allowed: boolean; violations: GuardrailViolation[] }>;
+  /** Context as it stands after every accepted trade — projected AFW lives here. */
+  finalContext: GuardrailContext;
+} {
+  const working: GuardrailContext = {
+    ...ctx,
+    positions:    ctx.positions.map((p) => ({ ...p })),
+    pillars:      ctx.pillars.map((p) => ({ ...p })),
+    recentTrades: [...ctx.recentTrades],
+  };
+
+  const results: Array<T & { allowed: boolean; violations: GuardrailViolation[] }> = [];
+
+  for (const t of trades) {
+    const { allowed, violations } = validateProposedTrade(t, working);
+    results.push({ ...t, allowed, violations });
+    if (!allowed) continue;
+
+    const notional = tradeNotional(t);
+    const afwDraw  = projectAfwImpact(t, working);
+    const marginUp = projectMarginIncrease(t, working);
+
+    if (typeof working.afwDollars === 'number') working.afwDollars -= afwDraw;
+    working.marginBalance += marginUp;
+
+    const existing = working.positions.find((p) => p.symbol === t.symbol);
+    if (isBuy(t.instruction)) {
+      working.totalValue += notional;
+      if (existing) {
+        existing.marketValue += notional;
+        existing.shares      += t.shares;
+      } else {
+        working.positions.push({
+          symbol: t.symbol, pillar: t.pillar, marketValue: notional, shares: t.shares,
+        });
+      }
+    } else {
+      working.totalValue -= notional;
+      if (existing) {
+        existing.marketValue = Math.max(0, existing.marketValue - notional);
+        existing.shares      = Math.max(0, existing.shares - t.shares);
+      }
+    }
+
+    // Pillar shares move with every fill, so the overdrift check can't keep
+    // reading the opening snapshot.
+    if (working.totalValue > 0) {
+      for (const p of working.pillars) {
+        const dollars = working.positions
+          .filter((pos) => pos.pillar === p.pillar)
+          .reduce((s, pos) => s + pos.marketValue, 0);
+        p.currentPct = (dollars / working.totalValue) * 100;
+      }
+    }
+
+    working.recentTrades = [
+      {
+        timestamp:   new Date().toISOString(),
+        symbol:      t.symbol,
+        instruction: t.instruction,
+        shares:      t.shares,
+        price:       t.price,
+      },
+      ...working.recentTrades,
+    ];
+  }
+
+  return { results, finalContext: working };
+}
+
 // ─── Kill switch helpers ─────────────────────────────────────────────────────
 
 const PAUSE_KEY            = 'pause-flag';                  // legacy household pause
