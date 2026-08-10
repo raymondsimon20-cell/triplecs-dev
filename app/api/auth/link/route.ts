@@ -5,11 +5,9 @@ import {
   DEVICE_LINK_TTL_SECONDS,
 } from '@/lib/device-link';
 
-export const dynamic = 'force-dynamic';
+import { appUrl as buildAppUrl } from '@/lib/app-url';
 
-function appUrl(path: string): URL {
-  return new URL(path, process.env.NEXT_PUBLIC_APP_URL!);
-}
+export const dynamic = 'force-dynamic';
 
 /**
  * Accept a device-link token on a new device. Verifies the token, stores it
@@ -18,6 +16,8 @@ function appUrl(path: string): URL {
  * that this fresh browser was authorized by an already-logged-in device.
  */
 export async function GET(req: NextRequest) {
+  const appUrl = (path: string) => buildAppUrl(path, req);
+
   const { searchParams } = new URL(req.url);
   const token = searchParams.get('token');
 

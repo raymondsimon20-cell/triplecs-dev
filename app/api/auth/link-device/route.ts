@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSession } from '@/lib/session';
 import { createDeviceLinkToken, DEVICE_LINK_TTL_SECONDS } from '@/lib/device-link';
+import { appUrl } from '@/lib/app-url';
 
 export const dynamic = 'force-dynamic';
 
@@ -9,19 +10,20 @@ export const dynamic = 'force-dynamic';
  * Returns JSON: { url, expiresInSeconds }. The owner opens `url` on the new
  * device — see lib/device-link.ts for the full flow.
  */
-export async function GET() {
+export async function GET(req: Request) {
   const session = await getSession();
   if (!session?.authenticated) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
 
-  const base = process.env.NEXT_PUBLIC_APP_URL;
-  if (!base) {
+  const token = await createDeviceLinkToken();
+
+  let url: string;
+  try {
+    url = appUrl(`/api/auth/link?token=${encodeURIComponent(token)}`, req).toString();
+  } catch {
     return NextResponse.json({ error: 'missing_app_url' }, { status: 500 });
   }
-
-  const token = await createDeviceLinkToken();
-  const url = `${base.replace(/\/$/, '')}/api/auth/link?token=${encodeURIComponent(token)}`;
 
   return NextResponse.json({
     url,

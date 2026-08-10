@@ -3,15 +3,16 @@ import { exchangeCodeForTokens } from '@/lib/schwab/auth';
 import { saveTokens, getTokens } from '@/lib/storage';
 import { createSession } from '@/lib/session';
 import { DEVICE_LINK_COOKIE } from '@/lib/device-link';
+import { appUrl as buildAppUrl } from '@/lib/app-url';
 
 export const dynamic = 'force-dynamic';
 
-// Always redirect to the canonical production URL, never the deploy-preview URL
-function appUrl(path: string): URL {
-  return new URL(path, process.env.NEXT_PUBLIC_APP_URL!);
-}
-
 export async function GET(req: NextRequest) {
+  // Always redirect to the canonical production URL, never the deploy-preview
+  // URL. Falls back to this request's origin only if NEXT_PUBLIC_APP_URL is
+  // unset — see lib/app-url.ts.
+  const appUrl = (path: string) => buildAppUrl(path, req);
+
   const { searchParams } = new URL(req.url);
   const code = searchParams.get('code');
   const state = searchParams.get('state');
