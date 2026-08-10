@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers } from '@/lib/schwab/client';
+import { isAuthError, authErrorMessage } from '@/lib/schwab/errors';
 import {
   getCachedPortfolio, cachePortfolio, getTokens,
   savePortfolioSnapshot, savePerAccountSnapshot,
@@ -193,8 +194,8 @@ export async function GET(req: Request) {
     return NextResponse.json({ accounts: enriched });
   } catch (err: unknown) {
     const errorMessage = err instanceof Error ? err.message : String(err);
-    if (errorMessage === 'NOT_AUTHENTICATED') {
-      return NextResponse.json({ error: 'Not authenticated with Schwab' }, { status: 401 });
+    if (isAuthError(err)) {
+      return NextResponse.json({ error: authErrorMessage(err) }, { status: 401 });
     }
     console.error('Accounts API error:', errorMessage);
     return NextResponse.json({ error: errorMessage }, { status: 500 });

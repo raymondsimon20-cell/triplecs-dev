@@ -893,7 +893,14 @@ export default function DashboardPage() {
       const res = await fetch('/api/accounts');
       if (!res.ok) {
         if (res.status === 401) { window.location.href = '/'; return; }
-        throw new Error(`HTTP ${res.status}`);
+        // The route puts the real cause in `error`; without reading it here
+        // every failure collapsed to an unactionable "HTTP 500".
+        let detail = '';
+        try {
+          const body = await res.json();
+          if (body?.error) detail = String(body.error);
+        } catch { /* non-JSON body — fall back to the status code alone */ }
+        throw new Error(detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`);
       }
       const data = await res.json();
       setAccounts(data.accounts ?? []);
@@ -1118,12 +1125,25 @@ export default function DashboardPage() {
           <AlertTriangle className="w-10 h-10 text-red-400 mx-auto" />
           <h2 className="text-xl font-semibold text-white">Failed to load portfolio</h2>
           <p className="text-[#7c82a0] text-sm">{error}</p>
-          <button
-            onClick={() => fetchAccounts()}
-            className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm transition-colors"
-          >
-            Try again
-          </button>
+          {/* This screen renders instead of the dashboard shell, so the normal
+              nav — and its logout control — is unreachable. Without an escape
+              hatch here a stale Schwab session is a dead end: "Try again" just
+              re-fails. /api/auth/logout clears the session + tokens and
+              redirects to '/', where the OAuth flow can start over. */}
+          <div className="flex items-center justify-center gap-3">
+            <button
+              onClick={() => fetchAccounts()}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-6 py-2 rounded-lg text-sm transition-colors"
+            >
+              Try again
+            </button>
+            <a
+              href="/api/auth/logout"
+              className="border border-[#2a3050] hover:border-[#3a4270] text-[#7c82a0] hover:text-white px-6 py-2 rounded-lg text-sm transition-colors"
+            >
+              Log out
+            </a>
+          </div>
         </div>
       </div>
     );
