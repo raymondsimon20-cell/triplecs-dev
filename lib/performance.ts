@@ -28,6 +28,20 @@ export interface TwrResult {
   daysCovered: number;
   /** True when at least one period had insufficient data to compute. */
   hasGaps: boolean;
+  /**
+   * Dollar P/L over the same window, net of external cash flows:
+   *   Σ (endValue − netFlow − startValue) across the measured periods.
+   *
+   * This is the money the portfolio actually made, with deposits and
+   * withdrawals removed — the dollar counterpart to `twrPct`, computed from
+   * the identical period set so the two always describe the same window.
+   *
+   * Note it is an arithmetic sum while `twrPct` chains geometrically, so
+   * `gainDollars / startValue` will NOT exactly equal `twrPct` over a window
+   * containing flows. That is expected: a percentage return and a dollar
+   * total answer different questions once the capital base moves.
+   */
+  gainDollars: number;
 }
 
 export interface PillarAttribution {
@@ -149,8 +163,12 @@ export function computeTWR(snapshots: PortfolioSnapshot[], cashFlows: CashFlowEv
   const twr = periods.reduce((acc, p) => acc * (1 + p.returnPct), 1) - 1;
   const days = daysBetween(periods[0].startDate, periods[periods.length - 1].endDate);
   const cagr = days > 0 ? Math.pow(1 + twr, 365 / days) - 1 : 0;
+  // Dollar P/L over the same periods, with external flows removed. Built from
+  // `periods` rather than first/last equity so skipped (gappy) periods are
+  // excluded from the dollar figure exactly as they are from the percentage.
+  const gainDollars = periods.reduce((acc, p) => acc + (p.endValue - p.netFlow - p.startValue), 0);
 
-  return { twrPct: twr, cagrPct: cagr, periods, daysCovered: days, hasGaps };
+  return { twrPct: twr, cagrPct: cagr, periods, daysCovered: days, hasGaps, gainDollars };
 }
 
 // ─── Pillar attribution ──────────────────────────────────────────────────────

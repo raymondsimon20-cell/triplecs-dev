@@ -17,7 +17,12 @@ interface SnapshotPoint {
 
 interface PerfPayload {
   snapshots: SnapshotPoint[];
-  twr: { twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean } | null;
+  twr: {
+    twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean;
+    /** Dollar P/L over the same window, net of external flows. Optional so a
+     *  response predating the field degrades to percent-only. */
+    gainDollars?: number;
+  } | null;
   attribution: Array<{ pillar: string; contributionPp: number; returnPct: number; avgWeightPct: number }> | null;
   alpha: { portfolioReturnPct: number; spyReturnPct: number; alphaPp: number } | null;
   progress: { actualCAGR: number; targetCAGR: number; gapPp: number; paceLabel: 'ahead' | 'on-pace' | 'behind'; requiredForwardCAGR: number | null } | null;
@@ -42,6 +47,11 @@ const PILLAR_COLOR: Record<string, string> = {
 
 function pct(n: number, dp = 1): string {
   return `${n >= 0 ? '+' : ''}${n.toFixed(dp)}%`;
+}
+
+/** Signed whole-dollar figure, e.g. "+$1,234" / "−$567". */
+function signedMoney(n: number): string {
+  return `${n >= 0 ? '+' : '−'}$${Math.abs(Math.round(n)).toLocaleString('en-US')}`;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -256,6 +266,14 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
             <div className={`text-3xl font-extrabold tracking-tight ${data.twr.twrPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {pct(data.twr.twrPct * 100, 2)}
             </div>
+            {/* Dollar counterpart, computed over the identical period set as
+                the percentage (see computeTWR). Hidden when the response
+                predates `gainDollars` rather than showing $NaN. */}
+            {typeof data.twr.gainDollars === 'number' && Number.isFinite(data.twr.gainDollars) && (
+              <div className={`text-sm font-semibold tabular-nums mt-0.5 ${data.twr.gainDollars >= 0 ? 'text-emerald-400/80' : 'text-red-400/80'}`}>
+                {signedMoney(data.twr.gainDollars)}
+              </div>
+            )}
             <div className="text-xs text-[#7c82a0] mt-1">Time-weighted, cash-flow adjusted</div>
           </motion.div>
         )}

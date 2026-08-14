@@ -611,7 +611,7 @@ export default function DashboardPage() {
   const [lastUpdated, setLastUpdated]   = useState<Date | null>(null);
   const [dividendsTotal, setDividendsTotal] = useState<number>(0);
   /** Time-weighted return for the Total Return card — see /api/performance. */
-  const [twr, setTwr] = useState<{ twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean } | null>(null);
+  const [twr, setTwr] = useState<{ twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean; gainDollars?: number } | null>(null);
   const [monthlyIncome, setMonthlyIncome]   = useState<number>(0);
   const [dividendRecords, setDividendRecords] = useState<DividendRecord[]>([]);
   const [dividendsLoading, setDividendsLoading] = useState(true);

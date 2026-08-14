@@ -55,7 +55,12 @@ interface Props {
    * Total Return card — measures a defined window and nets out contributions.
    * Null when there aren't yet two real snapshots to chain.
    */
-  twr?: { twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean } | null;
+  twr?: {
+    twrPct: number; cagrPct: number; daysCovered: number; hasGaps: boolean;
+    /** Dollar P/L over the same window, net of contributions. Optional so a
+     *  stale cached response without the field degrades to percent-only. */
+    gainDollars?: number;
+  } | null;
   /** Most recent normalized transactions (dividends, trades) for the table. */
   recentTransactions: NormalizedTransaction[];
   transactionsLoading?: boolean;
@@ -158,11 +163,23 @@ export function DashboardOverview({
       const window = months >= 11.5 ? '12mo'
         : months >= 1 ? `${Math.round(months)}mo`
         : `${Math.round(twr.daysCovered)}d`;
+      // Show dollars AND percent, like the other two cards. The dollar figure
+      // is computed over the identical period set as the percentage (see
+      // computeTWR), so it's the same window with contributions removed — not
+      // the fabricated "apply the rate to today's balance" number this card
+      // used to avoid by rendering percent-only.
+      //
+      // `gainDollars` is optional: an older cached /api/performance response
+      // won't carry it, so fall back to the percent-only presentation rather
+      // than rendering $NaN.
+      const hasDollars = typeof twr.gainDollars === 'number' && Number.isFinite(twr.gainDollars);
       return {
         label:    'Total Return',
-        v:        pct,
+        // Drives the trend arrow and accent colour. Both figures share a sign,
+        // so either works; prefer dollars when present.
+        v:        hasDollars ? (twr.gainDollars as number) : pct,
         pct,
-        headline: signedPct(pct),
+        headline: hasDollars ? undefined : signedPct(pct),
         sub:      `time-weighted, ${window}, net of contributions${twr.hasGaps ? ' · gaps in history' : ''}`,
       };
     }
@@ -236,9 +253,10 @@ export function DashboardOverview({
                 <Trend className={`w-3.5 h-3.5 flex-shrink-0 ${plColor(v)}`} />
               </div>
               <div className="flex items-baseline gap-2">
-                {/* TWR is a rate, not an amount — there is no honest dollar
-                    figure to put beside it, so that card sets `headline` and
-                    renders the percentage large instead of a fabricated $. */}
+                {/* Cards normally render dollars large with a percent chip.
+                    `headline` overrides that with a percentage when there is
+                    no honest dollar figure — which now only happens if the
+                    performance response predates `gainDollars`. */}
                 <span className={`text-2xl font-bold tabular-nums leading-tight ${plColor(v)}`}>
                   {headline ?? signed$(v)}
                 </span>
