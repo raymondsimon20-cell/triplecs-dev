@@ -14,6 +14,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { Info } from 'lucide-react';
+import { metricHelp } from '@/lib/metric-help';
 
 export function InfoBubble({
   label,
@@ -72,6 +73,34 @@ export function InfoBubble({
           {children}
         </span>
       )}
+    </span>
+  );
+}
+
+/**
+ * Renders a registry entry (what / how) plus any live detail rows. Shared by
+ * StatCard and by hand-rolled cards so every bubble on the site reads the
+ * same way. Returns null when no help is written for the label, letting
+ * callers do `{help && <InfoBubble>…}` off the same lookup.
+ */
+export function MetricHelpBody({
+  label, detail,
+}: { label: string; detail?: React.ReactNode }) {
+  const help = metricHelp(label);
+  if (!help) return null;
+  return (
+    <span className="block space-y-2">
+      <span className="block font-semibold text-white">{label}</span>
+      <span className="block text-[#7c82a0]">{help.what}</span>
+      {help.how && (
+        <span className="block border-t border-[#252840] pt-2 text-[#7c82a0]">
+          <span className="block text-[10px] uppercase tracking-wider text-[#4a5070] mb-1">
+            How it&apos;s calculated
+          </span>
+          {help.how}
+        </span>
+      )}
+      {detail && <span className="block space-y-1 border-t border-[#252840] pt-2">{detail}</span>}
     </span>
   );
 }

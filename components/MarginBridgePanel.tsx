@@ -22,6 +22,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Waypoints, TrendingDown, TrendingUp, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { projectBridge, describeMonths, type BridgeInputs } from '@/lib/portfolio/bridge';
+import { InfoBubble, MetricHelpBody } from '@/components/InfoBubble';
 
 const fmt$ = (n: number, dec = 0) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
@@ -137,14 +138,14 @@ export function MarginBridgePanel({
         <>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <div className="bg-[#0f1117] border border-[#1f2334] rounded-lg p-3">
-              <div className="text-[10px] text-[#7c82a0] mb-1">Net cash, month 1</div>
+              <div className="flex items-center gap-1.5 text-[10px] text-[#7c82a0] mb-1">Net cash, month 1<InfoBubble label="Net cash, month 1" align="left"><MetricHelpBody label="Net cash, month 1" /></InfoBubble></div>
               <div className={`text-lg font-bold tabular-nums ${proj.firstMonthNetCash >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                 {proj.firstMonthNetCash >= 0 ? '+' : ''}{fmt$(proj.firstMonthNetCash)}
               </div>
               <div className="text-[10px] text-[#4a5070] mt-0.5">after expenses & interest</div>
             </div>
             <div className="bg-[#0f1117] border border-[#1f2334] rounded-lg p-3">
-              <div className="text-[10px] text-[#7c82a0] mb-1">Bridge direction</div>
+              <div className="flex items-center gap-1.5 text-[10px] text-[#7c82a0] mb-1">Bridge direction<InfoBubble label="Bridge direction" align="left"><MetricHelpBody label="Bridge direction" /></InfoBubble></div>
               <div className={`text-lg font-bold flex items-center gap-1.5 ${
                 proj.direction === 'shrinking' ? 'text-emerald-400' : proj.direction === 'growing' ? 'text-red-400' : 'text-[#9aa2c0]'
               }`}>
@@ -154,14 +155,14 @@ export function MarginBridgePanel({
               <div className="text-[10px] text-[#4a5070] mt-0.5">over 10 years</div>
             </div>
             <div className="bg-[#0f1117] border border-[#1f2334] rounded-lg p-3">
-              <div className="text-[10px] text-[#7c82a0] mb-1">Bridge cleared</div>
+              <div className="flex items-center gap-1.5 text-[10px] text-[#7c82a0] mb-1">Bridge cleared<InfoBubble label="Bridge cleared"><MetricHelpBody label="Bridge cleared" /></InfoBubble></div>
               <div className="text-lg font-bold tabular-nums text-[#9aa2c0]">
                 {describeMonths(proj.bridgeClearedAt)}
               </div>
               <div className="text-[10px] text-[#4a5070] mt-0.5">margin back to zero</div>
             </div>
             <div className="bg-[#0f1117] border border-[#1f2334] rounded-lg p-3">
-              <div className="text-[10px] text-[#7c82a0] mb-1">Self-sustaining</div>
+              <div className="flex items-center gap-1.5 text-[10px] text-[#7c82a0] mb-1">Self-sustaining<InfoBubble label="Self-sustaining"><MetricHelpBody label="Self-sustaining" /></InfoBubble></div>
               <div className="text-lg font-bold tabular-nums text-[#9aa2c0]">
                 {describeMonths(proj.selfSustainingAt)}
               </div>

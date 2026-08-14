@@ -11,7 +11,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, PlChip, WeightBar, TableSkeleton } from '@/components/polish';
-import { InfoBubble, BubbleRow } from '@/components/InfoBubble';
+import { InfoBubble, BubbleRow, MetricHelpBody } from '@/components/InfoBubble';
 import { ArrowRight, Banknote, Clock, CreditCard, Gauge, Landmark, Layers, List, Percent, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { type NormalizedTransaction, parseOptionSymbol } from '@/components/TransactionsView';
@@ -323,8 +323,37 @@ export function DashboardOverview({
           // a loss, so this card reports market P/L on positions only.
           // `headline` is undefined on the dollar-denominated cards — only the
           // TWR card overrides it, since a rate has no dollar equivalent.
-          { label: 'Day Change', v: dayGL,     pct: dayPct,  sub: 'market moves only, excl. cash & margin', headline: undefined as string | undefined, info: undefined as React.ReactNode },
-          { label: 'Total Gain', v: totalGain, pct: gainPct, sub: 'unrealized, since purchase',             headline: undefined as string | undefined, info: undefined as React.ReactNode },
+          // Day Change and Total Gain take their bubble text straight from the
+          // registry; Total Return builds its own because the content depends
+          // on which of the two calculations is in play.
+          {
+            label: 'Day Change', v: dayGL, pct: dayPct,
+            sub: 'market moves only, excl. cash & margin',
+            headline: undefined as string | undefined,
+            info: (
+              <MetricHelpBody label="Day Change" detail={
+                <>
+                  <BubbleRow label="Move on positions" value={signed$(dayGL)} />
+                  <BubbleRow label="÷ Prior net value" value={money0(priorNetValue)} />
+                  <BubbleRow label="= Day change" value={signedPct(dayPct)} />
+                </>
+              } />
+            ) as React.ReactNode,
+          },
+          {
+            label: 'Total Gain', v: totalGain, pct: gainPct,
+            sub: 'unrealized, since purchase',
+            headline: undefined as string | undefined,
+            info: (
+              <MetricHelpBody label="Total Gain" detail={
+                <>
+                  <BubbleRow label="Unrealized P/L" value={signed$(totalGain)} />
+                  <BubbleRow label="÷ Cost basis" value={money0(costBasis)} />
+                  <BubbleRow label="= Total gain" value={signedPct(gainPct)} />
+                </>
+              } />
+            ) as React.ReactNode,
+          },
           returnCard,
         ]).map(({ label, v, pct, sub, headline, info }, i) => {
           const Trend = v >= 0 ? TrendingUp : TrendingDown;

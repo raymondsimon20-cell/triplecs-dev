@@ -6,6 +6,7 @@ import {
 } from 'recharts';
 import { Target, TrendingUp, TrendingDown, Database, RefreshCw, AlertTriangle, Trash2 } from 'lucide-react';
 import { motion } from 'framer-motion';
+import { InfoBubble, MetricHelpBody } from '@/components/InfoBubble';
 
 interface SnapshotPoint {
   savedAt: number;
@@ -231,7 +232,7 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
         >
           <div className="flex items-center gap-2 mb-2">
             <Target className="w-4 h-4 text-emerald-400" />
-            <div className="text-[11px] uppercase tracking-wider text-[#7c82a0]">Annualized vs 40% target</div>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-[#7c82a0]">Annualized vs 40% target<InfoBubble label="Annualized vs 40% target"><MetricHelpBody label="Annualized vs 40% target" /></InfoBubble></div>
           </div>
           {progress ? (
             <>
@@ -262,7 +263,7 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
 
         {data.twr && (
           <motion.div className="card-glass border border-[#252840] rounded-lg p-4" whileHover={{ y: -1 }}>
-            <div className="text-[11px] uppercase tracking-wider text-[#7c82a0] mb-2">Cumulative TWR ({data.twr.daysCovered.toFixed(0)}d)</div>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-[#7c82a0] mb-2">Cumulative TWR ({data.twr.daysCovered.toFixed(0)}d)<InfoBubble label="Cumulative TWR"><MetricHelpBody label="Cumulative TWR" /></InfoBubble></div>
             <div className={`text-3xl font-extrabold tracking-tight ${data.twr.twrPct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {pct(data.twr.twrPct * 100, 2)}
             </div>
@@ -280,7 +281,7 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
 
         {alpha && (
           <motion.div className="card-glass border border-[#252840] rounded-lg p-4" whileHover={{ y: -1 }}>
-            <div className="text-[11px] uppercase tracking-wider text-[#7c82a0] mb-2">Alpha vs SPY</div>
+            <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-[#7c82a0] mb-2">Alpha vs SPY<InfoBubble label="Alpha vs SPY"><MetricHelpBody label="Alpha vs SPY" /></InfoBubble></div>
             <div className={`text-3xl font-extrabold tracking-tight ${alpha.alphaPp >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
               {pct(alpha.alphaPp, 2)}
             </div>
@@ -294,7 +295,7 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
       {/* ── TWR over time chart ─────────────────────────────────────────────── */}
       <div className="card-glass border border-[#252840] rounded-lg p-4">
         <div className="flex items-center justify-between mb-2">
-          <div className="text-[11px] uppercase tracking-wider text-[#7c82a0]">Return path</div>
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-[#7c82a0]">Return path<InfoBubble label="Return path" align="left"><MetricHelpBody label="Return path" /></InfoBubble></div>
           {syntheticDays > 0 && (
             <div className="text-[10px] text-[#4a5070]" title="Synthetic days are reconstructed from current positions + trade history. Approximate.">
               {syntheticDays} synthetic day{syntheticDays === 1 ? '' : 's'} (faded)
@@ -321,7 +322,7 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
       {/* ── Pillar attribution ──────────────────────────────────────────────── */}
       {attribution.length > 0 && (
         <div className="card-glass border border-[#252840] rounded-lg p-4">
-          <div className="text-[11px] uppercase tracking-wider text-[#7c82a0] mb-3">Pillar contribution to total return</div>
+          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider text-[#7c82a0] mb-3">Pillar contribution to total return<InfoBubble label="Pillar contribution to total return" align="left"><MetricHelpBody label="Pillar contribution to total return" /></InfoBubble></div>
           <div className="space-y-2">
             {attribution.map((a) => {
               const color = PILLAR_COLOR[a.pillar] ?? '#6b7280';
