@@ -13,6 +13,9 @@
  */
 
 import React, { useEffect, useMemo, useState } from 'react';
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, ReferenceArea,
+} from 'recharts';
 import { StatCard as Stat } from '@/components/StatCard';
 import { Activity, CalendarCheck, ChevronLeft, ChevronRight, Percent, TrendingUp, Wallet } from 'lucide-react';
 import type { NormalizedTransaction } from '@/components/TransactionsView';
@@ -172,7 +175,38 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
       .filter((s) => s.date !== ''),
     [snapshots],
   );
-  const trendMax = Math.max(...trend.map((t) => t.equity), closingEquity, 1);
+  /**
+   * Y-axis bounds for the trend line.
+   *
+   * Deliberately NOT anchored at zero. Equity moves a few percent over a
+   * month, so a zero-based axis squashes the whole series into a flat band at
+   * the top of the chart — which is exactly what the old bar rendering did.
+   * Padding the actual data range by 8% keeps the shape of the move readable
+   * while leaving headroom so the line doesn't touch the frame.
+   */
+  /**
+   * First and last trend dates inside the selected month, for the shaded band.
+   *
+   * The X axis is categorical (date strings), so ReferenceArea bounds have to
+   * be values that actually appear in the data — passing the calendar month
+   * start/end would silently draw nothing on months where snapshots don't
+   * reach the edges. Null when the month has no snapshots at all, which the
+   * caption then says out loud instead of showing an unexplained missing band.
+   */
+  const inMonthRange = useMemo<[string, string] | null>(() => {
+    const inside = trend.filter((t) => t.date >= monthStartKey && t.date <= endKey);
+    if (inside.length === 0) return null;
+    return [inside[0].date, inside[inside.length - 1].date];
+  }, [trend, monthStartKey, endKey]);
+
+  const [trendMin, trendMax] = useMemo(() => {
+    if (trend.length === 0) return [0, 1];
+    const vals = trend.map((t) => t.equity);
+    const lo = Math.min(...vals);
+    const hi = Math.max(...vals);
+    const pad = (hi - lo) * 0.08 || Math.abs(hi) * 0.02 || 1;
+    return [lo - pad, hi + pad];
+  }, [trend]);
 
   const navBtn = 'w-7 h-7 rounded-md border border-[#2d3248] flex items-center justify-center text-[#9aa2c0] hover:text-white hover:border-[#3d4468] disabled:opacity-30 disabled:cursor-not-allowed transition-colors';
 
@@ -306,22 +340,50 @@ export function MonthCloseView({ totalValue, equity, marginBalance, transactions
           </p>
         ) : (
           <div>
-            <div className="flex items-end gap-[1px] h-32">
-              {trend.map((t) => {
-                const inMonth = t.date >= monthStartKey && t.date <= endKey;
-                return (
-                  <div key={t.date} className="flex-1 flex flex-col justify-end h-full" title={`${t.date}: ${fmt$(t.equity)}`}>
-                    <div
-                      className={`rounded-t-sm ${inMonth ? 'bg-amber-400/80' : 'bg-blue-500/50'}`}
-                      style={{ height: `${(t.equity / trendMax) * 100}%`, minHeight: '2px' }}
+            <div className="h-40">
+              <ResponsiveContainer width="100%" height="100%">
+                <LineChart data={trend} margin={{ top: 4, right: 8, bottom: 0, left: 0 }}>
+                  <CartesianGrid stroke="#1f2334" strokeDasharray="3 3" vertical={false} />
+                  {/* The selected month as a shaded band, replacing the
+                      per-bar amber fill the bar chart used to carry. */}
+                  {inMonthRange && (
+                    <ReferenceArea
+                      x1={inMonthRange[0]} x2={inMonthRange[1]}
+                      fill="#fbbf24" fillOpacity={0.10}
+                      stroke="#fbbf24" strokeOpacity={0.25}
                     />
-                  </div>
-                );
-              })}
+                  )}
+                  <XAxis
+                    dataKey="date" tick={{ fill: '#4a5070', fontSize: 10 }}
+                    tickLine={false} axisLine={{ stroke: '#1f2334' }} minTickGap={40}
+                  />
+                  <YAxis
+                    domain={[trendMin, trendMax]}
+                    tick={{ fill: '#4a5070', fontSize: 10 }}
+                    tickLine={false} axisLine={false} width={58}
+                    tickFormatter={(n: number) => '$' + Math.round(n).toLocaleString('en-US')}
+                  />
+                  <Tooltip
+                    contentStyle={{
+                      background: '#1a1d27', border: '1px solid #3d4468',
+                      borderRadius: 8, fontSize: 11,
+                    }}
+                    labelStyle={{ color: '#7c82a0' }}
+                    formatter={(v) => [fmt$(Number(v ?? 0)), 'Net equity']}
+                  />
+                  <Line
+                    type="monotone" dataKey="equity" name="Net equity"
+                    stroke="#378ADD" strokeWidth={2} dot={false}
+                    activeDot={{ r: 3, fill: '#378ADD' }}
+                  />
+                </LineChart>
+              </ResponsiveContainer>
             </div>
             <div className="flex justify-between text-[10px] text-[#4a5070] mt-1.5">
               <span>{trend[0].date}</span>
-              <span className="text-amber-400/70">{monthLabel} highlighted</span>
+              {inMonthRange
+                ? <span className="text-amber-400/70">{monthLabel} shaded</span>
+                : <span>{monthLabel} has no snapshots</span>}
               <span>{trend[trend.length - 1].date}</span>
             </div>
           </div>
