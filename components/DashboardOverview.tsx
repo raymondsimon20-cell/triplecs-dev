@@ -11,6 +11,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { StatCard as Stat } from '@/components/StatCard';
 import { TickerAvatar, PlChip, WeightBar, TableSkeleton } from '@/components/polish';
+import { InfoBubble, BubbleRow } from '@/components/InfoBubble';
 import { ArrowRight, Banknote, Clock, CreditCard, Gauge, Landmark, Layers, List, Percent, TrendingDown, TrendingUp, Wallet } from 'lucide-react';
 import type { EnrichedPosition } from '@/lib/schwab/types';
 import { type NormalizedTransaction, parseOptionSymbol } from '@/components/TransactionsView';
@@ -19,6 +20,9 @@ const fmt$ = (n: number, dec = 2) =>
   (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signedPct = (n: number) => (n >= 0 ? '+' : '') + n.toFixed(2) + '%';
+// Whole-dollar, unsigned. Module scope so it's stable across renders and safe
+// to reference from memoized card content without landing in a deps array.
+const money0 = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
 const plColor = (n: number) => (n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-[#9aa2c0]');
 
 function ago(d: Date | null): string {
@@ -60,6 +64,14 @@ interface Props {
     /** Dollar P/L over the same window, net of contributions. Optional so a
      *  stale cached response without the field degrades to percent-only. */
     gainDollars?: number;
+    /** Window summary for the "how this is calculated" bubble. All optional
+     *  for the same reason — a response predating them just shows less. */
+    startValue?: number;
+    endValue?: number;
+    netFlowTotal?: number;
+    startDate?: string;
+    endDate?: string;
+    periods?: unknown[];
   } | null;
   /** Most recent normalized transactions (dividends, trades) for the table. */
   recentTransactions: NormalizedTransaction[];
@@ -94,8 +106,6 @@ export function DashboardOverview({
       })
       .catch(() => { /* sparkline is decoration — never break the page */ });
   }, []);
-
-  const money0 = (n: number) => '$' + Math.round(n).toLocaleString('en-US');
 
   const { dayGL, totalGain, costBasis } = useMemo(() => {
     let dayGL = 0, totalGain = 0, costBasis = 0;
@@ -181,6 +191,54 @@ export function DashboardOverview({
         pct,
         headline: hasDollars ? undefined : signedPct(pct),
         sub:      `time-weighted, ${window}, net of contributions${twr.hasGaps ? ' · gaps in history' : ''}`,
+        info: (
+          <span className="block space-y-2">
+            <span className="block font-semibold text-white">Time-weighted return</span>
+            <span className="block text-[#7c82a0]">
+              Each period&apos;s return is <span className="text-[#c8cde0]">(end − contributions) ÷ start − 1</span>,
+              chained together. Removing contributions is what stops a deposit
+              from reading as performance.
+            </span>
+            <span className="block space-y-1 border-t border-[#252840] pt-2">
+              {twr.startDate && twr.endDate && (
+                <BubbleRow label="Window" value={`${twr.startDate} → ${twr.endDate}`} />
+              )}
+              <BubbleRow label="Days measured" value={`${Math.round(twr.daysCovered)}`} />
+              {typeof twr.startValue === 'number' && (
+                <BubbleRow label="Starting value" value={money0(twr.startValue)} />
+              )}
+              {typeof twr.endValue === 'number' && (
+                <BubbleRow label="Ending value" value={money0(twr.endValue)} />
+              )}
+              {typeof twr.netFlowTotal === 'number' && (
+                <BubbleRow label="Contributions removed" value={signed$(twr.netFlowTotal)} />
+              )}
+            </span>
+            <span className="block space-y-1 border-t border-[#252840] pt-2">
+              {hasDollars && (
+                <BubbleRow label="Gain (dollars)" value={signed$(twr.gainDollars as number)} />
+              )}
+              <BubbleRow label="Return (percent)" value={signedPct(pct)} />
+              {/* Annualizing a short window explodes: a 2-day +17% compounds
+                  to ~1e14% a year. Only show CAGR once there's enough history
+                  for the number to mean anything. */}
+              {twr.daysCovered >= 60 && (
+                <BubbleRow label="Annualized" value={signedPct(twr.cagrPct * 100)} muted />
+              )}
+            </span>
+            <span className="block border-t border-[#252840] pt-2 text-[#4a5070]">
+              Dollars are summed period by period; the percent is chained
+              geometrically. Once contributions land mid-window the two
+              won&apos;t divide into each other exactly — that&apos;s expected.
+            </span>
+            {twr.hasGaps && (
+              <span className="block text-amber-400/80">
+                Some periods had no usable snapshot and were skipped. Both
+                figures cover only the periods that survived.
+              </span>
+            )}
+          </span>
+        ),
       };
     }
     return {
@@ -189,8 +247,33 @@ export function DashboardOverview({
       pct:      returnPct,
       headline: undefined as string | undefined,
       sub:      'unrealized + 12mo dividends & realized · mixed windows',
+      info: (
+        <span className="block space-y-2">
+          <span className="block font-semibold text-white">Fallback calculation</span>
+          <span className="block text-[#7c82a0]">
+            Not enough snapshot history for a time-weighted return yet (needs
+            at least two real daily snapshots), so this is a simple sum.
+          </span>
+          <span className="block space-y-1 border-t border-[#252840] pt-2">
+            <BubbleRow label="Unrealized gain" value={signed$(totalGain)} />
+            <BubbleRow label="Dividends (12mo)" value={signed$(dividends12mo)} />
+            <BubbleRow label="Realized (12mo)" value={signed$(realizedTotal)} />
+            <BubbleRow label="Total" value={signed$(totalReturn)} />
+          </span>
+          <span className="block space-y-1 border-t border-[#252840] pt-2">
+            <BubbleRow label="÷ Cost basis" value={money0(costBasis)} />
+            <BubbleRow label="= Return" value={signedPct(returnPct)} />
+          </span>
+          <span className="block border-t border-[#252840] pt-2 text-amber-400/80">
+            These are three different windows: the unrealized gain runs since
+            purchase (possibly years), while dividends and realized P/L cover
+            only the last 12 months. Treat it as a rough figure until enough
+            snapshots accumulate.
+          </span>
+        </span>
+      ),
     };
-  }, [twr, totalReturn, returnPct]);
+  }, [twr, totalReturn, returnPct, totalGain, dividends12mo, realizedTotal, costBasis]);
 
   const topPositions = useMemo(
     () => [...positions]
@@ -240,16 +323,19 @@ export function DashboardOverview({
           // a loss, so this card reports market P/L on positions only.
           // `headline` is undefined on the dollar-denominated cards — only the
           // TWR card overrides it, since a rate has no dollar equivalent.
-          { label: 'Day Change', v: dayGL,     pct: dayPct,  sub: 'market moves only, excl. cash & margin', headline: undefined as string | undefined },
-          { label: 'Total Gain', v: totalGain, pct: gainPct, sub: 'unrealized, since purchase',             headline: undefined as string | undefined },
+          { label: 'Day Change', v: dayGL,     pct: dayPct,  sub: 'market moves only, excl. cash & margin', headline: undefined as string | undefined, info: undefined as React.ReactNode },
+          { label: 'Total Gain', v: totalGain, pct: gainPct, sub: 'unrealized, since purchase',             headline: undefined as string | undefined, info: undefined as React.ReactNode },
           returnCard,
-        ]).map(({ label, v, pct, sub, headline }, i) => {
+        ]).map(({ label, v, pct, sub, headline, info }, i) => {
           const Trend = v >= 0 ? TrendingUp : TrendingDown;
           const accent = v > 0 ? 'border-t-emerald-500/60' : v < 0 ? 'border-t-red-500/50' : 'border-t-[#2d3248]';
           return (
             <div key={label} className={`bg-[#12151f] border border-[#1f2334] border-t-2 ${accent} rounded-lg p-3.5`} style={{ animationDelay: `${i * 40}ms` }}>
               <div className="flex items-start justify-between gap-2 mb-1">
-                <div className="text-[11px] text-[#7c82a0]">{label}</div>
+                <div className="flex items-center gap-1.5 text-[11px] text-[#7c82a0]">
+                  {label}
+                  {info && <InfoBubble label={label}>{info}</InfoBubble>}
+                </div>
                 <Trend className={`w-3.5 h-3.5 flex-shrink-0 ${plColor(v)}`} />
               </div>
               <div className="flex items-baseline gap-2">

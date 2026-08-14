@@ -42,6 +42,18 @@ export interface TwrResult {
    * total answer different questions once the capital base moves.
    */
   gainDollars: number;
+  /**
+   * Window summary, for showing the user what was actually measured.
+   * Taken from the surviving periods, so these reflect the data the return
+   * was computed from — not the raw first/last snapshot, which may have been
+   * skipped as synthetic.
+   */
+  startValue: number;
+  endValue: number;
+  /** Signed net external flow over the window (+ deposits, − withdrawals). */
+  netFlowTotal: number;
+  startDate: string;
+  endDate: string;
 }
 
 export interface PillarAttribution {
@@ -167,8 +179,18 @@ export function computeTWR(snapshots: PortfolioSnapshot[], cashFlows: CashFlowEv
   // `periods` rather than first/last equity so skipped (gappy) periods are
   // excluded from the dollar figure exactly as they are from the percentage.
   const gainDollars = periods.reduce((acc, p) => acc + (p.endValue - p.netFlow - p.startValue), 0);
+  const netFlowTotal = periods.reduce((acc, p) => acc + p.netFlow, 0);
+  const first = periods[0];
+  const last  = periods[periods.length - 1];
 
-  return { twrPct: twr, cagrPct: cagr, periods, daysCovered: days, hasGaps, gainDollars };
+  return {
+    twrPct: twr, cagrPct: cagr, periods, daysCovered: days, hasGaps, gainDollars,
+    startValue: first.startValue,
+    endValue:   last.endValue,
+    netFlowTotal,
+    startDate:  first.startDate,
+    endDate:    last.endDate,
+  };
 }
 
 // ─── Pillar attribution ──────────────────────────────────────────────────────
