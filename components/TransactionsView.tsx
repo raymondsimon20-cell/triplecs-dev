@@ -10,6 +10,7 @@ import React, { useMemo, useState } from 'react';
 import { ArrowLeftRight } from 'lucide-react';
 import { useSort, SortTh } from '@/components/sortable';
 import { TickerAvatar, TableSkeleton } from '@/components/polish';
+import { ContributionTracker } from '@/components/ContributionTracker';
 
 export interface NormalizedTransaction {
   id:          string;
@@ -58,9 +59,13 @@ const inputCls = 'bg-[#12151f] border border-[#1f2334] rounded-lg px-2.5 py-1.5 
 interface Props {
   transactions: NormalizedTransaction[];
   loading:      boolean;
+  /** Scopes the contribution tracker. Omit for the household view. */
+  accountHash?: string;
+  /** Opens the allocation tool pre-filled. Omit to hide the Allocate button. */
+  onAllocate?:  (amount: number, eventId: string) => void;
 }
 
-export function TransactionsView({ transactions, loading }: Props) {
+export function TransactionsView({ transactions, loading, accountHash, onAllocate }: Props) {
   const [typeFilter,   setTypeFilter]   = useState('all');
   const [symbolFilter, setSymbolFilter] = useState('');
   const [fromDate,     setFromDate]     = useState('');
@@ -104,6 +109,11 @@ export function TransactionsView({ transactions, loading }: Props) {
           <p className="text-xs text-[#7c82a0] mt-0.5">All transactions across your accounts</p>
         </div>
       </div>
+
+      {/* Contribution tracking — above the table on purpose. This is the
+          "did I allocate that deposit?" question, and it should be the first
+          thing visible on the tab, not something you scroll to find. */}
+      <ContributionTracker accountHash={accountHash} onAllocate={onAllocate} />
 
       {/* Filters */}
       <div className="flex flex-wrap items-center gap-2 text-xs">

@@ -139,6 +139,10 @@ interface Props {
   /** Dividend payment history, used to derive real yields. Optional — falls
    *  back to Schwab's quoted yield and the static table when absent. */
   dividends?:     DividendRecord[];
+  /** Dollars to pre-fill the contribution calculator with, from the tracker. */
+  prefillContribution?: number;
+  /** Changes on each hand-off so repeat clicks of the same amount re-fill. */
+  prefillKey?:    number;
 }
 
 /**
@@ -309,12 +313,28 @@ function scoreRow(
 
 // ─── Component ────────────────────────────────────────────────────────────────
 
-export function TargetAllocationView({ accountHash, totalValue, pillarSummary, targets, dividends = [] }: Props) {
+export function TargetAllocationView({
+  accountHash, totalValue, pillarSummary, targets, dividends = [],
+  prefillContribution, prefillKey,
+}: Props) {
   const [rows, setRows]         = useState<AllocationRow[]>([]);
   const [navMap, setNavMap]     = useState<Record<string, number>>({});
   const [loading, setLoading]   = useState(true);
   const [error, setError]       = useState<string | null>(null);
   const [contribution, setContribution] = useState('');
+
+  /**
+   * Fill the contribution box when arriving from the contribution tracker.
+   *
+   * Keyed on `prefillKey` rather than the amount so two hand-offs of the same
+   * dollar figure both take effect — otherwise the second click would look
+   * like no change and silently do nothing. Deliberately does not run on
+   * mount without a key, so opening the tab normally leaves the box alone.
+   */
+  useEffect(() => {
+    if (prefillKey === undefined || prefillContribution === undefined) return;
+    setContribution(String(Math.round(prefillContribution)));
+  }, [prefillKey, prefillContribution]);
 
   // Focus mode — concentrate the table + calculator on the top-N scored
   // tickers. Persisted so the preference survives reloads.

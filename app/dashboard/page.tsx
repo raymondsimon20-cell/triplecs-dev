@@ -37,6 +37,7 @@ import { IncomeProjectionCard } from '@/components/IncomeProjectionCard';
 import { DashboardOverview } from '@/components/DashboardOverview';
 import { PositionsView } from '@/components/PositionsView';
 import { TransactionsView, type NormalizedTransaction } from '@/components/TransactionsView';
+import { ContributionBanner } from '@/components/ContributionBanner';
 import { CashFlowView } from '@/components/CashFlowView';
 import { DividendsView, type DividendRecord } from '@/components/DividendsView';
 import { MonthCloseView } from '@/components/MonthCloseView';
@@ -619,6 +620,18 @@ export default function DashboardPage() {
   const [transactionsLoading, setTransactionsLoading] = useState(true);
   const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
   const [view, setView]                 = useState<View>('dashboard');
+  /**
+   * Contribution handed off to the allocation tool. `key` changes on every
+   * hand-off so clicking Allocate for the same amount twice still re-fills the
+   * box — without it, an identical amount wouldn't register as a prop change.
+   */
+  const [pendingAllocation, setPendingAllocation] =
+    useState<{ amount: number; eventId: string; key: number } | null>(null);
+
+  const startAllocation = useCallback((amount: number, eventId: string) => {
+    setPendingAllocation({ amount, eventId, key: Date.now() });
+    setView('allocation');
+  }, []);
 
   // Persist account selection across reloads. We store the accountHash (not
   // index, since the array order is sensitive to Schwab response ordering)
@@ -1373,6 +1386,11 @@ export default function DashboardPage() {
             ═══════════════════════════════════════════════════════════════════ */}
         {view === 'dashboard' && (
           <>
+            {/* Unallocated contributions. Renders nothing at zero. */}
+            <ContributionBanner
+              accountHash={isAll ? undefined : resolvedAccount?.accountHash}
+              onReview={() => setView('transactions')}
+            />
             <DashboardOverview
               accountLabel={accountLabel}
               accountNumber={account.accountNumber}
@@ -1440,7 +1458,12 @@ export default function DashboardPage() {
                 />
               </div>
             </CollapsiblePanel>
-            <TransactionsView transactions={scopedTransactions} loading={transactionsLoading} />
+            <TransactionsView
+              transactions={scopedTransactions}
+              loading={transactionsLoading}
+              accountHash={isAll ? undefined : resolvedAccount?.accountHash}
+              onAllocate={startAllocation}
+            />
           </>
         )}
 
@@ -1538,6 +1561,8 @@ export default function DashboardPage() {
                 incomePct:      strategyTargets.incomePct,
                 triplesPct:     strategyTargets.triplesPct,
               }}
+              prefillContribution={pendingAllocation?.amount}
+              prefillKey={pendingAllocation?.key}
             />
           </>
         )}
