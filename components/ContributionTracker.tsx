@@ -167,19 +167,27 @@ export function ContributionTracker({
             className="flex items-center gap-3 flex-wrap bg-[#0f1117] border border-[#1f2334] rounded-lg px-3 py-2"
           >
             <span className="text-[11px] text-[#7c82a0] tabular-nums w-20 flex-shrink-0">{c.date}</span>
-            <span className="text-sm font-semibold text-white tabular-nums w-24 flex-shrink-0">
-              {fmt$(c.amount)}
+
+            {/* Lead with what still needs allocating, not what originally
+                landed. On a partly-deployed contribution those differ, and the
+                actionable number is the remainder — it's also what the
+                dashboard banner totals and what the Allocate button fills in.
+                Showing the original as the headline made the row disagree with
+                both. The full amount stays visible underneath as context. */}
+            <span className="w-28 flex-shrink-0">
+              <span className="block text-sm font-semibold text-white tabular-nums">
+                {fmt$(c.remaining > 0 ? c.remaining : c.amount)}
+              </span>
+              {c.remaining > 0 && c.allocatedDollars !== undefined && (
+                <span className="block text-[10px] text-[#4a5070] tabular-nums">
+                  of {money0(c.amount)} · {money0(c.allocatedDollars)} deployed
+                </span>
+              )}
             </span>
+
             <span className={`text-[10px] px-1.5 py-0.5 rounded flex-shrink-0 ${STATE_CHIP[c.state]}`}>
               {STATE_LABEL[c.state]}
             </span>
-            {/* Partial allocation: whole-share rounding leaves a residual, and
-                the item stays open until it's small enough to not matter. */}
-            {c.state === 'open' && c.allocatedDollars !== undefined && c.remaining > 0 && (
-              <span className="text-[10px] text-[#7c82a0]">
-                {money0(c.allocatedDollars)} deployed · {money0(c.remaining)} left
-              </span>
-            )}
             <span className="text-[11px] text-[#4a5070] truncate flex-1 min-w-[80px]">
               {c.note ?? c.description}
             </span>
