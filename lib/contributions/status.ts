@@ -34,9 +34,15 @@ export const MIN_TRACKED_AMOUNT = 250;
 
 /**
  * Residual left after whole-share rounding that's too small to be worth
- * keeping an item open for. One share of most targets costs more than this.
+ * keeping an item open for.
+ *
+ * Set deliberately tight: at $10, anything that could still buy even a cheap
+ * share keeps the contribution open. The tradeoff is more open items that need
+ * an explicit "Done" — a $60 remainder now stays on the list rather than
+ * closing itself. That's the intended bias here: leftover cash stays visible
+ * until you say otherwise.
  */
-export const RESIDUAL_CLOSE_THRESHOLD = 100;
+export const RESIDUAL_CLOSE_THRESHOLD = 10;
 
 export type ContributionState = 'open' | 'allocated' | 'ignored';
 
@@ -214,11 +220,11 @@ export async function openContributionSummary(accountHash?: string): Promise<{
 /**
  * Record that a contribution was allocated.
  *
- * When `allocatedDollars` falls materially short of the contribution — whole
- * share rounding always leaves something — the item stays `open` with the
- * residual, rather than closing over money that's still sitting in cash.
- * Below RESIDUAL_CLOSE_THRESHOLD it closes; chasing the last few dollars
- * would leave a permanent open item that trains you to ignore the count.
+ * When `allocatedDollars` falls short of the contribution — whole-share
+ * rounding always leaves something — the item stays `open` with the residual
+ * shown, rather than closing over money still sitting in cash. Only a residual
+ * under RESIDUAL_CLOSE_THRESHOLD closes automatically, so in practice most
+ * partial allocations wait for an explicit "Done".
  */
 export async function markAllocated(
   eventId: string,

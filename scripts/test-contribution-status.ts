@@ -104,8 +104,12 @@ console.log('\nresidual handling');
 const closes = (amount: number, deployed: number) =>
   (amount - deployed) < RESIDUAL_CLOSE_THRESHOLD;
 check('$2000 with $1847 deployed stays open ($153 left)', closes(2000, 1847), false);
-check('$2000 with $1960 deployed closes ($40 left)',      closes(2000, 1960), true);
+check('$2000 with $1960 deployed stays open ($40 left)',  closes(2000, 1960), false);
+check('$2000 with $1993 deployed closes ($7 left)',       closes(2000, 1993), true);
 check('fully deployed closes',                            closes(2000, 2000), true);
+// Over-deployment (bought slightly past the contribution using settled cash)
+// must not reopen the item on a negative residual.
+check('over-deployed closes',                             closes(2000, 2100), true);
 
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

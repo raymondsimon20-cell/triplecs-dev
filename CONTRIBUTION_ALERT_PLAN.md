@@ -108,10 +108,10 @@ Real life won't always route through the tool.
 - **Not really a contribution** (internal journal, see §4) → "Ignore", which
   removes it from the count without pretending it was invested.
 - **Partial allocation** → whole-share rounding leaves a remainder. If
-  `allocated$` is materially below the contribution, keep it `open` with the
-  residual shown: `$2,000 · $1,847 deployed · $153 left`. Below a small
-  threshold (~$100, or one share of the cheapest target), close it — chasing
-  the last $12 isn't worth a permanent open item.
+  `allocated$` is below the contribution, keep it `open` with the residual
+  shown: `$2,000 · $1,847 deployed · $153 left`. Only a residual under $10
+  closes automatically — leftover cash stays visible until you explicitly
+  mark it done.
 
 ### 3.5 A hint, not a heuristic
 
