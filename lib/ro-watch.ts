@@ -21,10 +21,14 @@ interface ROStatus {
   status: ROStage;
   notes: string;
   updatedAt: string;
+  /** Subscription deadline (YYYY-MM-DD). Not set by the watcher — see below. */
+  expiresAt?: string;
+  /** 'pending' is what keeps the dashboard banner up until you decide. */
+  decision?: 'pending' | 'subscribed' | 'declined';
 }
 
 const WATCH = [
-  { ticker: 'CLM', cik: '0000814083' }, // Cornerstone Strategic Value Fund
+  { ticker: 'CLM', cik: '0000814083' }, // Cornerstone Strategic Investment Fund (renamed from Strategic Value)
   { ticker: 'CRF', cik: '0000033934' }, // Cornerstone Total Return Fund
 ];
 
@@ -101,6 +105,13 @@ export async function checkROFilings(now = Date.now()): Promise<StoredAlert[]> {
       status: 'announced',
       notes: `Auto-detected ${hit.form} filed ${hit.date} (accession ${hit.accession})`,
       updatedAt: new Date(now).toISOString(),
+      // Explicitly pending: this is what makes the dashboard banner appear and
+      // keep appearing. Without it, detection would fire one alert and then go
+      // quiet — and a single alert is exactly how a subscription deadline gets
+      // missed. No deadline is set here on purpose; the filing proves an
+      // offering exists but its expiry can't be parsed reliably, and a wrong
+      // countdown is worse than an absent one. The banner asks for the date.
+      decision: 'pending',
     };
     try {
       await getStore('ro-status').setJSON(ticker, entry);

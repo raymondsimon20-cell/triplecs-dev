@@ -38,6 +38,7 @@ import { DashboardOverview } from '@/components/DashboardOverview';
 import { PositionsView } from '@/components/PositionsView';
 import { TransactionsView, type NormalizedTransaction } from '@/components/TransactionsView';
 import { ContributionBanner } from '@/components/ContributionBanner';
+import { RightsOfferingBanner } from '@/components/RightsOfferingBanner';
 import { CashFlowView } from '@/components/CashFlowView';
 import { DividendsView, type DividendRecord } from '@/components/DividendsView';
 import { MonthCloseView } from '@/components/MonthCloseView';
@@ -1386,6 +1387,9 @@ export default function DashboardPage() {
             ═══════════════════════════════════════════════════════════════════ */}
         {view === 'dashboard' && (
           <>
+            {/* Rights offerings first — a missed subscription deadline is
+                unrecoverable, while unallocated cash is only idle. */}
+            <RightsOfferingBanner />
             {/* Unallocated contributions. Renders nothing at zero. */}
             <ContributionBanner
               accountHash={isAll ? undefined : resolvedAccount?.accountHash}
