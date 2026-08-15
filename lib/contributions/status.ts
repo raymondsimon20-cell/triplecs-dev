@@ -38,9 +38,18 @@ export const MIN_TRACKED_AMOUNT = 250;
  *
  * Set deliberately tight: at $10, anything that could still buy even a cheap
  * share keeps the contribution open. The tradeoff is more open items that need
- * an explicit "Done" — a $60 remainder now stays on the list rather than
- * closing itself. That's the intended bias here: leftover cash stays visible
- * until you say otherwise.
+ * an explicit "Done" — a $60 remainder stays on the list rather than closing
+ * itself. That's the intended bias: leftover cash stays visible.
+ *
+ * SLATED FOR REMOVAL. The remainder-pool design (CONTRIBUTION_ALERT_PLAN.md
+ * §3.6, locked) makes every residual flow into a shared pool, at which point a
+ * contribution always closes when acted on and no close threshold is needed.
+ * This constant becomes POOL_DISPLAY_FLOOR — the level below which the pool
+ * row is hidden rather than nagging over $3. The pool ships with order
+ * linkage, which is what produces partial allocations in the first place.
+ *
+ * Until then this threshold stands, because with nothing reporting partial
+ * fills yet every allocation closes cleanly regardless.
  */
 export const RESIDUAL_CLOSE_THRESHOLD = 10;
 

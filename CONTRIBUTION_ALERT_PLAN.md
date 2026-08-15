@@ -107,11 +107,9 @@ Real life won't always route through the tool.
 - **Allocated outside the app** → "Mark allocated" with an optional note.
 - **Not really a contribution** (internal journal, see §4) → "Ignore", which
   removes it from the count without pretending it was invested.
-- **Partial allocation** → whole-share rounding leaves a remainder. If
-  `allocated$` is below the contribution, keep it `open` with the residual
-  shown: `$2,000 · $1,847 deployed · $153 left`. Only a residual under $10
-  closes automatically — leftover cash stays visible until you explicitly
-  mark it done.
+- **Partial allocation** → see §3.6. Currently the item stays `open` with the
+  remainder as its headline figure; under the locked pool design it closes and
+  the residual moves to a shared pool.
 
 ### 3.5 A hint, not a heuristic
 
@@ -124,6 +122,81 @@ dividend reinvestment, the weekly drift rebalance, unrelated trades — and a
 contribution silently marked allocated because an unrelated rebalance ran is
 exactly the failure this feature exists to prevent. Explicit linkage closes
 items automatically; inference only ever suggests.
+
+### 3.6 The remainder pool — DESIGN LOCKED, ships with §5b
+
+**Status:** decided, not yet built. Lands with order linkage, which is what
+produces partial allocations in the first place. Building it earlier would mean
+designing against zero real data.
+
+#### Why
+
+Whole-share rounding leaves a tail on almost every allocation. With the close
+threshold at $10, nearly every contribution would stay open indefinitely over
+pocket change and the count would never reach zero — the badge-you-ignore
+failure this whole feature exists to avoid.
+
+Pooling fixes it by separating two questions that got tangled:
+
+- *"Did I act on this deposit?"* — per contribution, resolves fast, closes
+- *"How much undeployed cash is lying around?"* — one number, always current
+
+It also matches reality. Cash is fungible: the $153 left from Aug 1 and the $40
+from Aug 14 are the same dollars in the account. Tracking them by which deposit
+they came from is bookkeeping that buys nothing.
+
+#### Locked decisions
+
+1. **`allocated` changes meaning** — from "fully deployed" to "dealt with;
+   any leftover moved to the pool." A contribution closes as soon as it's
+   acted on, regardless of residual.
+
+2. **A residual lives in exactly one place: the pool.** This is the trap to
+   avoid. If a contribution row shows "$153 left" *and* the pool includes that
+   $153, the banner double-counts and the total is wrong. Once a contribution
+   closes, its row shows the original amount and the deployed figure — never a
+   live "remaining".
+
+3. **The pool is derived, not stored.**
+   ```
+   pool = Σ (amount − allocatedDollars) over contributions in state 'allocated'
+   ```
+   A stored balance would be a second source of truth that can drift from the
+   records it summarizes. Derived means the pool is always explainable — you
+   can show which deposits it came from — and it survives a cash-flow re-sync.
+
+4. **Allocating from the pool closes nothing.** The pool is a cash balance, not
+   a set of obligations. Deploying from it writes the deployment down against
+   the contributing records **oldest-first (FIFO)**, raising their
+   `allocatedDollars` until the deployed amount is consumed. Their state
+   doesn't change — they're already `allocated`.
+
+5. **`RESIDUAL_CLOSE_THRESHOLD` is retired.** With every residual pooling, no
+   threshold is needed to decide whether a contribution closes; it always does.
+   The constant is replaced by `POOL_DISPLAY_FLOOR` (~$50), below which the
+   pool row is hidden — it keeps accumulating, it just doesn't nag over $3.
+
+6. **Banner reports them separately.** Two different things:
+   `2 contributions awaiting allocation · $4,000` and, when above the floor,
+   `· $253 unallocated remainder`. Summing them into one figure would hide
+   that one is fresh money and the other is accumulated change.
+
+#### Work (adds to §5b)
+
+| # | Change | File |
+|---|---|---|
+| a | `poolBalance()` + `deployFromPool(dollars)` with FIFO write-down | `lib/contributions/status.ts` |
+| b | Retire `RESIDUAL_CLOSE_THRESHOLD`; always close on allocate | `lib/contributions/status.ts` |
+| c | Pool row in the tracker, with its own Allocate button | `ContributionTracker.tsx` |
+| d | Second clause on the banner | `ContributionBanner.tsx` |
+| e | FIFO write-down tests, incl. partial consumption and over-deploy | `scripts/test-contribution-status.ts` |
+
+#### Open sub-question
+
+Should the pool be **per account** or **household**? Contributions are scoped
+per account, and cash isn't transferable between a Roth and a taxable without
+being a withdrawal — which argues per account. Defaulting to per account unless
+you say otherwise.
 
 ---
 
@@ -147,41 +220,51 @@ and out of the count. ~15 lines against data already in the cash-flow store.
 
 ---
 
-## 5. Work breakdown
+## 5a. Slice one — SHIPPED (`f440d87`, `f72255d`, `f4e9ecf`)
+
+| # | Change | File | Done |
+|---|---|---|---|
+| 1 | Status store: read/write/list | `lib/contributions/status.ts` | ✅ |
+| 2 | Internal-journal pair matching | `lib/contributions/status.ts` | ✅ |
+| 3 | API: list + mark + retroactive seed | `app/api/contributions/status/route.ts` | ✅ |
+| 4 | Tracker panel in Transactions | `components/ContributionTracker.tsx` | ✅ |
+| 5 | Awaiting-allocation banner | `components/ContributionBanner.tsx` | ✅ |
+| 6 | Deep link: prefill the calculator | `app/dashboard/page.tsx`, `TargetAllocationView.tsx` | ✅ |
+| 9 | Manual mark / ignore / reopen | `components/ContributionTracker.tsx` | ✅ |
+
+That's a working ledger with manual marking, which alone satisfies "don't miss
+any." 22 unit tests on the pure logic.
+
+## 5b. Slice two — order linkage + the remainder pool
+
+Not started. These ship together because linkage is what produces the partial
+allocations the pool exists to collect.
 
 | # | Change | File | Size |
 |---|---|---|---|
-| 1 | Status store: read/write/list | new `lib/contributions/status.ts` | S |
-| 2 | Internal-journal pair matching | new helper, or `lib/schwab/transactions.ts` | S |
-| 3 | API: list contributions + status, mark allocated/ignored | new `app/api/contributions/status/route.ts` | S |
-| 4 | Status chip + Allocate button in Transactions | `components/TransactionsView.tsx` | M |
-| 5 | Awaiting-allocation line on the dashboard | `components/DashboardOverview.tsx` | S |
-| 6 | Deep link: prefill amount + carry `eventId` | `app/dashboard/page.tsx`, `TargetAllocationView.tsx` | M |
 | 7 | `contributionId` through order placement → `TradeHistoryEntry` | `app/api/orders/route.ts`, `TargetAllocationView.tsx` | M |
-| 8 | Flip status on successful placement | `TargetAllocationView.tsx` or the orders route | S |
-| 9 | Manual mark / ignore / note | `TransactionsView.tsx` | S |
-| 10 | "Buys since this date" hint | `TransactionsView.tsx` | S |
+| 8 | Close the contribution on successful placement, recording what filled | `TargetAllocationView.tsx` or the orders route | S |
+| 10 | "Buys since this date" hint for manual marking | `ContributionTracker.tsx` | S |
+| a–e | The remainder pool — see §3.6 | various | M |
 
 **Notably absent:** extracting the allocation math to `lib/`. That was the
-largest item in the previous plan and it's no longer needed — nothing computes
-a plan server-side any more. The calculator stays exactly where it is and just
-receives a pre-filled amount. (Still worth doing one day for testability, but
-it's no longer on this feature's critical path.)
+largest item in the original plan and it's no longer needed — nothing computes
+a plan server-side. The calculator stays where it is and receives a pre-filled
+amount. (Still worth doing for testability one day, but off the critical path.)
 
-Suggested order: **1 → 3 → 4 → 5** gives a working ledger with manual marking,
-which alone satisfies "don't miss any." Then **6 → 7 → 8** removes the manual
-step for the normal path.
+**Also not yet automatic:** the retroactive seed is a manual `PUT` call. Left
+that way deliberately — it's a bulk write over your history and shouldn't fire
+as a side effect of a page load.
 
-## 6. Decisions still open
+## 6. Decisions — settled
 
-1. **Minimum tracked amount.** A $12 residual ACH probably shouldn't open an
-   item. Suggest $250, configurable, with smaller ones logged but auto-ignored.
-2. **Retroactive scope.** On first run, does every historical deposit in the
-   store open as unallocated? Suggest seeding everything before today as
-   `ignored` so you start at zero rather than facing months of backlog.
-3. **Per-account.** A deposit into the Roth should presumably allocate against
-   the Roth's targets. Confirm the deep link scopes the account switcher too.
-4. **Partial threshold.** What residual is small enough to auto-close (§3.4).
+1. **Minimum tracked amount** — **$250**. `MIN_TRACKED_AMOUNT`.
+2. **Retroactive scope** — seed everything **before the first of the current
+   month** as ignored. This month's deposits stay open for review.
+3. **Per-account** — yes. Tracker, banner, and API all scope by `accountHash`.
+4. **Partial threshold** — **$10** for now (`RESIDUAL_CLOSE_THRESHOLD`), and
+   **retired entirely** when the pool lands (§3.6, decision 5).
+5. **Pool scoping** — per account, unless changed. See §3.6 open sub-question.
 
 ## 7. Risks
 
