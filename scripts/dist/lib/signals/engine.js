@@ -60,6 +60,12 @@ exports.CONFIG = {
     // CLM/CRF — trim only (buy is owned by rebalance-plan Cornerstone pillar)
     CLM_CRF_TARGET: 0.19,
     CLM_CRF_MAX: 0.20,
+    /**
+     * The tickers CLM_CRF_TRIM owns outright. MAINTENANCE_RANKED_TRIM defers on
+     * exactly these so the two rules cannot size competing sells against the
+     * same position — and on nothing else.
+     */
+    CLM_CRF_TICKERS: ['CLM', 'CRF'],
     // Pivot
     PIVOT_THRESHOLD: 1.05,
     PIVOT_HARD_DEADLINE: new Date('2026-06-26'),
@@ -667,12 +673,19 @@ function evalMaintenanceRankedTrim(positions, valuation, inDefense, killSwitchAc
     // can show "AFW will rise from $X to $Y" — but the SIZING math is
     // algebraically identical either way: `(util − target) × totalValue`.
     const requiredEquityFreed = (marginUtilPct - trimTarget) * valuation.totalValue;
-    // Eligible candidates: income (and "other") positions only. Triples/hedges/
-    // cornerstone owned by other rules. Skip positions without maintenance data
-    // (we'd be guessing).
+    // Eligible candidates: everything except positions another rule already
+    // owns. Skip positions without maintenance data (we'd be guessing).
+    //
+    // This used to exclude the whole cornerstone pillar on the grounds that it
+    // was "owned by other rules". It wasn't: CLM_CRF_TRIM keys off the literal
+    // tickers CLM and CRF, so every other CEF in that pillar was excluded here
+    // and picked up by nothing. OXLC is the case that matters — at
+    // `maintenancePct: 100` it is the least margin-efficient position in the
+    // universe, the one this rule most needs to reach, and it was unreachable.
+    // Defer on the two tickers CLM_CRF_TRIM actually sizes, not on the pillar.
     const candidates = positions
         .filter((p) => p.marketValue > 0)
-        .filter((p) => p.pillar !== 'triples' && p.pillar !== 'hedge' && p.pillar !== 'cornerstone')
+        .filter((p) => p.pillar !== 'triples' && !exports.CONFIG.CLM_CRF_TICKERS.includes(p.symbol))
         .filter((p) => typeof p.maintenancePct === 'number')
         .map((p) => ({
         pos: p,

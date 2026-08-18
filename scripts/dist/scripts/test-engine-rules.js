@@ -67,7 +67,7 @@ function baseInputs(overrides = {}) {
         spyHistory: Array(25).fill(500),
         vix: 18,
         state: (0, state_1.defaultSignalState)(),
-        pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 65, hedgePct: 5 },
+        pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 65, growthPct: 5 },
         recentSells30d: [],
         buyingPowerAvailable: 10000,
         ...overrides,
@@ -102,6 +102,30 @@ test('fires when margin utilization > 30% with high-maint position', () => {
     strict_1.default.ok(buys.length >= 1, 'expected paired rotation BUY');
     strict_1.default.ok(['UPRO', 'TQQQ'].includes(buys[0].ticker), `expected UPRO/TQQQ rotation, got ${buys[0].ticker}`);
 });
+test('reaches OXLC even though it sits in the cornerstone pillar', () => {
+    // Regression guard. OXLC is a CEF (pillar 'cornerstone') carrying the
+    // highest maintenance % in the table. CLM_CRF_TRIM only ever sizes CLM and
+    // CRF, so excluding the whole pillar here left OXLC untouchable by any trim
+    // rule. Only CLM/CRF should be deferred.
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('OXLC', 5000, 40000), enrichedPosition('SCHD', 250, 20000)],
+        cash: 5000,
+        marginDebt: 25000,
+    }));
+    const sells = findSignals(result.signals, 'MAINTENANCE_RANKED_TRIM')
+        .filter((s) => s.direction === 'SELL');
+    strict_1.default.equal(sells[0]?.ticker, 'OXLC', `expected OXLC to be trimmable, got ${sells[0]?.ticker}`);
+});
+test('still defers on CLM and CRF, which CLM_CRF_TRIM owns', () => {
+    const result = (0, engine_1.runSignalEngine)(baseInputs({
+        positions: [enrichedPosition('CLM', 5000, 40000), enrichedPosition('SCHD', 250, 20000)],
+        cash: 5000,
+        marginDebt: 25000,
+    }));
+    const sells = findSignals(result.signals, 'MAINTENANCE_RANKED_TRIM')
+        .filter((s) => s.direction === 'SELL');
+    strict_1.default.ok(!sells.some((s) => s.ticker === 'CLM'), 'CLM_CRF_TRIM owns CLM; this rule must not size it');
+});
 test('skips when in defense mode (equity ratio ≤ 40%)', () => {
     // Equity ratio = (totalValue - marginDebt) / totalValue. If we deeply leverage
     // so equity ratio is < 40%, defense mode wins and MAINTENANCE_RANKED_TRIM bails.
@@ -132,9 +156,11 @@ test('rotation BUY is roughly 1/3 of trim size', () => {
 // ─── PILLAR_FILL tests ───────────────────────────────────────────────────────
 console.log('\nPILLAR_FILL');
 test('does not fire when income pillar is at target', () => {
-    // 65% target, 65% actual = no gap.
+    // 65% target, 65% actual = no gap. JEPI, not SCHD: SCHD is classified
+    // 'growth' in fund-metadata, so a SCHD-only book leaves the income pillar
+    // at 0% and this fixture was silently testing a 65pp gap instead of none.
     const result = (0, engine_1.runSignalEngine)(baseInputs({
-        positions: [enrichedPosition('SCHD', 813, 65000)],
+        positions: [enrichedPosition('JEPI', 1083, 65000)],
         cash: 35000,
     }));
     strict_1.default.equal(findSignals(result.signals, 'PILLAR_FILL').length, 0);
@@ -477,7 +503,7 @@ test('skips when per-candidate size would be sub-$100 even with budget ≥ $100'
         ],
         cash: 1000,
         marginDebt: 0,
-        pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 6, hedgePct: 5 },
+        pillarTargets: { triplesPct: 10, cornerstonePct: 20, incomePct: 6, growthPct: 5 },
     }));
     const fires = findSignals(result.signals, 'PILLAR_FILL');
     // With per-candidate floor, no signals when each would be sub-$100.

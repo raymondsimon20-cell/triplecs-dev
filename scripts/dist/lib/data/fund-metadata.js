@@ -66,9 +66,12 @@ const EXPLICIT_MAINT_PCT = {
  */
 const DEFAULT_MAINT_PCT_BY_PILLAR = {
     triples: 75,
-    hedge: 75,
     income: 60,
     cornerstone: 50,
+    // Growth anchors are the margin-efficient bucket — broad index and large-cap
+    // names sit near the 30% end of the maintenance range, which is a large part
+    // of why the bucket exists.
+    growth: 35,
     other: 50,
 };
 const FUND_ROWS = [
@@ -87,22 +90,34 @@ const FUND_ROWS = [
     ['URTY', 'triples', 'ProShares', false, false],
     ['CURE', 'triples', 'Direxion', false, false],
     ['HIBL', 'triples', 'Direxion', false, false],
-    // ── Cornerstone ─────────────────────────────────────────────────────────────
+    // ── CEFs (`cornerstone` key) ────────────────────────────────────────────────
+    //
+    // The bucket is closed-end funds generally, not just the Cornerstone pair.
+    // CLM/CRF are the only holdings that offer DRIP at NAV — the compounding edge
+    // the strategy is built around — but every CEF here trades at a NAV premium or
+    // discount, and that is what earns them the bucket: the NAV scoring factor and
+    // the 30%-premium trim rule only fire on this pillar. Left in High Yield they
+    // were being scored as though NAV were irrelevant to them.
+    //
+    // Judgement calls worth revisiting: OXLC and OXSQ are credit vehicles (CLO
+    // equity / BDC) and TPVG is venture debt. All three publish a NAV and trade at
+    // premiums, so the NAV factor is meaningful — but their NAV behaves nothing
+    // like an equity CEF's, so treat their scores with more suspicion.
     ['CLM', 'cornerstone', 'Cornerstone', true, true],
     ['CRF', 'cornerstone', 'Cornerstone', true, true],
-    // ── Hedge / inverse ─────────────────────────────────────────────────────────
-    ['SPXU', 'hedge', 'ProShares', false, false],
-    ['SQQQ', 'hedge', 'ProShares', false, false],
-    ['SDOW', 'hedge', 'ProShares', false, false],
-    ['SOXS', 'hedge', 'Direxion', false, false],
-    ['FNGD', 'hedge', 'Direxion', false, false],
-    ['SPXS', 'hedge', 'Direxion', false, false],
-    ['FAZ', 'hedge', 'Direxion', false, false],
-    ['SRTY', 'hedge', 'Direxion', false, false],
-    ['SH', 'hedge', 'ProShares', false, false],
-    ['PSQ', 'hedge', 'ProShares', false, false],
-    ['DOG', 'hedge', 'ProShares', false, false],
-    ['UVXY', 'hedge', 'ProShares', false, false],
+    // ── Inverse / volatility (folded into Leveraged, 2026-07 P2P taxonomy) ──────
+    ['SPXU', 'triples', 'ProShares', false, false],
+    ['SQQQ', 'triples', 'ProShares', false, false],
+    ['SDOW', 'triples', 'ProShares', false, false],
+    ['SOXS', 'triples', 'Direxion', false, false],
+    ['FNGD', 'triples', 'Direxion', false, false],
+    ['SPXS', 'triples', 'Direxion', false, false],
+    ['FAZ', 'triples', 'Direxion', false, false],
+    ['SRTY', 'triples', 'Direxion', false, false],
+    ['SH', 'triples', 'ProShares', false, false],
+    ['PSQ', 'triples', 'ProShares', false, false],
+    ['DOG', 'triples', 'ProShares', false, false],
+    ['UVXY', 'triples', 'ProShares', false, false],
     // ── Income — YieldMax single-stock covered-call series ──────────────────────
     ['TSLY', 'income', 'YieldMax', false, true],
     ['NVDY', 'income', 'YieldMax', false, true],
@@ -189,44 +204,44 @@ const FUND_ROWS = [
     ['NVDL', 'income', 'Global X', false, false],
     ['TSLL', 'income', 'Global X', false, false],
     // ── Income — PIMCO CEFs ─────────────────────────────────────────────────────
-    ['PDI', 'income', 'PIMCO', true, true],
-    ['PDO', 'income', 'PIMCO', true, false],
-    ['PTY', 'income', 'PIMCO', true, true],
-    ['PCN', 'income', 'PIMCO', true, true],
-    ['PFL', 'income', 'PIMCO', true, false],
-    ['PFN', 'income', 'PIMCO', true, false],
-    ['PHK', 'income', 'PIMCO', true, false],
+    ['PDI', 'cornerstone', 'PIMCO', true, true],
+    ['PDO', 'cornerstone', 'PIMCO', true, false],
+    ['PTY', 'cornerstone', 'PIMCO', true, true],
+    ['PCN', 'cornerstone', 'PIMCO', true, true],
+    ['PFL', 'cornerstone', 'PIMCO', true, false],
+    ['PFN', 'cornerstone', 'PIMCO', true, false],
+    ['PHK', 'cornerstone', 'PIMCO', true, false],
     // ── Income — Eaton Vance CEFs ───────────────────────────────────────────────
-    ['ETV', 'income', 'Eaton Vance', true, false],
-    ['ETB', 'income', 'Eaton Vance', true, false],
-    ['EOS', 'income', 'Eaton Vance', true, true],
-    ['EOI', 'income', 'Eaton Vance', true, false],
-    ['EVT', 'income', 'Eaton Vance', true, false],
+    ['ETV', 'cornerstone', 'Eaton Vance', true, false],
+    ['ETB', 'cornerstone', 'Eaton Vance', true, false],
+    ['EOS', 'cornerstone', 'Eaton Vance', true, true],
+    ['EOI', 'cornerstone', 'Eaton Vance', true, false],
+    ['EVT', 'cornerstone', 'Eaton Vance', true, false],
     // ── Income — BlackRock CEFs ─────────────────────────────────────────────────
-    ['BST', 'income', 'BlackRock', true, true],
-    ['BDJ', 'income', 'BlackRock', true, true],
-    ['ECAT', 'income', 'BlackRock', true, false],
-    ['BGY', 'income', 'BlackRock', true, false],
-    ['BCAT', 'income', 'BlackRock', true, false],
-    ['BUI', 'income', 'BlackRock', true, false],
+    ['BST', 'cornerstone', 'BlackRock', true, true],
+    ['BDJ', 'cornerstone', 'BlackRock', true, true],
+    ['ECAT', 'cornerstone', 'BlackRock', true, false],
+    ['BGY', 'cornerstone', 'BlackRock', true, false],
+    ['BCAT', 'cornerstone', 'BlackRock', true, false],
+    ['BUI', 'cornerstone', 'BlackRock', true, false],
     // ── Income — Amplify ────────────────────────────────────────────────────────
     ['DIVO', 'income', 'Amplify', false, true],
     ['BLOK', 'income', 'Amplify', false, false],
     ['COWS', 'income', 'Amplify', false, false],
     // ── Income — Oxford Lane / RiverNorth / Liberty / Gabelli / Columbia ────────
-    ['OXLC', 'income', 'Oxford Lane', false, false],
-    ['OXSQ', 'income', 'Oxford Lane', false, false],
-    ['RIV', 'income', 'RiverNorth', true, true],
-    ['OPP', 'income', 'RiverNorth', false, false],
-    ['USA', 'income', 'Liberty', true, true],
+    ['OXLC', 'cornerstone', 'Oxford Lane', false, false],
+    ['OXSQ', 'cornerstone', 'Oxford Lane', false, false],
+    ['RIV', 'cornerstone', 'RiverNorth', true, true],
+    ['OPP', 'cornerstone', 'RiverNorth', false, false],
+    ['USA', 'cornerstone', 'Liberty', true, true],
     ['LICT', 'income', 'Liberty', false, false],
-    ['GAB', 'income', 'Gabelli', false, false],
-    ['GDV', 'income', 'Gabelli', false, false],
-    ['GGT', 'income', 'Gabelli', false, false],
-    ['STK', 'income', 'Columbia', true, true],
+    ['GAB', 'cornerstone', 'Gabelli', false, false],
+    ['GDV', 'cornerstone', 'Gabelli', false, false],
+    ['GGT', 'cornerstone', 'Gabelli', false, false],
+    ['STK', 'cornerstone', 'Columbia', true, true],
     // ── Income — KraneShares / BDC / REIT ──────────────────────────────────────
     ['KMLM', 'income', 'KraneShares', false, false],
-    ['TPVG', 'income', 'BDC', false, false],
+    ['TPVG', 'cornerstone', 'BDC', false, false],
     ['O', 'income', 'REIT', false, false],
     // ── Income — Vol 7 additions ────────────────────────────────────────────────
     ['IQQQ', 'income', 'Other', false, false],
@@ -236,10 +251,10 @@ const FUND_ROWS = [
     ['FNGA', 'income', 'Direxion', false, false],
     ['FNGB', 'income', 'Direxion', false, false],
     // ── Income — Additional CEFs ────────────────────────────────────────────────
-    ['CHW', 'income', 'Other', true, false],
-    ['CSQ', 'income', 'Other', true, false],
-    ['EXG', 'income', 'Eaton Vance', true, false],
-    ['GOF', 'income', 'Other', true, true],
+    ['CHW', 'cornerstone', 'Other', true, false],
+    ['CSQ', 'cornerstone', 'Other', true, false],
+    ['EXG', 'cornerstone', 'Eaton Vance', true, false],
+    ['GOF', 'cornerstone', 'Other', true, true],
     // ── Income — Bond funds ─────────────────────────────────────────────────────
     ['AGG', 'income', 'iShares', false, false],
     ['BND', 'income', 'Vanguard', false, false],
@@ -247,39 +262,39 @@ const FUND_ROWS = [
     ['IEF', 'income', 'iShares', false, false],
     ['SGOV', 'income', 'iShares', false, false],
     ['USFR', 'income', 'WisdomTree', false, false],
-    // ── Broad index / growth anchors (income pillar in this strategy) ──────────
-    ['QQQ', 'income', 'Invesco', false, true],
-    ['QQQM', 'income', 'Invesco', false, true],
-    ['RSP', 'income', 'Invesco', false, false],
-    ['SPY', 'income', 'iShares', false, false],
-    ['IVV', 'income', 'iShares', false, false],
-    ['IWM', 'income', 'iShares', false, false],
-    ['VTI', 'income', 'Vanguard', false, false],
-    ['VOO', 'income', 'Vanguard', false, false],
-    ['VYM', 'income', 'Vanguard', false, true],
-    ['VXUS', 'income', 'Vanguard', false, false],
-    ['SPYG', 'income', 'Individual', false, true],
-    ['SCHD', 'income', 'Schwab', false, true],
-    ['SCHG', 'income', 'Schwab', false, false],
-    ['SCHB', 'income', 'Schwab', false, false],
-    ['ITA', 'income', 'iShares', false, false],
-    ['VGT', 'income', 'Vanguard', false, false],
-    // ── Individual stocks (treated as income pillar growth anchors) ────────────
-    ['NVDA', 'income', 'Individual', false, true],
-    ['AAPL', 'income', 'Individual', false, false],
-    ['MSFT', 'income', 'Individual', false, false],
-    ['AMZN', 'income', 'Individual', false, false],
-    ['GOOGL', 'income', 'Individual', false, false],
-    ['META', 'income', 'Individual', false, false],
-    ['MCD', 'income', 'Individual', false, false],
-    ['COST', 'income', 'Individual', false, false],
-    ['BRK.B', 'income', 'Individual', false, false],
-    ['MSTR', 'income', 'Individual', false, false],
-    // ── Gold / precious metals ──────────────────────────────────────────────────
-    ['AAAU', 'income', 'Gold', false, false],
-    ['GLD', 'income', 'Gold', false, false],
-    ['IAU', 'income', 'Gold', false, false],
-    ['KGC', 'income', 'Individual', false, false],
+    // ── Growth: broad index anchors ─────────────────────────────────────────────
+    ['QQQ', 'growth', 'Invesco', false, true],
+    ['QQQM', 'growth', 'Invesco', false, true],
+    ['RSP', 'growth', 'Invesco', false, false],
+    ['SPY', 'growth', 'iShares', false, false],
+    ['IVV', 'growth', 'iShares', false, false],
+    ['IWM', 'growth', 'iShares', false, false],
+    ['VTI', 'growth', 'Vanguard', false, false],
+    ['VOO', 'growth', 'Vanguard', false, false],
+    ['VYM', 'growth', 'Vanguard', false, true],
+    ['VXUS', 'growth', 'Vanguard', false, false],
+    ['SPYG', 'growth', 'Individual', false, true],
+    ['SCHD', 'growth', 'Schwab', false, true],
+    ['SCHG', 'growth', 'Schwab', false, false],
+    ['SCHB', 'growth', 'Schwab', false, false],
+    ['ITA', 'growth', 'iShares', false, false],
+    ['VGT', 'growth', 'Vanguard', false, false],
+    // ── Growth: individual large-cap anchors ────────────────────────────────────
+    ['NVDA', 'growth', 'Individual', false, true],
+    ['AAPL', 'growth', 'Individual', false, false],
+    ['MSFT', 'growth', 'Individual', false, false],
+    ['AMZN', 'growth', 'Individual', false, false],
+    ['GOOGL', 'growth', 'Individual', false, false],
+    ['META', 'growth', 'Individual', false, false],
+    ['MCD', 'growth', 'Individual', false, false],
+    ['COST', 'growth', 'Individual', false, false],
+    ['BRK.B', 'growth', 'Individual', false, false],
+    ['MSTR', 'growth', 'Individual', false, false],
+    // ── Growth: gold / precious-metal anchors ───────────────────────────────────
+    ['AAAU', 'growth', 'Gold', false, false],
+    ['GLD', 'growth', 'Gold', false, false],
+    ['IAU', 'growth', 'Gold', false, false],
+    ['KGC', 'growth', 'Individual', false, false],
 ];
 // ─── Fallback distribution yields ────────────────────────────────────────────
 /**

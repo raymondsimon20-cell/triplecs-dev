@@ -114,6 +114,32 @@ test('fires when margin utilization > 30% with high-maint position', () => {
   assert.ok(['UPRO', 'TQQQ'].includes(buys[0].ticker), `expected UPRO/TQQQ rotation, got ${buys[0].ticker}`);
 });
 
+test('reaches OXLC even though it sits in the cornerstone pillar', () => {
+  // Regression guard. OXLC is a CEF (pillar 'cornerstone') carrying the
+  // highest maintenance % in the table. CLM_CRF_TRIM only ever sizes CLM and
+  // CRF, so excluding the whole pillar here left OXLC untouchable by any trim
+  // rule. Only CLM/CRF should be deferred.
+  const result = runSignalEngine(baseInputs({
+    positions:  [enrichedPosition('OXLC', 5000, 40_000), enrichedPosition('SCHD', 250, 20_000)],
+    cash:       5_000,
+    marginDebt: 25_000,
+  }));
+  const sells = findSignals(result.signals, 'MAINTENANCE_RANKED_TRIM')
+    .filter((s) => s.direction === 'SELL');
+  assert.equal(sells[0]?.ticker, 'OXLC', `expected OXLC to be trimmable, got ${sells[0]?.ticker}`);
+});
+
+test('still defers on CLM and CRF, which CLM_CRF_TRIM owns', () => {
+  const result = runSignalEngine(baseInputs({
+    positions:  [enrichedPosition('CLM', 5000, 40_000), enrichedPosition('SCHD', 250, 20_000)],
+    cash:       5_000,
+    marginDebt: 25_000,
+  }));
+  const sells = findSignals(result.signals, 'MAINTENANCE_RANKED_TRIM')
+    .filter((s) => s.direction === 'SELL');
+  assert.ok(!sells.some((s) => s.ticker === 'CLM'), 'CLM_CRF_TRIM owns CLM; this rule must not size it');
+});
+
 test('skips when in defense mode (equity ratio ≤ 40%)', () => {
   // Equity ratio = (totalValue - marginDebt) / totalValue. If we deeply leverage
   // so equity ratio is < 40%, defense mode wins and MAINTENANCE_RANKED_TRIM bails.
@@ -148,9 +174,11 @@ test('rotation BUY is roughly 1/3 of trim size', () => {
 console.log('\nPILLAR_FILL');
 
 test('does not fire when income pillar is at target', () => {
-  // 65% target, 65% actual = no gap.
+  // 65% target, 65% actual = no gap. JEPI, not SCHD: SCHD is classified
+  // 'growth' in fund-metadata, so a SCHD-only book leaves the income pillar
+  // at 0% and this fixture was silently testing a 65pp gap instead of none.
   const result = runSignalEngine(baseInputs({
-    positions: [enrichedPosition('SCHD', 813, 65_000)],
+    positions: [enrichedPosition('JEPI', 1083, 65_000)],
     cash:      35_000,
   }));
   assert.equal(findSignals(result.signals, 'PILLAR_FILL').length, 0);

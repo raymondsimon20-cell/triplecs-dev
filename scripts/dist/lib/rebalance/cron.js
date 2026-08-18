@@ -79,8 +79,13 @@ async function fetchAccountSlices() {
             marketValue: p.marketValue ?? 0,
             pillar: (0, fund_metadata_1.getFundMetadata)(p.instrument.symbol)?.pillar,
         }));
+        // Net, not Math.abs — shortMarketValue is negative (a liability) and
+        // taking the absolute value inflated the drift denominator, understating
+        // every pillar's percentage and making the cron under-trade. Same defect
+        // fixed in lib/portfolio/fetch.ts and the accounts route on 2026-08-04;
+        // this copy was missed in that sweep.
         const totalValue = (acct.currentBalances.longMarketValue ?? 0) +
-            Math.abs(acct.currentBalances.shortMarketValue ?? 0);
+            (acct.currentBalances.shortMarketValue ?? 0);
         return { accountHash: hashValue, positions, totalValue, prices };
     });
 }
@@ -98,10 +103,10 @@ function summarisePillars(slice) {
 }
 function targetMapFor(strategy) {
     return {
-        triples: strategy.triplesPct,
+        growth: strategy.growthPct,
         cornerstone: strategy.cornerstonePct,
         income: strategy.incomePct,
-        hedge: strategy.hedgePct,
+        triples: strategy.triplesPct,
     };
 }
 /**

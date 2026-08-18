@@ -50,6 +50,7 @@ exports.projectAfwImpact = projectAfwImpact;
 exports.projectMarginIncrease = projectMarginIncrease;
 exports.validateProposedTrade = validateProposedTrade;
 exports.validateBatch = validateBatch;
+exports.validateBatchCumulative = validateBatchCumulative;
 exports.isAutomationPaused = isAutomationPaused;
 exports.setAutomationPaused = setAutomationPaused;
 exports.getAutomationGate = getAutomationGate;
@@ -89,7 +90,10 @@ function tradeNotional(t) {
  * for the utilization-ratio check.
  *
  * Equity:
- *   - BUY:               max(0, notional − availableCash)   (margin draw above cash)
+ *   - BUY:               0.5 × notional  (Reg-T initial requirement — margin
+ *                        is buying power up to the 50% wall, per the user's
+ *                        operating model, and each dollar of stock bought
+ *                        reserves ~50¢ of AFW)
  *   - SELL:              0 (releases collateral)
  *
  * Options (one contract = 100 shares of underlying):
@@ -136,8 +140,19 @@ function projectAfwImpact(t, ctx) {
     }
     // Equity.
     if (isBuy(t.instruction)) {
-        const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
-        return Math.max(0, tradeNotional(t) - availableCash);
+        // Reg-T initial requirement: a marginable equity BUY consumes ~50% of its
+        // notional in AFW — margin is buying power up to Schwab's 50% wall, so
+        // each borrowed dollar of stock reserves fifty cents of headroom. This
+        // matches how Schwab's own availableFunds responds to a purchase.
+        //
+        // Previous formula was max(0, notional − (equity − marginBalance)).
+        // `equity − marginBalance` is not cash — it's net-liq minus debt, ~$64K
+        // on an account holding zero actual cash — so every buy under that figure
+        // projected ZERO AFW impact and sailed past the $10K floor. Verified
+        // 2026-08-05: eight $5K buys ($40K of margin draw) all passed with AFW at
+        // $11K. True cash, when needed, is equity − totalValue (positions net of
+        // shorts), NOT equity − marginBalance.
+        return 0.5 * tradeNotional(t);
     }
     return 0; // equity SELL releases collateral
 }
@@ -189,8 +204,13 @@ function projectMarginIncrease(t, ctx) {
     }
     // Equity.
     if (isBuy(t.instruction)) {
-        const availableCash = Math.max(0, ctx.equity - ctx.marginBalance);
-        return Math.max(0, tradeNotional(t) - availableCash);
+        // True cash = equity − position value (net of shorts). In a margin
+        // account carrying a debit this is ≤ 0, so the entire notional lands on
+        // the margin balance. The old `equity − marginBalance` formula manufactured
+        // ~$64K of phantom cash and projected zero margin increase for any buy
+        // under it, killing the utilization check for equity buys entirely.
+        const trueCash = Math.max(0, ctx.equity - ctx.totalValue);
+        return Math.max(0, tradeNotional(t) - trueCash);
     }
     return 0;
 }
@@ -441,6 +461,84 @@ function validateBatch(trades, ctx) {
             blocked.push(enriched);
     }
     return { allowed, blocked };
+}
+/**
+ * Validate a batch where the trades will all be placed together.
+ *
+ * `validateBatch` measures every trade against the same opening snapshot,
+ * which is the right question for one order and the wrong one for a plan:
+ * five buys each sized to individually clear the AFW floor can jointly go
+ * straight through it. Here each accepted trade is folded back into a working
+ * context — AFW down by its projected draw, margin balance up by its projected
+ * increase, position and portfolio value up by its notional, pillar
+ * percentages recomputed, and the trade counted against the daily cap —
+ * before the next is measured. Blocked trades are not folded in, since they
+ * wouldn't be placed.
+ *
+ * Order matters: the caller's ordering decides who gets the remaining
+ * headroom. The input context is copied, never mutated.
+ */
+function validateBatchCumulative(trades, ctx) {
+    const working = {
+        ...ctx,
+        positions: ctx.positions.map((p) => ({ ...p })),
+        pillars: ctx.pillars.map((p) => ({ ...p })),
+        recentTrades: [...ctx.recentTrades],
+    };
+    const results = [];
+    for (const t of trades) {
+        const { allowed, violations } = validateProposedTrade(t, working);
+        results.push({ ...t, allowed, violations });
+        if (!allowed)
+            continue;
+        const notional = tradeNotional(t);
+        const afwDraw = projectAfwImpact(t, working);
+        const marginUp = projectMarginIncrease(t, working);
+        if (typeof working.afwDollars === 'number')
+            working.afwDollars -= afwDraw;
+        working.marginBalance += marginUp;
+        const existing = working.positions.find((p) => p.symbol === t.symbol);
+        if (isBuy(t.instruction)) {
+            working.totalValue += notional;
+            if (existing) {
+                existing.marketValue += notional;
+                existing.shares += t.shares;
+            }
+            else {
+                working.positions.push({
+                    symbol: t.symbol, pillar: t.pillar, marketValue: notional, shares: t.shares,
+                });
+            }
+        }
+        else {
+            working.totalValue -= notional;
+            if (existing) {
+                existing.marketValue = Math.max(0, existing.marketValue - notional);
+                existing.shares = Math.max(0, existing.shares - t.shares);
+            }
+        }
+        // Pillar shares move with every fill, so the overdrift check can't keep
+        // reading the opening snapshot.
+        if (working.totalValue > 0) {
+            for (const p of working.pillars) {
+                const dollars = working.positions
+                    .filter((pos) => pos.pillar === p.pillar)
+                    .reduce((s, pos) => s + pos.marketValue, 0);
+                p.currentPct = (dollars / working.totalValue) * 100;
+            }
+        }
+        working.recentTrades = [
+            {
+                timestamp: new Date().toISOString(),
+                symbol: t.symbol,
+                instruction: t.instruction,
+                shares: t.shares,
+                price: t.price,
+            },
+            ...working.recentTrades,
+        ];
+    }
+    return { results, finalContext: working };
 }
 // ─── Kill switch helpers ─────────────────────────────────────────────────────
 const PAUSE_KEY = 'pause-flag'; // legacy household pause
