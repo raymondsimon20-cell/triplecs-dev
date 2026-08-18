@@ -15,7 +15,7 @@ import { createClient, getAccountNumbers } from './client';
 import { getTokens } from '../storage';
 import type { CashFlowEvent } from '../storage';
 import type { SchwabTransaction } from './types';
-import { isKnownContributionSource } from '@/lib/data/contribution-sources';
+import { classifyCashMovement, isMarginInterestDescription } from '@/lib/transactions/cash-category';
 
 /**
  * Schwab transaction type strings the API exposes. Not exhaustive — these
@@ -58,25 +58,9 @@ function classifyTransaction(t: SchwabTransaction): ClassifiedFlow | null {
   const amount    = Math.abs(rawAmount);
   const direction: 'in' | 'out' = rawAmount > 0 ? 'in' : 'out';
 
-  // Deposits / withdrawals: ACH, wires, journals between accounts, plus named
-  // contribution sources. The payer-name check has to be here as well as in the
-  // transactions route: if the two classifiers disagree, a deposit can show as
-  // a contribution on screen while TWR treats it as investment gain, which
-  // silently overstates the return.
-  if (
-    txType === 'ELECTRONIC_FUND' ||
-    txType === 'WIRE_IN' || txType === 'WIRE_OUT' ||
-    txType === 'CASH_RECEIPT' || txType === 'CASH_DISBURSEMENT' ||
-    txType === 'JOURNAL' ||
-    isKnownContributionSource(desc) ||
-    /deposit|withdraw|ach|wire|transfer/.test(desc)
-  ) {
-    if (direction === 'in')  return { direction, kind: 'deposit', amount };
-    return { direction, kind: 'withdrawal', amount };
-  }
-
-  // Margin interest charged to the account.
-  if (/margin interest|interest charge/.test(desc)) {
+  // Margin interest charged to the account. This must precede generic journal
+  // classification because Schwab can file the charge as a JOURNAL.
+  if (isMarginInterestDescription(desc)) {
     return { direction: 'out', kind: 'interest', amount };
   }
 
@@ -84,6 +68,16 @@ function classifyTransaction(t: SchwabTransaction): ClassifiedFlow | null {
   if (/fee|commission|sec fee|finra/.test(desc)) {
     return { direction: 'out', kind: 'fee', amount };
   }
+
+  // Deposits / withdrawals: external rails and named contribution sources.
+  // contribution sources. The payer-name check has to be here as well as in the
+  // transactions route: if the two classifiers disagree, a deposit can show as
+  // a contribution on screen while TWR treats it as investment gain, which
+  // silently overstates the return.
+  const cashMovement = classifyCashMovement({ txType, description: desc, amount: rawAmount });
+  if (cashMovement === 'Contribution') return { direction: 'in', kind: 'deposit', amount };
+  if (cashMovement === 'Withdrawal') return { direction: 'out', kind: 'withdrawal', amount };
+  if (cashMovement === 'Transfer') return null;
 
   // Cash dividends and credit interest land here.
   if (txType === 'DIVIDEND_OR_INTEREST') {

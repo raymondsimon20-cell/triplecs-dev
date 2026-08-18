@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers, getTransactions } from '@/lib/schwab/client';
 import { getTokens } from '@/lib/storage';
 import { isKnownContributionSource } from '@/lib/data/contribution-sources';
+import { classifyCashMovement, isMarginInterestDescription } from '@/lib/transactions/cash-category';
 
 export const dynamic = 'force-dynamic';
 
@@ -147,24 +148,20 @@ function normalize(t: any, accountHash: string): NormalizedTransaction | null {
     category = 'Contribution';
   } else if (txType === 'TRADE') {
     category = isOption ? 'Option Trade' : amount >= 0 ? 'Stock Sale' : 'Stock Purchase';
+  } else if (isMarginInterestDescription(desc)) {
+    category = 'Margin Interest';
   } else if (txType.includes('DIVIDEND') || txType === 'DIVIDEND_OR_INTEREST') {
-    if (/margin interest/i.test(desc)) category = 'Margin Interest';
-    else if (!symbol && /interest/i.test(desc)) category = 'Interest';
+    if (!symbol && /interest/i.test(desc)) category = 'Interest';
     else category = 'Dividend';
-  } else if (
-    txType === 'ACH_RECEIPT' || txType === 'WIRE_IN' || txType === 'CASH_RECEIPT' ||
-    (txType === 'ELECTRONIC_FUND' && amount > 0)
-  ) {
-    category = 'Contribution';
-  } else if (
-    txType === 'ACH_DISBURSEMENT' || txType === 'WIRE_OUT' || txType === 'CASH_DISBURSEMENT' ||
-    (txType === 'ELECTRONIC_FUND' && amount < 0)
-  ) {
-    category = 'Withdrawal';
-  } else if (txType === 'JOURNAL') {
-    category = amount < 0 ? 'Withdrawal' : 'Transfer';
   } else {
-    category = 'Other';
+    const cashMovement = classifyCashMovement({
+      txType,
+      description: desc,
+      amount,
+      hasSecurity: Boolean(symbol),
+    });
+    if (cashMovement) category = cashMovement;
+    else category = 'Other';
   }
 
   return {

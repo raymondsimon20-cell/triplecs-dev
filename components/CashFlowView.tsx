@@ -6,11 +6,13 @@
  * and a categorized transaction table. All derived from /api/transactions.
  *
  * Model (mirrors the reference):
- *   Income        = dividends + interest + stock-sale proceeds
+ *   Income        = dividends + interest + positive option cash
  *   Expenses      = cash withdrawals + margin interest
  *   Contributions = transfers in
  *   Capital Deployed = stock/option purchases
  *   Net Operating = Income − Expenses
+ * Stock-sale proceeds are disclosed separately because returning invested
+ * principal is not income.
  */
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
@@ -20,15 +22,11 @@ import { TickerAvatar, TableSkeleton } from '@/components/polish';
 import { Activity, Banknote, CreditCard, Download, PiggyBank, Plus, ShoppingCart, Trash2, TrendingDown, TrendingUp, X } from 'lucide-react';
 import { type NormalizedTransaction, categoryChipClass, fmtDate } from '@/components/TransactionsView';
 import { reconcileInflows, unsweptIsSignificant } from '@/lib/portfolio/duplicate-inflows';
+import { cashFlowDateKeys, localDateKey, summarizeCashFlow } from '@/lib/cash-flow';
 
 const fmt$ = (n: number) => (n < 0 ? '-' : '') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const plColor = (n: number) => (n > 0 ? 'text-emerald-400' : n < 0 ? 'text-red-400' : 'text-[#9aa2c0]');
-
-const INCOME_CATS   = new Set(['Dividend', 'Interest', 'Stock Sale']);
-const EXPENSE_CATS  = new Set(['Withdrawal', 'Margin Interest']);
-const DEPLOY_CATS   = new Set(['Stock Purchase', 'Option Trade']);
-
 
 /** A manually recorded cash flow, from /api/contributions. */
 interface ManualFlow {
@@ -50,7 +48,7 @@ interface Props {
 
 const WINDOW_CHOICES = [30, 60, 90, 180, 365];
 
-const todayKey = () => new Date().toISOString().slice(0, 10);
+const todayKey = () => localDateKey();
 
 export function CashFlowView({ transactions, loading, windowDays: initialWindow = 30, accountHash }: Props) {
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -65,19 +63,26 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
     date: todayKey(), amount: '', direction: 'in' as 'in' | 'out', description: '',
   });
 
-  const loadManual = useCallback(async () => {
+  const loadManual = useCallback(async (signal?: AbortSignal) => {
     try {
       const qs = accountHash ? `?accountHash=${encodeURIComponent(accountHash)}` : '';
-      const res = await fetch(`/api/contributions${qs}`);
+      const res = await fetch(`/api/contributions${qs}`, { signal });
       if (!res.ok) return;
       const json = await res.json();
       setManual(Array.isArray(json?.contributions) ? json.contributions : []);
     } catch (err) {
+      if (err instanceof DOMException && err.name === 'AbortError') return;
       console.warn('[CashFlowView] could not load manual contributions:', err);
     }
   }, [accountHash]);
 
-  useEffect(() => { void loadManual(); }, [loadManual]);
+  useEffect(() => {
+    const controller = new AbortController();
+    setManual([]);
+    setCategoryFilter('all');
+    void loadManual(controller.signal);
+    return () => controller.abort();
+  }, [loadManual]);
 
   const submitContribution = async () => {
     const amt = Number(form.amount);
@@ -145,10 +150,8 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
   const manualIds = useMemo(() => new Set(manual.map((m) => m.id)), [manual]);
 
 
-  const cutoff = useMemo(() => {
-    const d = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
-    return d.toISOString().split('T')[0];
-  }, [windowDays]);
+  const dateKeys = useMemo(() => cashFlowDateKeys(windowDays), [windowDays]);
+  const cutoff = dateKeys[0];
 
   const windowTxns = useMemo(
     () => [...transactions, ...manualAsTxns]
@@ -167,28 +170,7 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
     [windowTxns],
   );
 
-  const agg = useMemo(() => {
-    let income = 0, marginCost = 0, contributions = 0, withdrawals = 0, deployed = 0;
-    const daily = new Map<string, number>();
-    for (const t of windowTxns) {
-      if (INCOME_CATS.has(t.category)) {
-        income += Math.abs(t.amount);
-        daily.set(t.date, (daily.get(t.date) ?? 0) + Math.abs(t.amount));
-      } else if (t.category === 'Margin Interest') {
-        marginCost += Math.abs(t.amount);
-        daily.set(t.date, (daily.get(t.date) ?? 0) - Math.abs(t.amount));
-      } else if (t.category === 'Withdrawal') {
-        withdrawals += Math.abs(t.amount);
-        daily.set(t.date, (daily.get(t.date) ?? 0) - Math.abs(t.amount));
-      } else if (t.category === 'Contribution') {
-        contributions += Math.abs(t.amount);
-      } else if (DEPLOY_CATS.has(t.category) && t.amount < 0) {
-        deployed += Math.abs(t.amount);
-      }
-    }
-    const expenses = withdrawals + marginCost;
-    return { income, marginCost, contributions, withdrawals, deployed, expenses, netOperating: income - expenses, daily };
-  }, [windowTxns]);
+  const agg = useMemo(() => summarizeCashFlow(windowTxns), [windowTxns]);
 
   // Bar chart series (oldest → newest). Windows past 90 days bucket by week
   // so the bars stay readable instead of collapsing into 1px slivers.
@@ -196,24 +178,16 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
   const days = useMemo(() => {
     const out: { date: string; net: number }[] = [];
     if (!weekly) {
-      for (let i = windowDays; i >= 0; i -= 1) {
-        const d = new Date(Date.now() - i * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        out.push({ date: d, net: agg.daily.get(d) ?? 0 });
-      }
+      for (const date of dateKeys) out.push({ date, net: agg.daily.get(date) ?? 0 });
       return out;
     }
-    const weeks = Math.ceil(windowDays / 7);
-    for (let w = weeks - 1; w >= 0; w -= 1) {
-      const start = new Date(Date.now() - (w * 7 + 6) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-      let net = 0;
-      for (let i = 0; i < 7; i += 1) {
-        const d = new Date(Date.now() - (w * 7 + i) * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
-        net += agg.daily.get(d) ?? 0;
-      }
-      out.push({ date: start, net });
+    for (let i = 0; i < dateKeys.length; i += 7) {
+      const bucket = dateKeys.slice(i, i + 7);
+      const net = bucket.reduce((sum, date) => sum + (agg.daily.get(date) ?? 0), 0);
+      out.push({ date: bucket[0], net });
     }
     return out;
-  }, [agg.daily, windowDays, weekly]);
+  }, [agg.daily, dateKeys, weekly]);
   const maxAbs = Math.max(...days.map((d) => Math.abs(d.net)), 1);
 
   const categories = useMemo(
@@ -361,13 +335,15 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
       )}
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <Stat icon={TrendingUp} label="Total Income" value={fmt$(agg.income)} valueClass="text-emerald-400" accentClass="border-t-emerald-500/60" index={0} />
-        <Stat icon={TrendingDown} label="Total Expenses" value={fmt$(agg.expenses)} valueClass="text-red-400" accentClass="border-t-emerald-500/60" index={1} />
-        <Stat icon={CreditCard} label="Margin Cost" value={fmt$(agg.marginCost)} sub="Included in Total Expenses" valueClass="text-orange-300" accentClass="border-t-emerald-500/60" index={2} />
-        <Stat icon={PiggyBank} label="Contributions" value={fmt$(agg.contributions)} accentClass="border-t-emerald-500/60" index={3} />
-        <Stat icon={Banknote} label="Cash Withdrawals" value={fmt$(agg.withdrawals)} sub="Included in Total Expenses" accentClass="border-t-emerald-500/60" index={4} />
-        <Stat icon={ShoppingCart} label="Capital Deployed" value={fmt$(agg.deployed)} accentClass="border-t-emerald-500/60" index={5} />
-        <Stat icon={Activity} label="Net Operating" value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} accentClass="border-t-emerald-500/60" index={6} />
+        <Stat icon={TrendingUp} label="Total Income" value={fmt$(agg.income)} sub="Distributions, interest & option cash in" valueClass="text-emerald-400" accentClass="border-t-emerald-500/60" index={0} />
+        <Stat icon={TrendingUp} label="Option Cash In" value={fmt$(agg.optionIncome)} sub="Positive option trade cash" valueClass="text-emerald-300" accentClass="border-t-emerald-500/60" index={1} />
+        <Stat icon={Banknote} label="Stock Sale Proceeds" value={fmt$(agg.stockSaleProceeds)} sub="Principal returned — excluded from income" accentClass="border-t-emerald-500/60" index={2} />
+        <Stat icon={TrendingDown} label="Total Expenses" value={fmt$(agg.expenses)} valueClass="text-red-400" accentClass="border-t-emerald-500/60" index={3} />
+        <Stat icon={CreditCard} label="Margin Cost" value={fmt$(agg.marginCost)} sub="Included in Total Expenses" valueClass="text-orange-300" accentClass="border-t-emerald-500/60" index={4} />
+        <Stat icon={PiggyBank} label="Contributions" value={fmt$(agg.contributions)} accentClass="border-t-emerald-500/60" index={5} />
+        <Stat icon={Banknote} label="Cash Withdrawals" value={fmt$(agg.withdrawals)} sub="Included in Total Expenses" accentClass="border-t-emerald-500/60" index={6} />
+        <Stat icon={ShoppingCart} label="Capital Deployed" value={fmt$(agg.deployed)} accentClass="border-t-emerald-500/60" index={7} />
+        <Stat icon={Activity} label="Net Operating" value={signed$(agg.netOperating)} valueClass={plColor(agg.netOperating)} accentClass="border-t-emerald-500/60" index={8} />
       </div>
 
       {/* Inflow reconciliation — external money vs internal register movement */}

@@ -27,6 +27,7 @@ npm-debug.log*
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+scripts/dist/
 
 # Uploads / sensitive docs (PDFs with strategy rules — optional, remove if you want them versioned)
 # *.pdf
