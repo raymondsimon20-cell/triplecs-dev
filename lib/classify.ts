@@ -270,6 +270,38 @@ export function enrichPositions(
       : quoteDerived !== undefined                 ? quoteDerived
       : 0;
 
+    // ─── Today's gain/loss as a PERCENTAGE ──────────────────────────────────
+    // PositionsView and DashboardOverview each used to derive this themselves
+    // as `todayGainLoss / (marketValue - todayGainLoss)`, and both were wrong
+    // for the same reason: `marketValue` counts shares bought this session
+    // while `todayGainLoss` measures those shares from their fill price, so
+    // the two operands describe different position sizes.
+    //
+    //   • Added to a position today  → denominator inflates by the new
+    //     capital, percentage shrinks toward nothing.
+    //   • Opened a position today    → denominator collapses toward zero,
+    //     percentage explodes into nonsense.
+    //
+    // Precedence mirrors the todayGainLoss decision above: Schwab's own field
+    // is PRIMARY, so the dashboard agrees with the account page by
+    // construction rather than by coincidence. Quote math is the fallback for
+    // positions where Schwab omits it, and it uses YESTERDAY's close against
+    // YESTERDAY's quantity — the only base that survives an intraday resize.
+    const prevNetQty = prevLongQty - prevShortQty;
+    const schwabDayPct = pos.currentDayProfitLossPercentage;
+
+    let todayGainLossPercent: number | null;
+    if (typeof schwabDayPct === 'number' && Number.isFinite(schwabDayPct)) {
+      todayGainLossPercent = schwabDayPct;
+    } else if (prevNetQty !== 0 && quote && quote.closePrice > 0) {
+      const priorBase = Math.abs(quote.closePrice * prevNetQty * multiplier);
+      todayGainLossPercent = priorBase > 0 ? (todayGainLoss / priorBase) * 100 : null;
+    } else {
+      // No previous-session quantity and no usable close: the position did not
+      // exist yesterday, so a day percentage is undefined. Say so.
+      todayGainLossPercent = null;
+    }
+
     // Pull family + maintenance from the canonical metadata table. Options
     // borrow the underlying's metadata where possible; unknowns fall through
     // as undefined and consumers should treat that as "no data".
@@ -287,6 +319,7 @@ export function enrichPositions(
       gainLossFromSchwab,
       portfolioPercent,
       todayGainLoss,
+      todayGainLossPercent,
       ...(meta
         ? {
             family: meta.family,

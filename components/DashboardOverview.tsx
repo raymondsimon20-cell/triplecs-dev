@@ -434,7 +434,9 @@ export function DashboardOverview({
                 const v = p.currentValue ?? 0;
                 const w = totalValue > 0 ? (v / totalValue) * 100 : 0;
                 const day = p.todayGainLoss ?? 0;
-                const dayP = v - day > 0 ? (day / (v - day)) * 100 : 0;
+                // Shared with PositionsView via enrichPositions — see
+                // lib/classify.ts. null = no position at yesterday's close.
+                const dayP = p.todayGainLossPercent;
                 return (
                   <tr key={p.instrument.symbol} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
                     <td className="px-4 py-2">
@@ -444,8 +446,8 @@ export function DashboardOverview({
                       </span>
                     </td>
                     <td className="px-2 py-2 text-right"><PlChip value={day} /></td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${day === 0 ? 'text-[#4a5070]' : plColor(day)}`}>
-                      {day === 0 ? '--' : signedPct(dayP)}
+                    <td className={`px-2 py-2 text-right tabular-nums ${day === 0 || dayP == null ? 'text-[#4a5070]' : plColor(day)}`}>
+                      {day === 0 || dayP == null ? '--' : signedPct(dayP)}
                     </td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(p.gainLoss)}`}>{signed$(p.gainLoss)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(p.gainLoss)}`}>{signedPct(p.gainLossPercent)}</td>

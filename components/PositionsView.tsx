@@ -57,8 +57,10 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
         // A short's basis is negative — the credit received — which is exactly
         // how Schwab reports it, so percentages need the magnitude.
         const cost = Math.abs(p.costBasis ?? 0);
-        const prior = v - day;
-        const dayPct = Math.abs(prior) > 0 ? (day / Math.abs(prior)) * 100 : 0;
+        // Day % is computed once in enrichPositions (lib/classify.ts) so this
+        // view and DashboardOverview cannot drift apart. null = the position
+        // did not exist at yesterday's close, so there is no day percentage.
+        const dayPct = p.todayGainLossPercent;
         const divs = dividendsBySymbol[sym] ?? 0;
         const realized = realizedBySymbol[sym] ?? 0;
         const ret  = gain + divs + realized;
@@ -79,7 +81,7 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
       qty:    (r) => r.qty,
       price:  (r) => r.price,
       day:    (r) => r.day,
-      dayPct: (r) => r.dayPct,
+      dayPct: (r) => r.dayPct ?? 0,
       gain:   (r) => r.gain,
       gainPct:(r) => r.gainPct,
       ret:    (r) => r.ret,
@@ -89,11 +91,20 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
   }, [rows, symbolFilter, sortRows]);
 
   const totals = useMemo(() => {
-    let day = 0, gain = 0, ret = 0, value = 0, cost = 0;
+    let day = 0, gain = 0, ret = 0, value = 0, cost = 0, dayBase = 0;
     // Sum the real per-position cost basis rather than back-solving it from
     // value minus gain, which broke on any row where gainPct happened to be 0.
-    for (const r of rows) { day += r.day; gain += r.gain; ret += r.ret; value += r.value; cost += r.cost; }
-    const dayPct  = value - day > 0 ? (day / (value - day)) * 100 : 0;
+    for (const r of rows) {
+      day += r.day; gain += r.gain; ret += r.ret; value += r.value; cost += r.cost;
+      // Portfolio Day % needs the sum of each position's OWN day base, not
+      // `value - day` for the book as a whole. The latter counts every dollar
+      // deployed today as if it had been at risk since yesterday's close,
+      // which drags the headline percentage toward zero on any day with buys.
+      dayBase += r.dayPct != null && r.dayPct !== 0 && r.day !== 0
+        ? Math.abs(r.day / (r.dayPct / 100))
+        : Math.abs(r.value - r.day);
+    }
+    const dayPct  = dayBase > 0 ? (day / dayBase) * 100 : 0;
     const gainPct = cost > 0 ? (gain / cost) * 100 : 0;
     const retPct  = cost > 0 ? (ret / cost) * 100 : 0;
     return { day, dayPct, gain, gainPct, ret, retPct, value, cost };
@@ -113,7 +124,8 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
     const header = ['Symbol', 'Shares', 'Price', 'Day Chg $', 'Day Chg %', 'Total Gain $', 'Total Gain %', 'Total Return $', 'Total Return %', 'Cost Basis', 'Value', '% Portfolio'];
     const pct = (v: number) => (totalValue > 0 ? (v / totalValue) * 100 : 0);
     const body = filtered.map((r) => [
-      r.sym, String(r.qty), r.price.toFixed(2), r.day.toFixed(2), r.dayPct.toFixed(2),
+      r.sym, String(r.qty), r.price.toFixed(2), r.day.toFixed(2),
+      r.dayPct == null ? '' : r.dayPct.toFixed(2),
       r.gain.toFixed(2), r.gainPct.toFixed(2), r.ret.toFixed(2), r.retPct.toFixed(2),
       r.cost.toFixed(2), r.value.toFixed(2), pct(r.value).toFixed(2),
     ]);
@@ -214,7 +226,7 @@ export function PositionsView({ positions, totalValue, lastUpdated, dividendsByS
                     <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{r.qty.toLocaleString('en-US', { minimumFractionDigits: 4, maximumFractionDigits: 4 })}</td>
                     <td className="px-2 py-2 text-right tabular-nums text-[#9aa2c0]">{fmt$(r.price)}</td>
                     <td className="px-2 py-2 text-right"><PlChip value={r.day} /></td>
-                    <td className={`px-2 py-2 text-right tabular-nums ${r.day === 0 ? 'text-[#4a5070]' : plColor(r.day)}`}>{r.day === 0 ? '--' : signedPct(r.dayPct)}</td>
+                    <td className={`px-2 py-2 text-right tabular-nums ${r.day === 0 || r.dayPct == null ? 'text-[#4a5070]' : plColor(r.day)}`}>{r.day === 0 || r.dayPct == null ? '--' : signedPct(r.dayPct)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.gain)}`}>{signed$(r.gain)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.gain)}`}>{signedPct(r.gainPct)}</td>
                     <td className={`px-2 py-2 text-right tabular-nums ${plColor(r.ret)}`}>{signed$(r.ret)}</td>

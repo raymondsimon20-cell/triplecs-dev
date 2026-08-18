@@ -782,12 +782,26 @@ export default function DashboardPage() {
       // stream price and the account endpoint's marketValue for the same
       // symbol at the same instant — not inferring it from a daily delta.
       const delta = newMarketValue - (p.marketValue ?? 0);
+      const snapshotDay = p.todayGainLoss ?? 0;
+      const newDay = snapshotDay + delta;
+      // Day % has to move with Day $ or the two columns contradict each other
+      // between 60s snapshot refreshes. The snapshot's (dollars, percent) pair
+      // implies the base it was measured against; reuse that base rather than
+      // re-deriving a percentage from marketValue, which is what produced the
+      // wrong numbers this field was introduced to fix (see lib/classify.ts).
+      const snapshotPct = p.todayGainLossPercent;
+      const dayBase =
+        snapshotPct != null && snapshotPct !== 0 && snapshotDay !== 0
+          ? Math.abs(snapshotDay / (snapshotPct / 100))
+          : null;
       return {
         ...p,
         marketValue:   newMarketValue,
         currentValue:  newMarketValue,
         gainLoss:      (p.gainLoss ?? 0) + delta,
-        todayGainLoss: (p.todayGainLoss ?? 0) + delta,
+        todayGainLoss: newDay,
+        todayGainLossPercent:
+          dayBase && dayBase > 0 ? (newDay / dayBase) * 100 : snapshotPct,
       };
     });
     // Signed sum, matching the totalValue convention in the accounts route:

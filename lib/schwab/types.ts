@@ -179,6 +179,13 @@ export interface EnrichedPosition extends SchwabPosition {
   portfolioPercent: number;
   todayGainLoss: number;
   /**
+   * Today's move as a percentage. `null` when no meaningful base exists —
+   * most importantly for a position OPENED today, which had no position at
+   * yesterday's close and therefore has no day percentage at all. Render
+   * null as an em dash, never as 0.
+   */
+  todayGainLossPercent: number | null;
+  /**
    * True when `gainLoss` came from Schwab's own open-P/L fields rather than
    * being derived from `averagePrice`. Derived values are approximations
    * (average cost, not tax lots).
