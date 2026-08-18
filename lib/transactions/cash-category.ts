@@ -14,7 +14,15 @@ const EXTERNAL_WITHDRAWAL = /\b(withdraw(?:al)?|wire out|ach disbursement|cash d
 
 /** Schwab description variants observed for borrowing charges. */
 export function isMarginInterestDescription(description: string): boolean {
-  return /margin.*(?:interest|fee)|(?:interest|fee).*margin|interest\s+charge|debit.*interest|interest.*debit/i.test(description);
+  return (
+    /margin.*(?:interest|fee)|(?:interest|fee).*margin|interest\s+charge|debit.*interest|interest.*debit/i.test(description) ||
+    /^\s*interest\s+\d{1,2}\/\d{1,2}\s*thru\s+\d{1,2}\/\d{1,2}\b/i.test(description)
+  );
+}
+
+/** Margin interest is a debit; the same word on a positive credit is income. */
+export function isMarginInterestCharge(description: string, amount: number): boolean {
+  return amount < 0 && isMarginInterestDescription(description);
 }
 
 /**

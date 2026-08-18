@@ -15,7 +15,7 @@ import { createClient, getAccountNumbers } from './client';
 import { getTokens } from '../storage';
 import type { CashFlowEvent } from '../storage';
 import type { SchwabTransaction } from './types';
-import { classifyCashMovement, isMarginInterestDescription } from '@/lib/transactions/cash-category';
+import { classifyCashMovement, isMarginInterestCharge } from '@/lib/transactions/cash-category';
 
 /**
  * Schwab transaction type strings the API exposes. Not exhaustive — these
@@ -60,7 +60,7 @@ function classifyTransaction(t: SchwabTransaction): ClassifiedFlow | null {
 
   // Margin interest charged to the account. This must precede generic journal
   // classification because Schwab can file the charge as a JOURNAL.
-  if (isMarginInterestDescription(desc)) {
+  if (isMarginInterestCharge(desc, rawAmount)) {
     return { direction: 'out', kind: 'interest', amount };
   }
 

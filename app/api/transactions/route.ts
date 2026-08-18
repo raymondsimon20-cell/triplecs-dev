@@ -4,7 +4,7 @@ import { requireAuth } from '@/lib/session';
 import { createClient, getAccountNumbers, getTransactions } from '@/lib/schwab/client';
 import { getTokens } from '@/lib/storage';
 import { isKnownContributionSource } from '@/lib/data/contribution-sources';
-import { classifyCashMovement, isMarginInterestDescription } from '@/lib/transactions/cash-category';
+import { classifyCashMovement, isMarginInterestCharge } from '@/lib/transactions/cash-category';
 import { findExpenseTag, getExpenseTagState } from '@/lib/transactions/expense-tags';
 
 export const dynamic = 'force-dynamic';
@@ -162,7 +162,7 @@ function normalize(t: any, accountHash: string, requestedType = ''): NormalizedT
     category = 'Contribution';
   } else if (txType === 'TRADE') {
     category = isOption ? 'Option Trade' : amount >= 0 ? 'Stock Sale' : 'Stock Purchase';
-  } else if (isMarginInterestDescription(desc)) {
+  } else if (isMarginInterestCharge(desc, amount)) {
     category = 'Margin Interest';
   } else if (txType.includes('DIVIDEND') || txType === 'DIVIDEND_OR_INTEREST') {
     if (!symbol && /interest/i.test(desc)) category = 'Interest';

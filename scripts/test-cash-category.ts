@@ -1,4 +1,4 @@
-import { classifyCashMovement, isMarginInterestDescription } from '../lib/transactions/cash-category';
+import { classifyCashMovement, isMarginInterestCharge, isMarginInterestDescription } from '../lib/transactions/cash-category';
 import { cashFlowDateKeys, summarizeCashFlow } from '../lib/cash-flow';
 import { findExpenseTag, normalizeExpenseDescription } from '../lib/transactions/expense-tags';
 
@@ -56,6 +56,10 @@ check('recognizes margin interest', isMarginInterestDescription('MARGIN INTEREST
 check('recognizes margin fee variant', isMarginInterestDescription('MONTHLY MARGIN FEE'), true);
 check('recognizes debit interest variant', isMarginInterestDescription('DEBIT INTEREST'), true);
 check('recognizes margin balance interest variant', isMarginInterestDescription('MARGIN BALANCE INTEREST ADJUSTMENT'), true);
+check('recognizes Schwab interest billing period', isMarginInterestDescription('INTEREST 06/29THRU 07/29'), true);
+check('recognizes spaced Schwab interest billing period', isMarginInterestDescription('INTEREST 6/29 THRU 7/29'), true);
+check('negative billing-period interest is a margin charge', isMarginInterestCharge('INTEREST 06/29THRU 07/29', -842.17), true);
+check('positive billing-period interest remains income', isMarginInterestCharge('INTEREST 06/29THRU 07/29', 12.45), false);
 check('does not call trade settlement interest', isMarginInterestDescription('INTERESTED PARTY TRADE SETTLEMENT'), false);
 
 console.log('\nCASH FLOW WINDOW AND TOTALS');
