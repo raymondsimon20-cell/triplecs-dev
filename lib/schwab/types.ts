@@ -185,6 +185,8 @@ export interface EnrichedPosition extends SchwabPosition {
    * null as an em dash, never as 0.
    */
   todayGainLossPercent: number | null;
+  /** Which source produced todayGainLoss. See enrichPositions in lib/classify.ts. */
+  todayGainLossSource: 'quote' | 'schwab' | 'none';
   /**
    * True when `gainLoss` came from Schwab's own open-P/L fields rather than
    * being derived from `averagePrice`. Derived values are approximations

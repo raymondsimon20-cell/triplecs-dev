@@ -146,12 +146,46 @@ export const PILLAR_LABELS: Record<PillarType, string> = {
   other:       'Other',
 };
 
+/**
+ * True during regular US equity market hours (Mon–Fri 09:30–16:00 ET).
+ *
+ * Quote-derived day change is only meaningful inside this window. Schwab's
+ * `lastPrice` carries extended-hours prints, and after 16:00 ET they roll
+ * `closePrice` forward to the session that just ended — so outside RTH the
+ * two operands stop describing the same interval and subtracting them is
+ * meaningless. Market holidays are not modelled; on a closed weekday the
+ * fallback is Schwab's own field, which is what the account page shows.
+ */
+function isRegularMarketHours(now: Date = new Date()): boolean {
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'America/New_York',
+    hour12: false,
+    weekday: 'short',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).formatToParts(now);
+  const get = (type: string) => parts.find((p) => p.type === type)?.value ?? '';
+
+  const weekday = get('weekday');
+  if (weekday === 'Sat' || weekday === 'Sun') return false;
+
+  // hour12:false yields '24' for midnight on some ICU builds.
+  const minutes = (Number(get('hour')) % 24) * 60 + Number(get('minute'));
+  return minutes >= 9 * 60 + 30 && minutes < 16 * 60;
+}
+
 // ─── Position enrichment ──────────────────────────────────────────────────────
 
 export function enrichPositions(
   positions: SchwabPosition[],
   quotes: SchwabQuotesResponse,
   totalPortfolioValue: number,
+  /**
+   * Clock used for the regular-hours gate on quote-derived day change.
+   * Injectable so the behaviour is deterministic under test — the gate is
+   * wall-clock dependent and cannot be expressed by fixture data alone.
+   */
+  now: Date = new Date(),
 ): EnrichedPosition[] {
   return positions.map((pos) => {
     const symbol = pos.instrument.symbol;
@@ -261,14 +295,65 @@ export function enrichPositions(
     // Quote math survives only as a fallback for positions where Schwab omits
     // the field. `netQty` is signed (short → negative), so a price rise
     // correctly registers as a loss, and `multiplier` applies the option ×100.
-    const quoteDerived = (quote && !quantityChangedToday)
-      ? (quote.lastPrice - quote.closePrice) * netQty * multiplier
-      : undefined;
+    // Two independent sources, cross-checked rather than one trusted blindly:
+    //
+    //   quote math    (lastPrice − closePrice) × netQty × multiplier
+    //   Schwab field  pos.currentDayProfitLoss
+    //
+    // Quote math is PRIMARY inside regular hours. Reconciled against a Schwab
+    // positions export on 2026-08-18: quote math reproduced the account page
+    // on 153 of 155 equity rows, residuals under $0.75 and explained by
+    // Schwab rounding its own published day %. `currentDayProfitLoss` was
+    // corrupt on nine — QDTE off by −$16,322, CRF +$10,584, CLM +$5,781, and
+    // six CEFs each off by almost exactly −$700 regardless of position size.
+    // Summed, the field put the book at −$5,484 against Schwab's −$1,565.
+    //
+    // This reverses the 2026-08-03 decision to trust the field outright, but
+    // keeps every constraint that decision was built on:
+    //   • Options are excluded from the quote fetch, so they have no quote and
+    //     still fall through to the field — that is why 2026-08-03's quote
+    //     total was wrong, and it stays fixed.
+    //   • `lastPrice` includes extended-hours prints and `closePrice` rolls
+    //     forward after 16:00 ET, so quote math is gated on regular hours.
+    //   • A position resized today has no single quantity both operands
+    //     describe, so it also falls through to the field.
+    let quoteDerived: number | undefined;
+    let quoteBase:    number | undefined;
+    if (
+      quote && quote.closePrice > 0 && quote.lastPrice > 0
+      && !quantityChangedToday && isRegularMarketHours(now)
+    ) {
+      quoteDerived = (quote.lastPrice - quote.closePrice) * netQty * multiplier;
+      quoteBase    = Math.abs(quote.closePrice * netQty * multiplier);
+    }
+
+    const schwabDay =
+      typeof pos.currentDayProfitLoss === 'number' && Number.isFinite(pos.currentDayProfitLoss)
+        ? pos.currentDayProfitLoss
+        : undefined;
+
+    const todayGainLossSource: 'quote' | 'schwab' | 'none' =
+      quoteDerived !== undefined ? 'quote'
+      : schwabDay  !== undefined ? 'schwab'
+      : 'none';
 
     const todayGainLoss =
-      typeof pos.currentDayProfitLoss === 'number' ? pos.currentDayProfitLoss
-      : quoteDerived !== undefined                 ? quoteDerived
+      quoteDerived !== undefined ? quoteDerived
+      : schwabDay  !== undefined ? schwabDay
       : 0;
+
+    // Surface disagreement instead of silently preferring one source. A field
+    // nobody was checking is what put $3,919 of phantom loss on the book.
+    if (quoteDerived !== undefined && schwabDay !== undefined) {
+      const tolerance = Math.max(25, Math.abs(currentValue) * 0.02);
+      if (Math.abs(quoteDerived - schwabDay) > tolerance) {
+        console.warn(
+          `[day-change] ${symbol}: quote math ${quoteDerived.toFixed(2)} vs ` +
+          `Schwab currentDayProfitLoss ${schwabDay.toFixed(2)} ` +
+          `on a ${currentValue.toFixed(2)} position — using quote math`,
+        );
+      }
+    }
 
     // ─── Today's gain/loss as a PERCENTAGE ──────────────────────────────────
     // PositionsView and DashboardOverview each used to derive this themselves
@@ -282,16 +367,17 @@ export function enrichPositions(
     //   • Opened a position today    → denominator collapses toward zero,
     //     percentage explodes into nonsense.
     //
-    // Precedence mirrors the todayGainLoss decision above: Schwab's own field
-    // is PRIMARY, so the dashboard agrees with the account page by
-    // construction rather than by coincidence. Quote math is the fallback for
-    // positions where Schwab omits it, and it uses YESTERDAY's close against
-    // YESTERDAY's quantity — the only base that survives an intraday resize.
+    // The percentage must come from the SAME source as the dollars, or the
+    // two columns contradict each other — the exact failure this field was
+    // added to fix. Quote math already knows its own base (yesterday's close
+    // × the unchanged quantity), so use it directly when that is the source.
     const prevNetQty = prevLongQty - prevShortQty;
     const schwabDayPct = pos.currentDayProfitLossPercentage;
 
     let todayGainLossPercent: number | null;
-    if (typeof schwabDayPct === 'number' && Number.isFinite(schwabDayPct)) {
+    if (todayGainLossSource === 'quote' && quoteBase !== undefined) {
+      todayGainLossPercent = quoteBase > 0 ? (todayGainLoss / quoteBase) * 100 : null;
+    } else if (typeof schwabDayPct === 'number' && Number.isFinite(schwabDayPct)) {
       todayGainLossPercent = schwabDayPct;
     } else if (prevNetQty !== 0 && quote && quote.closePrice > 0) {
       const priorBase = Math.abs(quote.closePrice * prevNetQty * multiplier);
@@ -320,6 +406,7 @@ export function enrichPositions(
       portfolioPercent,
       todayGainLoss,
       todayGainLossPercent,
+      todayGainLossSource,
       ...(meta
         ? {
             family: meta.family,
