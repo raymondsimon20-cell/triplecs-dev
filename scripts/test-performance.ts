@@ -35,9 +35,10 @@ const end = snap('2026-08-02T12:00:00.000Z', 210);
 const timed = computeTWR([start, end], [flow({ occurredAt: '2026-08-02T00:00:00.000Z' })]);
 close('mid-period flow uses Modified Dietz weighting', timed?.twrPct ?? NaN, 10 / 150);
 
-// Legacy/manual date-only entries use the conservative end-of-day convention.
+// Legacy/manual date-only entries belong to the period ending on that date.
+// The $100 deposit is removed from the $110 balance increase, leaving $10 gain.
 const dateOnly = computeTWR([start, end], [flow({ occurredAt: undefined })]);
-close('date-only flow after ending snapshot is not assigned early', dateOnly?.twrPct ?? NaN, 1.1);
+close('date-only flow is assigned to its calendar-date snapshot period', dateOnly?.twrPct ?? NaN, 0.1);
 
 const withGap = computeTWR([
   snap('2026-08-01T12:00:00.000Z', 100),

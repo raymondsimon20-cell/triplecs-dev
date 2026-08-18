@@ -223,6 +223,7 @@ function aggregatePortfolioSnapshots(snapshots) {
         positions: snapshots.flatMap((s) => s.positions),
         afwDollars: snapshots.reduce((sum, s) => sum + (s.afwDollars ?? 0), 0),
         ...(spyClose !== undefined ? { spyClose } : {}),
+        ...(snapshots.some((s) => s.synthetic) ? { synthetic: true } : {}),
     };
 }
 /**

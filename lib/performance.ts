@@ -109,11 +109,9 @@ const EXTERNAL_FLOW_KINDS: ReadonlySet<CashFlowEvent['kind']> = new Set([
   'journal',
 ]);
 
-function flowTimestamp(flow: CashFlowEvent): number {
+function exactFlowTimestamp(flow: CashFlowEvent): number | null {
   const exact = flow.occurredAt ? Date.parse(flow.occurredAt) : NaN;
-  if (Number.isFinite(exact)) return exact;
-  // Date-only manual and legacy events are conservatively treated as end-of-day.
-  return Date.parse(`${flow.date}T23:59:59.999Z`);
+  return Number.isFinite(exact) ? exact : null;
 }
 
 function flowsInPeriod(
@@ -124,15 +122,26 @@ function flowsInPeriod(
   let net = 0;
   let weighted = 0;
   const duration = endAt - startAt;
+  const startDay = toDayKey(startAt);
+  const endDay = toDayKey(endAt);
   for (const f of flows) {
     if (!EXTERNAL_FLOW_KINDS.has(f.kind)) continue;
-    const occurredAt = flowTimestamp(f);
-    if (!Number.isFinite(occurredAt) || occurredAt <= startAt || occurredAt > endAt) continue;
+    const exact = exactFlowTimestamp(f);
+    // Broker records captured before `occurredAt` shipped, plus manual entries,
+    // only identify a calendar day. Assign those to the snapshot period ending
+    // on that day. Treating them as 23:59 put them *after* a daytime snapshot,
+    // briefly counted the deposited balance as performance, and could wildly
+    // inflate the geometrically chained return.
+    if (exact == null) {
+      if (f.date <= startDay || f.date > endDay) continue;
+    } else if (exact <= startAt || exact > endAt) {
+      continue;
+    }
     const signed = f.direction === 'in' ? f.amount : -f.amount;
     net += signed;
-    // Modified Dietz weights capital by the fraction of the period for which
-    // it was invested. Date-only events land at period end and receive 0 weight.
-    weighted += signed * ((endAt - occurredAt) / duration);
+    // Exact events use Modified Dietz timing. With no timestamp, use the
+    // established end-of-period convention (zero denominator weight).
+    if (exact != null) weighted += signed * ((endAt - exact) / duration);
   }
   return { netFlow: net, weightedFlow: weighted };
 }
