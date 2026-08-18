@@ -628,6 +628,7 @@ export default function DashboardPage() {
   const [dividendsLoading, setDividendsLoading] = useState(true);
   const [transactions, setTransactions]         = useState<NormalizedTransaction[]>([]);
   const [transactionsLoading, setTransactionsLoading] = useState(true);
+  const [transactionsWarning, setTransactionsWarning] = useState<string | null>(null);
   const [aiPulseTrigger, setAiPulseTrigger] = useState(0);
   const [view, setView]                 = useState<View>('dashboard');
   /**
@@ -888,10 +889,20 @@ export default function DashboardPage() {
   const fetchTransactions = useCallback(async () => {
     try {
       setTransactionsLoading(true);
+      setTransactionsWarning(null);
       const res = await fetch('/api/transactions?days=365');
       if (!res.ok) return;
-      const data = await res.json() as { transactions?: NormalizedTransaction[] };
+      const data = await res.json() as {
+        transactions?: NormalizedTransaction[];
+        partial?: boolean;
+        failedSources?: string[];
+      };
       setTransactions(Array.isArray(data.transactions) ? data.transactions : []);
+      if (data.partial) {
+        setTransactionsWarning(
+          `${data.failedSources?.length ?? 0} transaction source${data.failedSources?.length === 1 ? '' : 's'} could not be refreshed. Totals may be incomplete.`,
+        );
+      }
       transactionsFetchedAt.current = Date.now();
     } catch { /* swallow */ }
     finally { setTransactionsLoading(false); }
@@ -1521,6 +1532,7 @@ export default function DashboardPage() {
             loading={transactionsLoading}
             windowDays={30}
             accountHash={isAll ? undefined : account.accountHash}
+            dataWarning={transactionsWarning}
           />
         )}
 

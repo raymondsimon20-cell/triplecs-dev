@@ -44,13 +44,20 @@ interface Props {
   loading:      boolean;
   windowDays?:  number;
   accountHash?: string;
+  dataWarning?: string | null;
 }
 
 const WINDOW_CHOICES = [30, 60, 90, 180, 365];
 
 const todayKey = () => localDateKey();
 
-export function CashFlowView({ transactions, loading, windowDays: initialWindow = 30, accountHash }: Props) {
+export function CashFlowView({
+  transactions,
+  loading,
+  windowDays: initialWindow = 30,
+  accountHash,
+  dataWarning,
+}: Props) {
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [windowDays, setWindowDays] = useState(initialWindow);
 
@@ -58,6 +65,8 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
   const [manual, setManual] = useState<ManualFlow[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [taggingId, setTaggingId] = useState<string | null>(null);
+  const [tagError, setTagError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [form, setForm] = useState({
     date: todayKey(), amount: '', direction: 'in' as 'in' | 'out', description: '',
@@ -127,6 +136,36 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
       if (!res.ok) setManual(prior);
     } catch {
       setManual(prior);
+    }
+  };
+
+  const tagAsExpense = async (transaction: NormalizedTransaction) => {
+    const expenseCategory = window.prompt('Expense category', 'Other')?.trim();
+    if (!expenseCategory) return;
+    const applyToFuture = window.confirm(
+      `Automatically mark future transfers named “${transaction.description}” as cash withdrawals?`,
+    );
+    setTaggingId(transaction.id);
+    setTagError(null);
+    try {
+      const res = await fetch('/api/transaction-tags', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          transactionId: transaction.id,
+          description: transaction.description,
+          expenseCategory,
+          applyToFuture,
+        }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body?.error ?? 'Could not save expense tag');
+      }
+      window.location.reload();
+    } catch (err) {
+      setTagError(err instanceof Error ? err.message : 'Could not save expense tag');
+      setTaggingId(null);
     }
   };
 
@@ -257,6 +296,12 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
           </button>
         </div>
       </div>
+
+      {dataWarning && (
+        <div role="status" className="rounded-lg border border-yellow-500/30 bg-yellow-500/10 px-3 py-2 text-xs text-yellow-200">
+          {dataWarning}
+        </div>
+      )}
 
       {/* Manual contribution entry */}
       {showForm && (
@@ -473,6 +518,11 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
             {categories.map((c) => <option key={c} value={c}>{c}</option>)}
           </select>
         </div>
+        {tagError && (
+          <div role="alert" className="border-b border-red-500/20 bg-red-500/10 px-4 py-2 text-[11px] text-red-300">
+            {tagError}
+          </div>
+        )}
         <div className="overflow-x-auto max-h-[480px] overflow-y-auto">
           <table className="w-full text-xs">
             <thead className="sticky top-0 bg-[#12151f]">
@@ -482,12 +532,13 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
                 <th className="text-left px-2 py-2.5 font-medium">Symbol</th>
                 <th className="text-left px-2 py-2.5 font-medium">Category</th>
                 <th className="text-right px-4 py-2.5 font-medium">Amount</th>
+                <th className="text-right px-4 py-2.5 font-medium">Action</th>
               </tr>
             </thead>
             <tbody>
-              {loading && <TableSkeleton cols={5} rows={6} />}
+              {loading && <TableSkeleton cols={6} rows={6} />}
               {!loading && tableTxns.length === 0 && (
-                <tr><td colSpan={5} className="px-4 py-6 text-[#4a5070]">No transactions in this window.</td></tr>
+                <tr><td colSpan={6} className="px-4 py-6 text-[#4a5070]">No transactions in this window.</td></tr>
               )}
               {tableTxns.map((t) => (
                 <tr key={t.id} className="border-b border-[#1a1e2e] hover:bg-[#161a28]">
@@ -508,8 +559,25 @@ export function CashFlowView({ transactions, loading, windowDays: initialWindow 
                         manual
                       </span>
                     )}
+                    {t.expenseTagged && t.expenseCategory && (
+                      <span className="ml-1 text-[9px] px-1 py-0.5 rounded bg-orange-500/15 text-orange-300">
+                        {t.expenseCategory}
+                      </span>
+                    )}
                   </td>
                   <td className={`px-4 py-2 text-right tabular-nums ${plColor(t.amount)}`}>{signed$(t.amount)}</td>
+                  <td className="px-4 py-2 text-right whitespace-nowrap">
+                    {t.category === 'Transfer' ? (
+                      <button
+                        type="button"
+                        onClick={() => void tagAsExpense(t)}
+                        disabled={taggingId === t.id}
+                        className="text-[10px] text-orange-300 hover:text-orange-200 disabled:opacity-50"
+                      >
+                        {taggingId === t.id ? 'Saving…' : 'Mark as cash withdrawal'}
+                      </button>
+                    ) : <span className="text-[#34394f]">—</span>}
+                  </td>
                 </tr>
               ))}
             </tbody>

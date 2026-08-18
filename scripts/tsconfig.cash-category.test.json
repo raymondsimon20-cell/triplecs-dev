@@ -16,6 +16,7 @@
   "include": [
     "./test-cash-category.ts",
     "../lib/transactions/cash-category.ts",
+    "../lib/transactions/expense-tags.ts",
     "../lib/cash-flow.ts",
     "../lib/data/contribution-sources.ts"
   ]

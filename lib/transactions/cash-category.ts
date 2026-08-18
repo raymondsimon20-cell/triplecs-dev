@@ -14,7 +14,7 @@ const EXTERNAL_WITHDRAWAL = /\b(withdraw(?:al)?|wire out|ach disbursement|cash d
 
 /** Schwab description variants observed for borrowing charges. */
 export function isMarginInterestDescription(description: string): boolean {
-  return /margin\s+(?:interest|fee)|interest\s+charge|debit\s+interest|interest\s+on\s+(?:debit|margin)/i.test(description);
+  return /margin.*(?:interest|fee)|(?:interest|fee).*margin|interest\s+charge|debit.*interest|interest.*debit/i.test(description);
 }
 
 /**

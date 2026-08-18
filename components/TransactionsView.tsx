@@ -24,6 +24,8 @@ export interface NormalizedTransaction {
   accountHash: string;
   /** Realized P/L for sales matched against the app's trade-history cost basis. */
   realizedPnl?: number;
+  expenseTagged?: boolean;
+  expenseCategory?: string;
 }
 
 const signed$ = (n: number) => (n >= 0 ? '+' : '-') + '$' + Math.abs(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });

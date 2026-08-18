@@ -5,6 +5,7 @@ import { createClient, getAccountNumbers, getTransactions } from '@/lib/schwab/c
 import { getTokens } from '@/lib/storage';
 import { isKnownContributionSource } from '@/lib/data/contribution-sources';
 import { classifyCashMovement, isMarginInterestDescription } from '@/lib/transactions/cash-category';
+import { findExpenseTag, getExpenseTagState } from '@/lib/transactions/expense-tags';
 
 export const dynamic = 'force-dynamic';
 
@@ -37,6 +38,8 @@ export interface NormalizedTransaction {
    * matching history entry exists — e.g. manual sales placed outside the app.
    */
   realizedPnl?: number;
+  expenseTagged?: boolean;
+  expenseCategory?: string;
 }
 
 // ─── Persistent ledger ────────────────────────────────────────────────────────
@@ -95,15 +98,26 @@ const CASH_SYMBOLS     = new Set(['CURRENCY_USD', 'USD', 'CASH']);
 const CASH_ASSET_TYPES = new Set(['CURRENCY', 'CASH_EQUIVALENT']);
 
 
-// Schwab transaction types worth showing in a ledger, split into two calls so
-// a rejected cash-movement type can't take the core TRADE/DIVIDEND data down
-// with it. MEMORANDUM and SMA_ADJUSTMENT are bookkeeping noise — skipped.
-const CORE_TYPES = 'TRADE,DIVIDEND_OR_INTEREST';
-const CASH_TYPES = 'ACH_RECEIPT,ACH_DISBURSEMENT,CASH_RECEIPT,CASH_DISBURSEMENT,ELECTRONIC_FUND,WIRE_IN,WIRE_OUT,JOURNAL';
+// Fetch one type per request. Schwab inconsistently accepts comma-separated
+// type lists: the batched cash request can return an error/empty result while
+// TRADE still works, which made every expense card read $0. Individual calls
+// also isolate failures so one unsupported type cannot erase the rest.
+const TRANSACTION_TYPES = [
+  'TRADE',
+  'DIVIDEND_OR_INTEREST',
+  'ACH_RECEIPT',
+  'ACH_DISBURSEMENT',
+  'CASH_RECEIPT',
+  'CASH_DISBURSEMENT',
+  'ELECTRONIC_FUND',
+  'WIRE_IN',
+  'WIRE_OUT',
+  'JOURNAL',
+] as const;
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
-function normalize(t: any, accountHash: string): NormalizedTransaction | null {
-  const txType: string = (t.type ?? t.activityType ?? t.transactionType ?? '').toUpperCase();
+function normalize(t: any, accountHash: string, requestedType = ''): NormalizedTransaction | null {
+  const txType: string = (t.type ?? t.activityType ?? t.transactionType ?? requestedType).toUpperCase();
   const desc:   string = t.description ?? t.transactionDescription ?? '';
   const dateStr: string = t.time ?? t.transactionDate ?? t.tradeDate ?? t.settlementDate ?? '';
   const date = dateStr ? dateStr.split('T')[0] : '';
@@ -206,20 +220,28 @@ export async function GET(req: Request) {
     const freshTokens = await getTokens();
     if (!freshTokens) return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
 
+    const failedSources: string[] = [];
     const perAccount = await Promise.all(
       scoped.map(async ({ hashValue }) => {
-        const [core, cash] = await Promise.all([
-          getTransactions(freshTokens, hashValue, startDate, endDate, CORE_TYPES).catch((err) => {
-            console.warn(`[Transactions] core fetch failed for ${hashValue.slice(0, 6)}…:`, err);
-            return [];
+        const byType = await Promise.all(
+          TRANSACTION_TYPES.map(async (requestedType) => {
+            try {
+              const rows = await getTransactions(
+                freshTokens, hashValue, startDate, endDate, requestedType,
+              );
+              return rows.map((row) => ({ row, requestedType }));
+            } catch (err) {
+              failedSources.push(`${hashValue.slice(0, 6)}:${requestedType}`);
+              console.warn(
+                `[Transactions] ${requestedType} fetch failed for ${hashValue.slice(0, 6)}…:`,
+                err,
+              );
+              return [];
+            }
           }),
-          getTransactions(freshTokens, hashValue, startDate, endDate, CASH_TYPES).catch((err) => {
-            console.warn(`[Transactions] cash fetch failed for ${hashValue.slice(0, 6)}…:`, err);
-            return [];
-          }),
-        ]);
-        return [...core, ...cash]
-          .map((t) => normalize(t, hashValue))
+        );
+        return byType.flat()
+          .map(({ row, requestedType }) => normalize(row, hashValue, requestedType))
           .filter((t): t is NormalizedTransaction => t !== null);
       }),
     );
@@ -269,8 +291,30 @@ export async function GET(req: Request) {
       ? transactions.filter((t) => t.accountHash === accountHashParam)
       : transactions;
 
-    const sorted = [...scopedOut].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
-    return NextResponse.json({ transactions: sorted, days });
+    let taggedOut = scopedOut;
+    try {
+      const tagState = await getExpenseTagState();
+      taggedOut = scopedOut.map((transaction) => {
+        const tag = findExpenseTag(transaction.id, transaction.description, tagState);
+        if (!tag || transaction.category !== 'Transfer') return transaction;
+        return {
+          ...transaction,
+          category: 'Withdrawal',
+          expenseTagged: true,
+          expenseCategory: tag.expenseCategory,
+        };
+      });
+    } catch (err) {
+      console.warn('[Transactions] expense tags unavailable:', err);
+    }
+
+    const sorted = [...taggedOut].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0));
+    return NextResponse.json({
+      transactions: sorted,
+      days,
+      partial: failedSources.length > 0,
+      failedSources,
+    });
   } catch (err) {
     console.error('[Transactions API]', err);
     return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 });

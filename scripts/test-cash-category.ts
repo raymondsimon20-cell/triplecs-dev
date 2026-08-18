@@ -1,5 +1,6 @@
 import { classifyCashMovement, isMarginInterestDescription } from '../lib/transactions/cash-category';
 import { cashFlowDateKeys, summarizeCashFlow } from '../lib/cash-flow';
+import { findExpenseTag, normalizeExpenseDescription } from '../lib/transactions/expense-tags';
 
 let failures = 0;
 
@@ -54,6 +55,7 @@ check(
 check('recognizes margin interest', isMarginInterestDescription('MARGIN INTEREST CHARGE'), true);
 check('recognizes margin fee variant', isMarginInterestDescription('MONTHLY MARGIN FEE'), true);
 check('recognizes debit interest variant', isMarginInterestDescription('DEBIT INTEREST'), true);
+check('recognizes margin balance interest variant', isMarginInterestDescription('MARGIN BALANCE INTEREST ADJUSTMENT'), true);
 check('does not call trade settlement interest', isMarginInterestDescription('INTERESTED PARTY TRADE SETTLEMENT'), false);
 
 console.log('\nCASH FLOW WINDOW AND TOTALS');
@@ -78,6 +80,36 @@ check('stock-sale proceeds are disclosed separately', summary.stockSaleProceeds,
 check('purchases remain capital deployed', summary.deployed, 9_080);
 check('expenses include withdrawals and margin interest only', summary.expenses, 100);
 check('net operating uses the corrected income model', summary.netOperating, 255);
+
+console.log('\nTRANSFER EXPENSE TAGS');
+check(
+  'normalization removes changing reference numbers',
+  normalizeExpenseDescription('Acme Rent REF: 123456789'),
+  'ACME RENT',
+);
+check(
+  'same-name rule tags a future transfer',
+  findExpenseTag('future-id', 'Acme Rent REF: 999999999', {
+    overrides: {},
+    rules: [{
+      id: 'rule-1',
+      normalizedDescription: 'ACME RENT',
+      expenseCategory: 'Housing',
+      createdAt: '2026-08-18T00:00:00.000Z',
+    }],
+  })?.expenseCategory,
+  'Housing',
+);
+check(
+  'one-off override tags its exact transaction',
+  findExpenseTag('txn-1', 'Anything', {
+    rules: [],
+    overrides: {
+      'txn-1': { transactionId: 'txn-1', expenseCategory: 'Other', createdAt: '2026-08-18T00:00:00.000Z' },
+    },
+  })?.expenseCategory,
+  'Other',
+);
 
 if (failures > 0) {
   console.error(`\n${failures} cash-category check(s) failed.`);
