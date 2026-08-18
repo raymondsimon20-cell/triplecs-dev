@@ -1,0 +1,20 @@
+{
+  "extends": "../tsconfig.json",
+  "compilerOptions": {
+    "module": "commonjs",
+    "moduleResolution": "node",
+    "target": "es2020",
+    "outDir": "./dist",
+    "rootDir": "..",
+    "noEmit": false,
+    "isolatedModules": false,
+    "paths": { "@/*": ["../*"] },
+    "skipLibCheck": true
+  },
+  "include": [
+    "./test-performance.ts",
+    "../lib/performance.ts",
+    "../lib/portfolio/fetch.ts",
+    "../lib/storage.ts"
+  ]
+}

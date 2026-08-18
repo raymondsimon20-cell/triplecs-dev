@@ -228,11 +228,8 @@ export async function getSnapshotHistory(limit = 90, accountHash?: string): Prom
   const store  = getStore('portfolio-snapshots');
   const prefix = accountHash ? `account:${accountHash}:day-` : 'day-';
   const { blobs } = await store.list({ prefix });
-  if (blobs.length === 0 && accountHash) {
-    // No per-account history yet — fall back to household snapshots so
-    // performance panels show *something* instead of an empty chart.
-    return getSnapshotHistory(limit);
-  }
+  // Never substitute household history for a specific account. A temporarily
+  // empty series is more honest than displaying another scope's return.
   const sorted = blobs
     .map((b) => b.key)
     .sort()          // lexicographic = chronological for YYYY-MM-DD keys
@@ -254,6 +251,63 @@ export async function getSnapshotHistory(limit = 90, accountHash?: string): Prom
     );
 }
 
+/** Combine same-day account snapshots into an honest household snapshot. */
+export function aggregatePortfolioSnapshots(snapshots: PortfolioSnapshot[]): PortfolioSnapshot {
+  const totalValue = snapshots.reduce((sum, s) => sum + s.totalValue, 0);
+  const equities = snapshots.map((s) => s.equity);
+  const margins = snapshots.map((s) => s.marginBalance);
+  const pillarTotals = new Map<string, number>();
+  for (const snapshot of snapshots) {
+    for (const pillar of snapshot.pillarSummary) {
+      pillarTotals.set(pillar.pillar, (pillarTotals.get(pillar.pillar) ?? 0) + pillar.totalValue);
+    }
+  }
+  const spyClose = snapshots.find((s) => typeof s.spyClose === 'number')?.spyClose;
+  return {
+    savedAt: Math.max(...snapshots.map((s) => s.savedAt)),
+    totalValue,
+    equity: equities.every((v): v is number => typeof v === 'number')
+      ? equities.reduce((sum, v) => sum + v, 0)
+      : null,
+    marginBalance: margins.every((v): v is number => typeof v === 'number')
+      ? margins.reduce((sum, v) => sum + v, 0)
+      : null,
+    marginUtilizationPct: totalValue > 0
+      ? (margins.reduce<number>((sum, v) => sum + Math.abs(v ?? 0), 0) / totalValue) * 100
+      : 0,
+    pillarSummary: [...pillarTotals].map(([pillar, value]) => ({
+      pillar, totalValue: value,
+      portfolioPercent: totalValue > 0 ? (value / totalValue) * 100 : 0,
+    })),
+    positions: snapshots.flatMap((s) => s.positions),
+    afwDollars: snapshots.reduce((sum, s) => sum + (s.afwDollars ?? 0), 0),
+    ...(spyClose !== undefined ? { spyClose } : {}),
+    ...(snapshots.some((s) => s.synthetic) ? { synthetic: true } : {}),
+  };
+}
+
+/**
+ * Rebuild shared household day records from per-account history. Only dates
+ * present for every account are written; partial days would recreate the bug
+ * this function is intended to repair.
+ */
+export async function rebuildHouseholdSnapshotHistory(accountHashes: string[], limit = 365): Promise<number> {
+  if (accountHashes.length === 0) return 0;
+  const histories = await Promise.all(accountHashes.map((hash) => getSnapshotHistory(limit, hash)));
+  const perAccountDays = histories.map((history) => new Map(
+    history.map((snapshot) => [new Date(snapshot.savedAt).toISOString().slice(0, 10), snapshot]),
+  ));
+  const commonDays = [...perAccountDays[0].keys()].filter((day) =>
+    perAccountDays.every((records) => records.has(day)),
+  );
+  const store = getStore('portfolio-snapshots');
+  await Promise.all(commonDays.map((day) => {
+    const snapshots = perAccountDays.map((records) => records.get(day)!);
+    return store.setJSON(`day-${day}`, aggregatePortfolioSnapshots(snapshots));
+  }));
+  return commonDays.length;
+}
+
 // ─── Cash-flow events (for TWR calculation) ──────────────────────────────────
 
 /**
@@ -269,6 +323,8 @@ export async function getSnapshotHistory(limit = 90, accountHash?: string): Prom
 export interface CashFlowEvent {
   id: string;                 // stable id from Schwab activityId, or synthetic
   date: string;               // YYYY-MM-DD (event date, normalised)
+  /** Exact broker timestamp when available. Legacy/manual events remain date-only. */
+  occurredAt?: string;
   direction: 'in' | 'out';
   amount: number;             // positive number, USD
   kind: 'deposit' | 'withdrawal' | 'journal' | 'dividend' | 'interest' | 'fee' | 'other';
@@ -298,7 +354,43 @@ export async function getCashFlows(accountHash?: string): Promise<CashFlowEvent[
   const data = await getStore('cash-flows').get(CASH_FLOWS_KEY, { type: 'json' });
   const all  = Array.isArray(data) ? (data as CashFlowEvent[]) : [];
   if (!accountHash) return all;
-  return all.filter((e) => !e.accountHash || e.accountHash === accountHash);
+  // Untagged legacy events cannot safely be attributed to an individual
+  // account. Including them in every account duplicated the same transfer
+  // across every per-account return. They remain available to household TWR.
+  return all.filter((e) => e.accountHash === accountHash);
+}
+
+/**
+ * Replace Schwab-derived events in a scanned date window with the freshly
+ * classified broker result. This heals historical classifier mistakes (for
+ * example trades once stored as withdrawals or margin interest once treated
+ * as external cash) while preserving every manual entry.
+ */
+export async function reconcileSchwabCashFlows(
+  events: CashFlowEvent[],
+  startDate: string,
+  endDate: string,
+): Promise<{ removed: number; written: number }> {
+  const existing = await getCashFlows();
+  const retained = existing.filter((e) =>
+    e.source !== 'schwab' || e.date < startDate || e.date > endDate
+  );
+  const removed = existing.length - retained.length;
+
+  const byKey = new Map<string, CashFlowEvent>();
+  for (const event of events) {
+    const key = event.activityId
+      ? `${event.accountHash ?? ''}|activity:${event.activityId}`
+      : `${event.accountHash ?? ''}|id:${event.id}`;
+    byKey.set(key, event);
+  }
+  const merged = [...retained, ...byKey.values()].sort((a, b) =>
+    (a.occurredAt ?? `${a.date}T23:59:59.999Z`).localeCompare(
+      b.occurredAt ?? `${b.date}T23:59:59.999Z`,
+    )
+  );
+  await getStore('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
+  return { removed, written: byKey.size };
 }
 
 /**

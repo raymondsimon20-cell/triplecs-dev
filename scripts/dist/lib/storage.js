@@ -17,7 +17,10 @@ exports.savePortfolioSnapshot = savePortfolioSnapshot;
 exports.savePerAccountSnapshot = savePerAccountSnapshot;
 exports.getLatestPortfolioSnapshot = getLatestPortfolioSnapshot;
 exports.getSnapshotHistory = getSnapshotHistory;
+exports.aggregatePortfolioSnapshots = aggregatePortfolioSnapshots;
+exports.rebuildHouseholdSnapshotHistory = rebuildHouseholdSnapshotHistory;
 exports.getCashFlows = getCashFlows;
+exports.reconcileSchwabCashFlows = reconcileSchwabCashFlows;
 exports.appendCashFlows = appendCashFlows;
 exports.addManualCashFlow = addManualCashFlow;
 exports.deleteManualCashFlow = deleteManualCashFlow;
@@ -171,11 +174,8 @@ async function getSnapshotHistory(limit = 90, accountHash) {
     const store = (0, blobs_1.getStore)('portfolio-snapshots');
     const prefix = accountHash ? `account:${accountHash}:day-` : 'day-';
     const { blobs } = await store.list({ prefix });
-    if (blobs.length === 0 && accountHash) {
-        // No per-account history yet — fall back to household snapshots so
-        // performance panels show *something* instead of an empty chart.
-        return getSnapshotHistory(limit);
-    }
+    // Never substitute household history for a specific account. A temporarily
+    // empty series is more honest than displaying another scope's return.
     const sorted = blobs
         .map((b) => b.key)
         .sort() // lexicographic = chronological for YYYY-MM-DD keys
@@ -192,6 +192,57 @@ async function getSnapshotHistory(limit = 90, accountHash) {
         ? { ...r, equity: null, marginBalance: null, marginUtilizationPct: null }
         : r);
 }
+/** Combine same-day account snapshots into an honest household snapshot. */
+function aggregatePortfolioSnapshots(snapshots) {
+    const totalValue = snapshots.reduce((sum, s) => sum + s.totalValue, 0);
+    const equities = snapshots.map((s) => s.equity);
+    const margins = snapshots.map((s) => s.marginBalance);
+    const pillarTotals = new Map();
+    for (const snapshot of snapshots) {
+        for (const pillar of snapshot.pillarSummary) {
+            pillarTotals.set(pillar.pillar, (pillarTotals.get(pillar.pillar) ?? 0) + pillar.totalValue);
+        }
+    }
+    const spyClose = snapshots.find((s) => typeof s.spyClose === 'number')?.spyClose;
+    return {
+        savedAt: Math.max(...snapshots.map((s) => s.savedAt)),
+        totalValue,
+        equity: equities.every((v) => typeof v === 'number')
+            ? equities.reduce((sum, v) => sum + v, 0)
+            : null,
+        marginBalance: margins.every((v) => typeof v === 'number')
+            ? margins.reduce((sum, v) => sum + v, 0)
+            : null,
+        marginUtilizationPct: totalValue > 0
+            ? (margins.reduce((sum, v) => sum + Math.abs(v ?? 0), 0) / totalValue) * 100
+            : 0,
+        pillarSummary: [...pillarTotals].map(([pillar, value]) => ({
+            pillar, totalValue: value,
+            portfolioPercent: totalValue > 0 ? (value / totalValue) * 100 : 0,
+        })),
+        positions: snapshots.flatMap((s) => s.positions),
+        afwDollars: snapshots.reduce((sum, s) => sum + (s.afwDollars ?? 0), 0),
+        ...(spyClose !== undefined ? { spyClose } : {}),
+    };
+}
+/**
+ * Rebuild shared household day records from per-account history. Only dates
+ * present for every account are written; partial days would recreate the bug
+ * this function is intended to repair.
+ */
+async function rebuildHouseholdSnapshotHistory(accountHashes, limit = 365) {
+    if (accountHashes.length === 0)
+        return 0;
+    const histories = await Promise.all(accountHashes.map((hash) => getSnapshotHistory(limit, hash)));
+    const perAccountDays = histories.map((history) => new Map(history.map((snapshot) => [new Date(snapshot.savedAt).toISOString().slice(0, 10), snapshot])));
+    const commonDays = [...perAccountDays[0].keys()].filter((day) => perAccountDays.every((records) => records.has(day)));
+    const store = (0, blobs_1.getStore)('portfolio-snapshots');
+    await Promise.all(commonDays.map((day) => {
+        const snapshots = perAccountDays.map((records) => records.get(day));
+        return store.setJSON(`day-${day}`, aggregatePortfolioSnapshots(snapshots));
+    }));
+    return commonDays.length;
+}
 const CASH_FLOWS_KEY = 'log';
 /**
  * Read every recorded cash flow. With an `accountHash`, returns only events
@@ -204,7 +255,31 @@ async function getCashFlows(accountHash) {
     const all = Array.isArray(data) ? data : [];
     if (!accountHash)
         return all;
-    return all.filter((e) => !e.accountHash || e.accountHash === accountHash);
+    // Untagged legacy events cannot safely be attributed to an individual
+    // account. Including them in every account duplicated the same transfer
+    // across every per-account return. They remain available to household TWR.
+    return all.filter((e) => e.accountHash === accountHash);
+}
+/**
+ * Replace Schwab-derived events in a scanned date window with the freshly
+ * classified broker result. This heals historical classifier mistakes (for
+ * example trades once stored as withdrawals or margin interest once treated
+ * as external cash) while preserving every manual entry.
+ */
+async function reconcileSchwabCashFlows(events, startDate, endDate) {
+    const existing = await getCashFlows();
+    const retained = existing.filter((e) => e.source !== 'schwab' || e.date < startDate || e.date > endDate);
+    const removed = existing.length - retained.length;
+    const byKey = new Map();
+    for (const event of events) {
+        const key = event.activityId
+            ? `${event.accountHash ?? ''}|activity:${event.activityId}`
+            : `${event.accountHash ?? ''}|id:${event.id}`;
+        byKey.set(key, event);
+    }
+    const merged = [...retained, ...byKey.values()].sort((a, b) => (a.occurredAt ?? `${a.date}T23:59:59.999Z`).localeCompare(b.occurredAt ?? `${b.date}T23:59:59.999Z`));
+    await (0, blobs_1.getStore)('cash-flows').setJSON(CASH_FLOWS_KEY, merged);
+    return { removed, written: byKey.size };
 }
 /**
  * Append new cash-flow events. De-dupes three ways so the daily sync is

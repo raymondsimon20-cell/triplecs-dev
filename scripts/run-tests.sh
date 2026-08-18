@@ -22,4 +22,8 @@ echo
 ./node_modules/.bin/tsc --project scripts/tsconfig.cash-category.test.json || exit 1
 node scripts/dist/scripts/test-cash-category.js || fail=1
 
+echo
+./node_modules/.bin/tsc --project scripts/tsconfig.performance.test.json || exit 1
+node scripts/dist/scripts/test-performance.js || fail=1
+
 exit $fail

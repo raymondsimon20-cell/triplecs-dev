@@ -23,6 +23,7 @@ interface PerfPayload {
     /** Dollar P/L over the same window, net of external flows. Optional so a
      *  response predating the field degrades to percent-only. */
     gainDollars?: number;
+    periods: Array<{ startAt: number; endAt: number; returnPct: number }>;
   } | null;
   attribution: Array<{ pillar: string; contributionPp: number; returnPct: number; avgWeightPct: number }> | null;
   alpha: { portfolioReturnPct: number; spyReturnPct: number; alphaPp: number } | null;
@@ -173,25 +174,27 @@ export function PerformancePanel({ accountHash }: PerformancePanelProps = {}) {
     );
   }
 
-  // Build the chart series. TWR/SPY are computed cumulatively from each snapshot.
-  // (For a simple visualization we use snapshot-relative simple return — the
-  // panel's pace gauge already shows the cash-flow-adjusted TWR for the headline.)
-  //
-  // We use `equity` (positions + cash − margin debt) so cash dividends and
-  // interest are reflected. This matches the basis used by computeTWR.
-  // Synthetic snapshots have equity == totalValue (positions only); they
-  // remain on the chart faded but won't perfectly stitch with real points.
+  // Build the portfolio line from the same cash-flow-adjusted periods as the
+  // headline. Previously this was raw balance growth, so deposits moved the
+  // chart while being correctly removed from the card above it.
   const sorted = [...data.snapshots].sort((a, b) => a.savedAt - b.savedAt);
-  const baseValue = sorted[0].equity;
   const baseSpy = sorted.find((s) => typeof s.spyClose === 'number' && s.spyClose! > 0)?.spyClose;
   const startTime = sorted[0].savedAt;
+  const cumulativeByEnd = new Map<number, number>();
+  let chained = 1;
+  for (const period of data.twr?.periods ?? []) {
+    chained *= 1 + period.returnPct;
+    cumulativeByEnd.set(period.endAt, (chained - 1) * 100);
+  }
+  const firstMeasuredStart = data.twr?.periods[0]?.startAt ?? null;
 
   const chartData: ChartPoint[] = sorted.map((s) => {
     const days = (s.savedAt - startTime) / (24 * 60 * 60 * 1000);
     const targetCum = (Math.pow(1.40, days / 365) - 1) * 100;
     return {
       date: new Date(s.savedAt).toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
-      twrPct: baseValue > 0 ? (s.equity / baseValue - 1) * 100 : 0,
+      twrPct: cumulativeByEnd.get(s.savedAt)
+        ?? (!s.synthetic && s.savedAt === firstMeasuredStart ? 0 : null),
       spyPct: baseSpy && s.spyClose ? (s.spyClose / baseSpy - 1) * 100 : null,
       targetPct: targetCum,
       synthetic: Boolean(s.synthetic),

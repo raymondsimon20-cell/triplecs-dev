@@ -11,8 +11,8 @@ import {
   getCornerstoneSnapshot,
   savePortfolioSnapshot,
   savePerAccountSnapshot,
-  appendCashFlows,
-  getCashFlows,
+  reconcileSchwabCashFlows,
+  rebuildHouseholdSnapshotHistory,
   getTokens,
 } from '../../lib/storage';
 import type { StoredAlert } from '../../lib/storage';
@@ -70,23 +70,27 @@ async function captureDailySnapshot(): Promise<void> {
         }
       }),
     );
+    const rebuilt = await rebuildHouseholdSnapshotHistory(accounts.map((a) => a.hashValue));
     console.log(`[daily-alert] Snapshot saved (totalValue=${states.reduce((s, x) => s + x.totalValue, 0)}, spy=${spyClose ?? 'n/a'}, perAccount=${states.length})`);
+    console.log(`[daily-alert] Rebuilt ${rebuilt} complete household history days`);
   } catch (err) {
     console.error('[daily-alert] snapshot capture failed:', err);
   }
 
-  // Sync cash flows since the last recorded event (or last 7 days if first run).
+  // Re-scan the full retained performance window. Replacing broker events in
+  // this window heals old classification mistakes instead of merely refusing
+  // to append their corrected versions because the activity id already exists.
   try {
-    const existing = await getCashFlows();
-    const lastDate = existing.length > 0 ? existing[existing.length - 1].date : null;
-    const start = lastDate
-      ? new Date(`${lastDate}T00:00:00.000Z`).toISOString()
-      : new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const start = new Date(Date.now() - 370 * 24 * 60 * 60 * 1000).toISOString();
     const end  = new Date().toISOString();
 
     const events = await fetchCashFlows(start, end);
-    const added  = await appendCashFlows(events);
-    console.log(`[daily-alert] Cash flows: scanned ${events.length}, added ${added} new`);
+    const result = await reconcileSchwabCashFlows(
+      events,
+      start.slice(0, 10),
+      end.slice(0, 10),
+    );
+    console.log(`[daily-alert] Cash flows: scanned ${events.length}, replaced ${result.removed}, wrote ${result.written}`);
   } catch (err) {
     console.error('[daily-alert] cash-flow sync failed:', err);
   }

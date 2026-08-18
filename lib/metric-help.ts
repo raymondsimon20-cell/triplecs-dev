@@ -179,7 +179,7 @@ export const METRIC_HELP: Record<string, MetricHelp> = {
   // ─── Performance panel ────────────────────────────────────────────────────
   'Cumulative TWR': {
     what: 'Total time-weighted return over your snapshot history. The honest measure of how the strategy performed, with your own deposits taken out.',
-    how:  "Each period's return is (end − contributions) ÷ start − 1, chained geometrically. Uses equity rather than position value so dividends count as return and ex-dividend price drops don't read as losses. Synthetic backfilled days are excluded.",
+    how:  "Each period uses Modified Dietz, weighting external cash by how long it was invested, then chains the results geometrically. Uses equity rather than position value so dividends count as return and ex-dividend price drops don't read as losses. Synthetic backfilled days are excluded.",
   },
   'Annualized vs 40% target': {
     what: 'Your return scaled to a yearly rate, next to the 40% CAGR the plan targets.',

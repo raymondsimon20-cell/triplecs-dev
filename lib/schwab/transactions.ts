@@ -101,6 +101,13 @@ function normalizeDate(t: SchwabTransaction): string {
   return raw.split('T')[0] || new Date().toISOString().slice(0, 10);
 }
 
+function normalizeTimestamp(t: SchwabTransaction): string | undefined {
+  const raw = t.time ?? t.transactionDate ?? t.tradeDate ?? t.settlementDate;
+  if (!raw || !raw.includes('T')) return undefined;
+  const parsed = Date.parse(raw);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : undefined;
+}
+
 /**
  * Fetch all cash-flow events across every linked account in [start, end].
  * `start` and `end` must be ISO datetimes (Schwab rejects bare dates).
@@ -147,6 +154,7 @@ export async function fetchCashFlows(start: string, end: string): Promise<CashFl
         events.push({
           id,
           date,
+          occurredAt: normalizeTimestamp(t),
           direction: classified.direction,
           amount: classified.amount,
           kind: classified.kind,

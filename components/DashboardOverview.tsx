@@ -195,9 +195,9 @@ export function DashboardOverview({
           <span className="block space-y-2">
             <span className="block font-semibold text-white">Time-weighted return</span>
             <span className="block text-[#7c82a0]">
-              Each period&apos;s return is <span className="text-[#c8cde0]">(end − contributions) ÷ start − 1</span>,
-              chained together. Removing contributions is what stops a deposit
-              from reading as performance.
+              Each period uses a cash-flow-adjusted Modified Dietz return, then
+              periods are chained together. Exact broker timestamps weight a
+              contribution by how long it was invested.
             </span>
             <span className="block space-y-1 border-t border-[#252840] pt-2">
               {twr.startDate && twr.endDate && (

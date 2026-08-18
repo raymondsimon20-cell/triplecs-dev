@@ -7,7 +7,7 @@ import {
   savePortfolioSnapshot, savePerAccountSnapshot,
 } from '@/lib/storage';
 import { enrichPositions, summarizeByPillar, checkMarginRules, getTaxHarvestCandidates } from '@/lib/classify';
-import { buildSnapshot } from '@/lib/portfolio/fetch';
+import { buildSnapshot, type FetchedAccountState } from '@/lib/portfolio/fetch';
 import type { SchwabAccountWrapper } from '@/lib/schwab/types';
 
 export const dynamic = 'force-dynamic';
@@ -160,13 +160,10 @@ export async function GET(req: Request) {
         // Cache for 60 seconds
         await cachePortfolio(acct.accountNumber, result);
 
-        // Persist snapshot for AI history and proactive alerts (fire-and-forget).
-        // Writes both:
-        //   • A household-level snapshot at 'latest' / 'day-…' (legacy path
-        //     consumed by performance / chart / breaker fallback).
-        //   • A per-account snapshot at 'account:{hash}:…' so per-account
-        //     performance panels and per-account circuit breakers can read
-        //     this account's history independently of the household sum.
+        // Persist the account-scoped snapshot. The household snapshot is built
+        // once, after every account has resolved; writing this single-account
+        // value into the shared key made "All Accounts" depend on which async
+        // request happened to finish last.
         const marginBal = Math.abs(acct.currentBalances.marginBalance ?? 0);
         const snap = buildSnapshot([{
           accountNumber: acct.accountNumber,
@@ -180,7 +177,6 @@ export async function GET(req: Request) {
           pillarSummary,
           positions: enrichedPositions,
         }]);
-        savePortfolioSnapshot(snap).catch((e) => console.warn('[snapshot] save failed:', e));
         const acctHash = accountNumMap[acct.accountNumber];
         if (acctHash) {
           savePerAccountSnapshot(acctHash, snap)
@@ -190,6 +186,30 @@ export async function GET(req: Request) {
         return result;
       }))
     );
+
+    if (!accountHash && enriched.length > 0) {
+      const householdStates = (enriched as Array<{
+        accountNumber: string;
+        totalValue: number;
+        equity: number;
+        marginBalance: number;
+        availableForWithdrawal: number;
+        pillarSummary: FetchedAccountState['pillarSummary'];
+        positions: FetchedAccountState['positions'];
+      }>).map((acct) => ({
+        accountNumber: acct.accountNumber,
+        totalValue: acct.totalValue,
+        equity: acct.equity,
+        marginBalance: Math.abs(acct.marginBalance ?? 0),
+        marginUtilizationPct: acct.totalValue > 0
+          ? (Math.abs(acct.marginBalance ?? 0) / acct.totalValue) * 100
+          : 0,
+        afwDollars: acct.availableForWithdrawal ?? 0,
+        pillarSummary: acct.pillarSummary,
+        positions: acct.positions,
+      }));
+      await savePortfolioSnapshot(buildSnapshot(householdStates));
+    }
 
     return NextResponse.json({ accounts: enriched });
   } catch (err: unknown) {
