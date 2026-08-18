@@ -101,6 +101,7 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
   const [draftName, setDraftName] = useState('');
   const nicknames = useAccountNicknames();
   const containerRef = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   // Close on outside click
   useEffect(() => {
@@ -152,8 +153,24 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
     : selected?.type;
 
   return (
-    <div className="relative" ref={containerRef}>
+    <div
+      className="relative"
+      ref={containerRef}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && open) {
+          e.preventDefault();
+          setOpen(false);
+          setEditingHash(null);
+          triggerRef.current?.focus();
+        }
+      }}
+    >
       <button
+        ref={triggerRef}
+        type="button"
+        aria-haspopup="menu"
+        aria-expanded={open}
+        aria-controls="account-switcher-menu"
         onClick={() => setOpen((o) => !o)}
         className="flex items-center gap-2 bg-[#22263a] border border-[#2d3248] rounded-lg px-4 py-2 text-sm hover:border-[#3d4260] transition-colors"
       >
@@ -168,10 +185,32 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
       </button>
 
       {open && (
-        <div className="absolute top-full left-0 mt-1 w-72 bg-[#22263a] border border-[#2d3248] rounded-lg shadow-xl z-50 overflow-hidden">
+        <div
+          id="account-switcher-menu"
+          role="menu"
+          aria-label="Select portfolio account"
+          onKeyDown={(e) => {
+            if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(e.key)) return;
+            const items = Array.from(
+              e.currentTarget.querySelectorAll<HTMLElement>('[role="menuitemradio"]'),
+            );
+            if (!items.length) return;
+            e.preventDefault();
+            const current = items.indexOf(document.activeElement as HTMLElement);
+            const next = e.key === 'Home' ? 0
+              : e.key === 'End' ? items.length - 1
+              : e.key === 'ArrowDown' ? (current + 1 + items.length) % items.length
+              : (current - 1 + items.length) % items.length;
+            items[next]?.focus();
+          }}
+          className="absolute top-full left-0 mt-1 w-72 bg-[#22263a] border border-[#2d3248] rounded-lg shadow-xl z-50 overflow-hidden"
+        >
           {/* All accounts roll-up — only useful when there's > 1 account */}
           {accounts.length > 1 && (
             <button
+              type="button"
+              role="menuitemradio"
+              aria-checked={isAll}
               onClick={() => { onSelect(-1); setOpen(false); setEditingHash(null); }}
               className={`w-full text-left px-4 py-3 text-sm flex justify-between items-center transition-colors border-b border-[#2d3248] ${
                 isAll ? 'bg-[#2d3248] text-white' : 'text-[#e8eaf0] hover:bg-[#2d3248]'
@@ -212,10 +251,12 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
                         if (e.key === 'Escape') cancelEdit();
                       }}
                       placeholder={defaultLabel(acct)}
+                      aria-label={`Nickname for account ending ${acct.accountNumber.slice(-4)}`}
                       className="flex-1 bg-[#12151f] border border-[#3d4260] rounded px-2 py-1 text-xs text-white focus:outline-none focus:border-blue-500"
                       maxLength={32}
                     />
                     <button
+                      type="button"
                       onClick={commitEdit}
                       className="text-emerald-400 hover:text-emerald-300"
                       title="Save nickname"
@@ -224,6 +265,7 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
                       <Check className="w-3.5 h-3.5" />
                     </button>
                     <button
+                      type="button"
                       onClick={cancelEdit}
                       className="text-[#7c82a0] hover:text-white"
                       title="Cancel"
@@ -235,6 +277,9 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
                 ) : (
                   <div className="flex items-center justify-between gap-2">
                     <button
+                      type="button"
+                      role="menuitemradio"
+                      aria-checked={isActive}
                       onClick={() => { onSelect(i); setOpen(false); }}
                       className="flex-1 text-left flex items-center gap-2 min-w-0"
                     >
@@ -252,8 +297,9 @@ export function AccountSwitcher({ accounts, selectedIndex, onSelect }: Props) {
                       ${acct.totalValue.toLocaleString('en-US', { maximumFractionDigits: 0 })}
                     </span>
                     <button
+                      type="button"
                       onClick={(e) => { e.stopPropagation(); startEdit(acct); }}
-                      className="text-[#7c82a0] opacity-0 group-hover:opacity-100 hover:text-white transition-opacity flex-shrink-0"
+                      className="text-[#7c82a0] opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:opacity-100 hover:text-white transition-opacity flex-shrink-0"
                       title="Rename account"
                       aria-label="Rename account"
                     >

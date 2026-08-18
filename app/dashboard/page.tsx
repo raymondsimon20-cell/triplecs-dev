@@ -19,6 +19,7 @@
  */
 
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import dynamic from 'next/dynamic';
 import {
   RefreshCw, LogOut, AlertTriangle, AlertCircle, CheckCircle,
   TrendingUp, BarChart2, Shield, Zap, Brain, DollarSign,
@@ -30,23 +31,18 @@ import { motion } from 'framer-motion';
 import { AccountSwitcher, useAccountNicknames } from '@/components/AccountSwitcher';
 import { PillarAllocationBar } from '@/components/PillarAllocationBar';
 import { MarginRiskPanel } from '@/components/MarginRiskPanel';
-import { TriplesTacticalPanel } from '@/components/TriplesTacticalPanel';
-import { OptionsStrategyPanel } from '@/components/OptionsStrategyPanel';
 import { IncomeHub, estimateAnnualDividend } from '@/components/IncomeHub';
 import { IncomeProjectionCard } from '@/components/IncomeProjectionCard';
 import { DashboardOverview } from '@/components/DashboardOverview';
 import { PositionsView } from '@/components/PositionsView';
-import { TransactionsView, type NormalizedTransaction } from '@/components/TransactionsView';
+import type { NormalizedTransaction } from '@/components/TransactionsView';
 import { ContributionBanner } from '@/components/ContributionBanner';
 import { RightsOfferingBanner } from '@/components/RightsOfferingBanner';
 import { CashFlowView } from '@/components/CashFlowView';
-import { DividendsView, type DividendRecord } from '@/components/DividendsView';
-import { MonthCloseView } from '@/components/MonthCloseView';
+import type { DividendRecord } from '@/components/DividendsView';
 import { LedgerView } from '@/components/LedgerView';
 import { ConnectionsView } from '@/components/ConnectionsView';
-import { TargetAllocationView } from '@/components/TargetAllocationView';
 import { BusinessSpreadPanel } from '@/components/BusinessSpreadPanel';
-import { AIAnalysisPanel } from '@/components/AIAnalysisPanel';
 import { TradeHub, usePendingOrderSymbols } from '@/components/TradeHub';
 import { OpenPutTracker } from '@/components/OpenPutTracker';
 import { PositionsTable } from '@/components/PositionsTable';
@@ -60,18 +56,12 @@ import { SettingsPanel, useStrategyTargets, updateStrategyTargets, loadStrategyT
 import { LinkDeviceButton } from '@/components/LinkDeviceButton';
 import { ThemeToggle } from '@/components/ThemeToggle';
 import { AutomationToggle } from '@/components/AutomationToggle';
-import { PerformancePanel } from '@/components/PerformancePanel';
 import { TodayPanel } from '@/components/TodayPanel';
-import { DailyPlanPanel } from '@/components/DailyPlanPanel';
 import { MorningVerdict } from '@/components/MorningVerdict';
 import { PlaybookCard } from '@/components/PlaybookCard';
 import { PillarTour } from '@/components/PillarTour';
 import { Term } from '@/components/Term';
 import { SeedUniverseButton } from '@/components/SeedUniverseButton';
-import { ReplayPanel } from '@/components/ReplayPanel';
-import { PlanArchivePanel } from '@/components/PlanArchivePanel';
-import { RollbackPanel } from '@/components/RollbackPanel';
-import { PerformanceReviewPanel } from '@/components/PerformanceReviewPanel';
 import { PortfolioExport } from '@/components/PortfolioExport';
 import { AlertMonitor } from '@/components/ToastProvider';
 import { WatchlistPanel } from '@/components/WatchlistPanel';
@@ -84,6 +74,25 @@ import type { RuleAlert } from '@/lib/classify';
 import type { EnrichedPosition, PillarType } from '@/lib/schwab/types';
 import { fmt$, gainLossColor } from '@/lib/utils';
 import { AnimatedNumber } from '@/components/AnimatedNumber';
+
+const lazyPanel = <T extends object>(loader: () => Promise<T>, name: keyof T) =>
+  dynamic(() => loader().then((module) => module[name] as React.ComponentType<any>), {
+    loading: () => <div className="h-40 rounded-xl bg-[#12151f] animate-pulse" aria-label="Loading panel" />,
+  });
+
+const TriplesTacticalPanel = lazyPanel(() => import('@/components/TriplesTacticalPanel'), 'TriplesTacticalPanel');
+const OptionsStrategyPanel = lazyPanel(() => import('@/components/OptionsStrategyPanel'), 'OptionsStrategyPanel');
+const TransactionsView = lazyPanel(() => import('@/components/TransactionsView'), 'TransactionsView');
+const DividendsView = lazyPanel(() => import('@/components/DividendsView'), 'DividendsView');
+const MonthCloseView = lazyPanel(() => import('@/components/MonthCloseView'), 'MonthCloseView');
+const TargetAllocationView = lazyPanel(() => import('@/components/TargetAllocationView'), 'TargetAllocationView');
+const AIAnalysisPanel = lazyPanel(() => import('@/components/AIAnalysisPanel'), 'AIAnalysisPanel');
+const PerformancePanel = lazyPanel(() => import('@/components/PerformancePanel'), 'PerformancePanel');
+const DailyPlanPanel = lazyPanel(() => import('@/components/DailyPlanPanel'), 'DailyPlanPanel');
+const ReplayPanel = lazyPanel(() => import('@/components/ReplayPanel'), 'ReplayPanel');
+const PlanArchivePanel = lazyPanel(() => import('@/components/PlanArchivePanel'), 'PlanArchivePanel');
+const RollbackPanel = lazyPanel(() => import('@/components/RollbackPanel'), 'RollbackPanel');
+const PerformanceReviewPanel = lazyPanel(() => import('@/components/PerformanceReviewPanel'), 'PerformanceReviewPanel');
 
 interface AccountData {
   accountNumber: string;
@@ -664,6 +673,16 @@ export default function DashboardPage() {
     ? (aggregateAccount ?? undefined)
     : accounts[Math.max(0, selectedIdx)];
 
+  // Keep the selected account's stable identity in sync immediately when the
+  // user makes a choice. The 60-second refresh can return accounts in a
+  // different order, so the fetch path remaps this hash back to an index.
+  const selectAccountIndex = useCallback((index: number) => {
+    restoredAccountHashRef.current = index === -1
+      ? '__all__'
+      : (accounts[index]?.accountHash ?? null);
+    setSelectedIdx(index);
+  }, [accounts]);
+
   const nicknames    = useAccountNicknames();
   const accountKey   = isAll ? AGGREGATE_HASH : (resolvedAccount?.accountHash ?? AGGREGATE_HASH);
 
@@ -749,9 +768,12 @@ export default function DashboardPage() {
   const fireTarget      = strategyTargets.fireNumber;
 
   // Live streaming — stream every symbol shown (aggregate streams the union).
-  const streamSymbols = (resolvedAccount?.positions ?? [])
-    .map((p) => p.instrument.symbol)
-    .filter((s) => !s.includes(' '));
+  const streamSymbols = useMemo(
+    () => [...new Set((resolvedAccount?.positions ?? [])
+      .map((p) => p.instrument.symbol)
+      .filter((s) => !s.includes(' ')))].sort(),
+    [resolvedAccount?.positions],
+  );
   const { liveQuotes, status: streamStatus } = usePortfolioStream(streamSymbols, streamSymbols.length > 0);
 
   // Merge live prices into the resolved account's positions.
@@ -931,7 +953,15 @@ export default function DashboardPage() {
         throw new Error(detail ? `HTTP ${res.status} — ${detail}` : `HTTP ${res.status}`);
       }
       const data = await res.json();
-      setAccounts(data.accounts ?? []);
+      const nextAccounts = Array.isArray(data.accounts) ? data.accounts as AccountData[] : [];
+      const selectedHash = restoredAccountHashRef.current;
+      if (selectedHash === '__all__' && nextAccounts.length > 1) {
+        setSelectedIdx(-1);
+      } else if (selectedHash) {
+        const nextIndex = nextAccounts.findIndex((a) => a.accountHash === selectedHash);
+        if (nextIndex >= 0) setSelectedIdx(nextIndex);
+      }
+      setAccounts(nextAccounts);
       setLastUpdated(new Date());
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load portfolio data');
@@ -959,20 +989,20 @@ export default function DashboardPage() {
     if (accounts.length === 0) return;
     const stored = restoredAccountHashRef.current;
     if (stored === '__all__' && accounts.length > 1) {
-      setSelectedIdx(-1);
+      selectAccountIndex(-1);
       hasRestoredSelectionRef.current = true;
       return;
     }
     if (stored) {
       const idx = accounts.findIndex((a) => a.accountHash === stored);
       if (idx >= 0) {
-        setSelectedIdx(idx);
+        selectAccountIndex(idx);
         hasRestoredSelectionRef.current = true;
         return;
       }
     }
     hasRestoredSelectionRef.current = true;
-  }, [accounts]);
+  }, [accounts, selectAccountIndex]);
 
   // Persist selection when the user changes it.
   useEffect(() => {
@@ -1253,7 +1283,7 @@ export default function DashboardPage() {
           </div>
 
           <div className="flex items-center gap-2 sm:gap-2.5 text-xs">
-            <AccountSwitcher accounts={accounts} selectedIndex={selectedIdx} onSelect={setSelectedIdx} />
+            <AccountSwitcher accounts={accounts} selectedIndex={selectedIdx} onSelect={selectAccountIndex} />
 
             <button
               onClick={() => fetchAccounts(true)}
@@ -1801,7 +1831,7 @@ export default function DashboardPage() {
                 <AggregateNotice
                   title="Trades & rebalance only run against a single account"
                   message="Orders fire through a specific Schwab account hash. Pick one account so TradeHub and the rebalance workflow can stage trades."
-                  onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
+                  onPickAccount={() => selectAccountIndex(pickPriorityAccountIdx())}
                 />
               ) : (
                 <>
@@ -1892,7 +1922,7 @@ export default function DashboardPage() {
                         <AggregateNotice
                           title="Cornerstone buys fire against a single account"
                           message="The aggregate view shows your combined CLM / CRF position, but new buys need a real account hash. Pick an account to use the buy controls."
-                          onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
+                          onPickAccount={() => selectAccountIndex(pickPriorityAccountIdx())}
                         />
                       ) : (
                         <CornerStoneCard positions={account.positions} accountHash={account.accountHash} />
@@ -1918,7 +1948,7 @@ export default function DashboardPage() {
                   <AggregateNotice
                     title="Options & Puts work against a single account"
                     message="Selling puts and the put-tracker pull and submit orders for one Schwab account at a time. Pick one to use these tools."
-                    onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
+                    onPickAccount={() => selectAccountIndex(pickPriorityAccountIdx())}
                   />
                 ) : (
                   <OptionsPutsPanel
@@ -2000,7 +2030,7 @@ export default function DashboardPage() {
                   <AggregateNotice
                     title="AI pulse runs per-account"
                     message="The pulse analyses a single account's positions, margin and pillar mix end-to-end. Pick an account so it has the right context to think about."
-                    onPickAccount={() => setSelectedIdx(pickPriorityAccountIdx())}
+                    onPickAccount={() => selectAccountIndex(pickPriorityAccountIdx())}
                   />
                 ) : (
                   <AIAnalysisPanel

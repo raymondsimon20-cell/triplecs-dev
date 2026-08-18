@@ -1,4 +1,4 @@
-import type { Metadata } from 'next';
+import type { Metadata, Viewport } from 'next';
 import { Plus_Jakarta_Sans } from 'next/font/google';
 import { Providers } from '@/components/Providers';
 import './globals.css';
@@ -14,7 +14,6 @@ export const metadata: Metadata = {
   title: 'Triple C Dashboard',
   description: 'Real-time portfolio management for the Triple C\'s strategy',
   manifest: '/manifest.json',
-  themeColor: '#3b82f6',
   appleWebApp: {
     capable: true,
     statusBarStyle: 'black-translucent',
@@ -24,6 +23,10 @@ export const metadata: Metadata = {
     icon: '/favicon.svg',
     apple: '/icon-192.png',
   },
+};
+
+export const viewport: Viewport = {
+  themeColor: '#3b82f6',
 };
 
 export default function RootLayout({

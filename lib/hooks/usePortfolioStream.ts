@@ -31,8 +31,12 @@ export function usePortfolioStream(
   const wsRef        = useRef<WebSocket | null>(null);
   const credsRef     = useRef<StreamCredentials | null>(null);
   const reconnectRef = useRef(0);
-  const symbolsRef   = useRef(symbols);
-  symbolsRef.current = symbols;
+  const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRef = useRef(false);
+  const intentionalClosesRef = useRef<Set<WebSocket>>(new Set());
+  const symbolKey = [...new Set(symbols)].sort().join(',');
+  const symbolsRef = useRef<string[]>(symbolKey ? symbolKey.split(',') : []);
+  symbolsRef.current = symbolKey ? symbolKey.split(',') : [];
 
   const [liveQuotes, setLiveQuotes] = useState<LiveQuotes>(new Map());
   const [status,     setStatus]     = useState<StreamStatus>('disconnected');
@@ -62,6 +66,10 @@ export function usePortfolioStream(
 
   const connect = useCallback(async () => {
     if (!enabled || !symbolsRef.current.length) return;
+    if (
+      wsRef.current?.readyState === WebSocket.OPEN ||
+      wsRef.current?.readyState === WebSocket.CONNECTING
+    ) return;
 
     setStatus('connecting');
 
@@ -140,12 +148,16 @@ export function usePortfolioStream(
       };
 
       ws.onclose = () => {
-        wsRef.current = null;
-        if (!enabled) return;
+        if (wsRef.current === ws) wsRef.current = null;
+        const intentional = intentionalClosesRef.current.delete(ws);
+        if (!activeRef.current || intentional) return;
         setStatus('disconnected');
         if (reconnectRef.current < MAX_RECONNECTS) {
           reconnectRef.current += 1;
-          setTimeout(() => connect(), RECONNECT_DELAY_MS);
+          reconnectTimerRef.current = setTimeout(() => {
+            reconnectTimerRef.current = null;
+            connect();
+          }, RECONNECT_DELAY_MS);
         }
       };
     } catch {
@@ -154,10 +166,21 @@ export function usePortfolioStream(
   }, [enabled, subscribe]);
 
   useEffect(() => {
+    activeRef.current = enabled;
     if (!enabled) return;
+    const intentionalCloses = intentionalClosesRef.current;
     connect();
     return () => {
-      wsRef.current?.close();
+      activeRef.current = false;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      const ws = wsRef.current;
+      if (ws) {
+        intentionalCloses.add(ws);
+        ws.close();
+      }
       wsRef.current = null;
     };
   }, [enabled, connect]);
@@ -165,17 +188,26 @@ export function usePortfolioStream(
   // Re-subscribe when symbol list changes while connected
   useEffect(() => {
     if (status === 'connected' && wsRef.current && credsRef.current) {
-      subscribe(wsRef.current, credsRef.current, symbols);
+      subscribe(wsRef.current, credsRef.current, symbolsRef.current);
     }
-  }, [symbols, status, subscribe]);
+  }, [symbolKey, status, subscribe]);
 
   return {
     liveQuotes,
     status,
     reconnect: () => {
-      credsRef.current   = null;
+      if (reconnectTimerRef.current) {
+        clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = null;
+      }
+      credsRef.current = null;
       reconnectRef.current = 0;
-      wsRef.current?.close();
+      const ws = wsRef.current;
+      if (ws) {
+        intentionalClosesRef.current.add(ws);
+        wsRef.current = null;
+        ws.close();
+      }
       connect();
     },
   };
