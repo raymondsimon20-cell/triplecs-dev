@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { getAccountNumbers } from '@/lib/schwab/client';
+import { getAccountNumbers } from '../../../../lib/schwab/client';
 
 export const dynamic = 'force-dynamic';
 
